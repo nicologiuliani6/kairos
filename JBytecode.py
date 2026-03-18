@@ -33,13 +33,23 @@ class ByteCode_Compiler:
                 self.emit("HALT")
 
             case 'procedure':
-                # ('procedure', nome, params, body)
+                # ('procedure', nome, [(tipo1, id1), (tipo2, id2), ...], body)
                 name   = ast[1]
+                params = ast[2] if len(ast) > 2 else []
                 body   = ast[3] if len(ast) > 3 else []
+
                 self.labels[name] = self.addr
                 self.emit(f"PROC {name}")
+
+                # ── un'istruzione PARAM per ogni coppia (tipo, id) ──
+                for param in params:
+                    tipo  = param[0]
+                    pname = param[1]
+                    self.emit(f"PARAM {tipo} {pname}")
+
                 for stmt in body:
                     self.process(stmt)
+
                 self.emit(f"END_PROC {name}")
 
             case 'decl':
@@ -59,9 +69,49 @@ class ByteCode_Compiler:
                 ID = ast[2]
                 value = ast[3]
                 self.emit(f"DELOCAL {type} {ID} {value}")
+            case 'assign':
+                #operator ID VALUE
+                ID = ast[1]
+                operator = ast[2]
+                value = ast[3]
+                #capiamo che operazione abbiamo
+                match operator:
+                    case '+=':
+                        operator = 'PUSHEQ'
+                    case '-=':
+                        operator = 'MINEQ'
+                    case '*=':
+                        operator = 'PRODEQ'
+                    case '/=':
+                        operator = 'DIVEQ'
+                    case '%=':
+                        operator = 'MODEQ'
+                    case _:
+                        print(f"[BYTECODE] operatore artimetico non supportato")
+                        exit(1)
+                self.emit(f"{operator} {ID} {value}")
+            case 'call':
+                # ('call', nome, [arg1, arg2, ...])
+                proc_name = ast[1]
+                args      = ast[2] if len(ast) > 2 else []
 
+                args_str = " ".join(str(a) for a in args)
+                self.emit(f"CALL {proc_name} {args_str}")
+
+            case 'uncall':
+                # ('uncall', nome, [arg1, arg2, ...])
+                proc_name = ast[1]
+                args      = ast[2] if len(ast) > 2 else []
+                args_str = " ".join(str(a) for a in args)
+                self.emit(f"UNCALL {proc_name} {args_str}")
+            case 'call_direct':
+                proc_name = ast[1]
+                args      = ast[2] if len(ast) > 2 else []
+                args_str = " ".join(str(a) for a in args)
+                self.emit(f"{proc_name.upper()} {args_str}")
             case _:
-                print(f"[WARN] nodo AST non gestito: {head}  →  {ast}")
+                print(f"[BYTECODE] nodo AST non gestito: {head}  →  {ast}")
+                exit(1)
 
 
 # ───────────────────────────────────────────

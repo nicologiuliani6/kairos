@@ -1,7 +1,12 @@
 0000  START
-0001  PROC main
-0002  LOCAL int x 0
-0003  DELOCAL int x 0
-0004  DECL int l
-0005  END_PROC main
-0006  HALT
+0001  PROC print
+0002  PARAM int n
+0003  SHOW n
+0004  END_PROC print
+0005  PROC main
+0006  DECL int x
+0007  PUSHEQ x 1
+0008  CALL print x
+0009  DECL int y
+0010  END_PROC main
+0011  HALT

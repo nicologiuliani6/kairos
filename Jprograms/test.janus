@@ -1,5 +1,10 @@
+procedure print(int n)
+    show(n)
+
 procedure main()
-    local int x = 0
-    delocal int x = 0
-    int l
+    int x 
+    x+=1
+    call print(x)
+    int y
+    
 
