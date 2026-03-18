@@ -5,6 +5,7 @@
 CharIdMap FrameIndexer;
 #include "stack.h"
 
+#define uint unsigned int
 #define perror(msg) {printf(msg); exit(EXIT_FAILURE);}
 
 typedef enum {
@@ -52,7 +53,7 @@ typedef struct {
     uint val_IF; //bool
 } Frame;
 
-#define MAX_FRAMES 10
+#define MAX_FRAMES 100
 typedef struct {
     Frame frames[MAX_FRAMES];
     int   frame_top;   // indice del frame corrente (-1 = vuoto)
@@ -892,7 +893,7 @@ int main(){
 
     VM vm;
     memset(&vm, 0, sizeof(VM)); 
-    size_t length = sizeof(ast);
+    //size_t length = sizeof(ast);
     vm_exec(&vm, ast);
     vm_dump(&vm);
     return 0;
