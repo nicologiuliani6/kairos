@@ -1,22 +1,32 @@
+procedure fib_iter(int x1, int x2, int n)
+    local int i = 0
+    local int tmp = 0
+
+    x1 += 1
+    x2 += 1
+
+    i += n
+
+    from i = n loop
+        x1 += x2
+        x1 <=> x2
+        i -= 1
+    until i = 0
+
+    delocal int tmp = 0
+    delocal int i = 0
+
+
 procedure main()
-    stack s
-    int n_orig
-
-    n_orig += 10
-
-    from n_orig = n_orig loop
-        local int n = n_orig
-        push(n, s)
-        delocal int n = 0
-        n_orig -= 1
-    until n_orig = 0
-
-    show(s)
-
-    from n_orig = 0 loop
-        n_orig += 1
-        local int n = 0
-        pop(n, s)
-        delocal int n = n_orig
-    until n_orig = 10
-    show(s)
+    int Fib_of_n
+    int Fib_of_n_minus_1
+    int n
+    n+=40
+    call fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
+    show(Fib_of_n)
+    show(Fib_of_n_minus_1)
+    show(n)
+    uncall fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
+    show(Fib_of_n)
+    show(Fib_of_n_minus_1)
+    show(n)
