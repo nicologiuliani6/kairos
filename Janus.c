@@ -697,10 +697,17 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                                 const char *frame_name,
                                 uint from_line, uint to_line)
 {
+    fprintf(stderr, "[DBG exec_branch_inverse] frame=%s from=%u to=%u\n",
+            frame_name, from_line, to_line);
+    
     char *lines[512];
     int   count = 0;
 
     char *ptr = go_to_line(original_buffer, from_line);
+    if (!ptr) {
+        fprintf(stderr, "[DBG exec_branch_inverse] go_to_line returned NULL!\n");
+        return;
+    }
     while (ptr && *ptr != '\0' && count < 512) {
         char *newline = strchr(ptr, '\n');
         if (!newline) break;
@@ -714,103 +721,92 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
 
     uint caller_fi = char_id_map_get(&FrameIndexer, frame_name);
 
-    /* Trova se c'è una CALL/UNCALL e a quale indice */
-    int call_idx = -1;
-    int is_uncall = 0;
-    for (int i = 0; i < count; i++) {
-        char tmp[512];
-        strncpy(tmp, lines[i], sizeof(tmp)-1);
-        tmp[sizeof(tmp)-1] = '\0';
-        char *fw = strtok(skip_lineno(tmp), " \t");
-        fprintf(stderr, "[DBG find_call] i=%d fw='%s'\n", i, fw ? fw : "NULL");
-        if (fw && strcmp(fw, "CALL") == 0)   { call_idx = i; is_uncall = 0; break; }
-        if (fw && strcmp(fw, "UNCALL") == 0) { call_idx = i; is_uncall = 1; break; }
-    }
-    fprintf(stderr, "[DBG find_call] count=%d call_idx=%d from=%u to=%u\n",
-            count, call_idx, from_line, to_line);
-
-    /* Esegui le op NON-CALL al contrario prima */
     for (int i = count - 1; i >= 0; i--) {
-        if (i == call_idx) continue;
+        /* Pre-tokenizza tutta la riga in un array statico */
+        char tok_buf[512];
+        strncpy(tok_buf, lines[i], sizeof(tok_buf) - 1);
+        tok_buf[sizeof(tok_buf) - 1] = '\0';
 
-        char op_buf[512];
-        strncpy(op_buf, lines[i], sizeof(op_buf) - 1);
-        op_buf[sizeof(op_buf) - 1] = '\0';
-        char *clean     = skip_lineno(op_buf);
-        char *firstWord = strtok(clean, " \t");
-        if (!firstWord) continue;
+        char *toks[16];
+        int   ntok    = 0;
+        char *saveptr = NULL;
+        char *clean   = skip_lineno(tok_buf);
+        char *t       = strtok_r(clean, " \t", &saveptr);
+        while (t && ntok < 16) { toks[ntok++] = t; t = strtok_r(NULL, " \t", &saveptr); }
+        if (ntok == 0) continue;
 
-        if      (strcmp(firstWord, "PUSHEQ") == 0) op_pusheq_inv(vm, frame_name);
-        else if (strcmp(firstWord, "MINEQ")  == 0) op_mineq_inv (vm, frame_name);
-        else if (strcmp(firstWord, "PRODEQ") == 0) op_prodeq_inv(vm, frame_name);
-        else if (strcmp(firstWord, "DIVEQ")  == 0) op_diveq_inv (vm, frame_name);
-        else if (strcmp(firstWord, "MODEQ")  == 0) op_modeq_inv (vm, frame_name);
-        else if (strcmp(firstWord, "EXPEQ")  == 0) op_expeq_inv (vm, frame_name);
-        else if (strcmp(firstWord, "SWAP")   == 0) op_swap_inv  (vm, frame_name);
-        else if (strcmp(firstWord, "PUSH")   == 0) op_pop       (vm, frame_name);
-        else if (strcmp(firstWord, "POP")    == 0) op_push      (vm, frame_name);
-        else if (strcmp(firstWord, "LOCAL")  == 0) op_delocal   (vm, frame_name);
-        else if (strcmp(firstWord, "DELOCAL")== 0) op_local     (vm, frame_name);
-        else if (strcmp(firstWord, "SHOW")   == 0) op_show      (vm, frame_name);
-        else if (strcmp(firstWord, "LABEL")  == 0) { }
-        else if (strcmp(firstWord, "EVAL")   == 0) { }
-        else if (strcmp(firstWord, "ASSERT") == 0) { }
-        else if (strcmp(firstWord, "JMP")    == 0) { }
-        else if (strcmp(firstWord, "JMPF")   == 0) { }
-        else {
-            fprintf(stderr, "[exec_branch_inverse] op sconosciuta: '%s'\n", firstWord);
-        }
-    }
+        char *fw = toks[0];
 
-    /* Poi esegui la CALL/UNCALL con lo stato già modificato */
-    if (call_idx >= 0) {
-        char op_buf[512];
-        strncpy(op_buf, lines[call_idx], sizeof(op_buf) - 1);
-        op_buf[sizeof(op_buf) - 1] = '\0';
-        char *clean = skip_lineno(op_buf);
-        (void)strtok(clean, " \t"); /* consuma "CALL" o "UNCALL" */
-        char *proc_name = strtok(NULL, " \t");
-        uint  callee_fi = char_id_map_get(&FrameIndexer, proc_name);
-        int   param_count   = vm->frames[callee_fi].param_count;
-        int  *param_indices = vm->frames[callee_fi].param_indices;
+        if (strcmp(fw, "CALL") == 0 || strcmp(fw, "UNCALL") == 0) {
+            int  is_uncall = (strcmp(fw, "UNCALL") == 0);
+            /* toks[1] = proc_name, toks[2..] = parametri — già salvati nell'array */
+            char saved_proc[VAR_NAME_LENGTH];
+            strncpy(saved_proc, toks[1], VAR_NAME_LENGTH - 1);
+            saved_proc[VAR_NAME_LENGTH - 1] = '\0';
 
-        char saved_proc[VAR_NAME_LENGTH];
-        strncpy(saved_proc, proc_name, VAR_NAME_LENGTH - 1);
-        saved_proc[VAR_NAME_LENGTH - 1] = '\0';
+            uint  callee_fi     = char_id_map_get(&FrameIndexer, saved_proc);
+            int   param_count   = vm->frames[callee_fi].param_count;
+            int  *param_indices = vm->frames[callee_fi].param_indices;
 
-        Var *saved[64];
-        for (int k = 0; k < param_count; k++)
-            saved[k] = vm->frames[callee_fi].vars[param_indices[k]];
+            Var *saved[64];
+            for (int k = 0; k < param_count; k++)
+                saved[k] = vm->frames[callee_fi].vars[param_indices[k]];
 
-        char *param = NULL; int j = 0;
-        while ((param = strtok(NULL, " \t")) != NULL && j < param_count) {
-            int src_idx = char_id_map_get(&vm->frames[caller_fi].VarIndexer, param);
-            vm->frames[callee_fi].vars[param_indices[j]] =
-                vm->frames[caller_fi].vars[src_idx];
-            j++;
-        }
+            for (int j = 0; j < param_count && (j + 2) < ntok; j++) {
+                int src_idx = char_id_map_get(&vm->frames[caller_fi].VarIndexer, toks[j + 2]);
+                vm->frames[callee_fi].vars[param_indices[j]] =
+                    vm->frames[caller_fi].vars[src_idx];
+            }
 
-        fprintf(stderr, "[DBG exec_branch CALL] k=%d is_uncall=%d\n",
-                *(vm->frames[callee_fi].vars[param_indices[1]]->value),
-                is_uncall);
+            if (!is_uncall) {
+                invert_op_to_line(vm, saved_proc, original_buffer,
+                                  vm->frames[callee_fi].addr + 1,
+                                  vm->frames[callee_fi].end_addr - 1);
+            } else {
+                vm_run_BT(vm, original_buffer, saved_proc);
+            }
 
-        if (!is_uncall) {
-            invert_op_to_line(vm, saved_proc, original_buffer,
-                              vm->frames[callee_fi].addr + 1,
-                              vm->frames[callee_fi].end_addr - 1);
+            for (int k = 0; k < param_count; k++)
+                vm->frames[callee_fi].vars[param_indices[k]] = saved[k];
+
         } else {
-            vm_run_BT(vm, original_buffer, saved_proc);
+            /*
+             * Per le op aritmetiche/stack usiamo un buffer temporaneo
+             * e richiamiamo strtok fresco su di esso, così le op_xxx
+             * interne possono usare strtok(NULL, ...) normalmente.
+             */
+            static char dispatch_buf[512];
+            strncpy(dispatch_buf, lines[i], sizeof(dispatch_buf) - 1);
+            dispatch_buf[sizeof(dispatch_buf) - 1] = '\0';
+            char *dc = skip_lineno(dispatch_buf);
+            strtok(dc, " \t"); /* consuma firstWord, prepara strtok per le op */
+
+            if      (strcmp(fw, "PUSHEQ") == 0) op_pusheq_inv(vm, frame_name);
+            else if (strcmp(fw, "MINEQ")  == 0) op_mineq_inv (vm, frame_name);
+            else if (strcmp(fw, "PRODEQ") == 0) op_prodeq_inv(vm, frame_name);
+            else if (strcmp(fw, "DIVEQ")  == 0) op_diveq_inv (vm, frame_name);
+            else if (strcmp(fw, "MODEQ")  == 0) op_modeq_inv (vm, frame_name);
+            else if (strcmp(fw, "EXPEQ")  == 0) op_expeq_inv (vm, frame_name);
+            else if (strcmp(fw, "SWAP")   == 0) op_swap_inv  (vm, frame_name);
+            else if (strcmp(fw, "PUSH")   == 0) op_pop       (vm, frame_name);
+            else if (strcmp(fw, "POP")    == 0) op_push      (vm, frame_name);
+            else if (strcmp(fw, "LOCAL")  == 0) op_delocal   (vm, frame_name);
+            else if (strcmp(fw, "DELOCAL")== 0) op_local     (vm, frame_name);
+            else if (strcmp(fw, "SHOW")   == 0) op_show      (vm, frame_name);
+            else if (strcmp(fw, "LABEL")  == 0) { }
+            else if (strcmp(fw, "EVAL")   == 0) { }
+            else if (strcmp(fw, "ASSERT") == 0) { }
+            else if (strcmp(fw, "JMP")    == 0) { }
+            else if (strcmp(fw, "JMPF")   == 0) { }
+            else {
+                fprintf(stderr, "[exec_branch_inverse] op sconosciuta: '%s'\n", fw);
+            }
         }
-
-        fprintf(stderr, "[DBG exec_branch CALL dopo] k=%d\n",
-                *(vm->frames[callee_fi].vars[param_indices[1]]->value));
-
-        for (int k = 0; k < param_count; k++)
-            vm->frames[callee_fi].vars[param_indices[k]] = saved[k];
     }
 
     for (int i = 0; i < count; i++) free(lines[i]);
 }
+
 /* ======================================================================
  *  invert_op_to_line — versione finale con if/fi + loop + call/uncall
  * ====================================================================== */
@@ -953,17 +949,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     ifs[if_idx].eval_exit_id,
                     ifs[if_idx].eval_exit_val);
 
-            if (vm->frames[findex].val_IF) {
-                /* exit condition vera (k==0) → esegui else al contrario */
-                exec_branch_inverse(vm, original_buffer, cur_frame,
-                                    ifs[if_idx].else_label_line + 1,
-                                    ifs[if_idx].fi_label_line);
-            } else {
-                /* exit condition falsa → esegui then al contrario */
+            if (!vm->frames[findex].val_IF) {
+                /* exit condition falsa (k != 0) → eravamo nel then → inverti il then */
                 exec_branch_inverse(vm, original_buffer, cur_frame,
                                     ifs[if_idx].jmpf_else_line + 1,
                                     ifs[if_idx].jmp_fi_line);
             }
+            /* exit condition vera (k == 0) → eravamo nell'else (vuoto) → niente da fare */
 
             int target = -1;
             for (int j = i - 1; j >= 0; j--) {
@@ -971,10 +963,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             }
             i = (target >= 0) ? target - 1 : i - 1;
             continue;
-        }/* righe interne all'if: già gestite da exec_branch_inverse */
-        if (line_is_inside_if(cur_line, ifs, nifs)) {
-            i--; continue;
         }
+        if (line_is_inside_if(cur_line, ifs, nifs)) {
+                    i--; continue;
+                }
 
         /* ---- CALL → UNCALL ricorsivo ---- */
         if (strcmp(firstWord, "CALL") == 0) {

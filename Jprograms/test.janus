@@ -9,8 +9,7 @@
     
 procedure encrypt(int m, int k)
     if k = 0 then
-        // fine ricorsione
-        // niente da fare
+        //skip
     else
         m += k
         k -= 1

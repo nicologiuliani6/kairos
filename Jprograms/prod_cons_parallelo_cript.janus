@@ -1,0 +1,39 @@
+procedure producer(channel ch, int n, int key)
+    local int i = 0
+    from i = 0 loop
+        i += 1
+        local int item = 0
+            item += i
+            call encrypt(item, key)   // cifratura prima dell'invio
+            ssend(ch, item)
+        delocal int item = 0
+    until i = n
+    delocal int i = n
+
+procedure consumer(channel ch, stack result, int n, int key)
+    local int i = 0
+    from i = 0 loop
+        local int item = 0
+            srecv(ch, item)
+            uncall encrypt(item, key)  // decifratura subito dopo la ricezione
+            show(item)
+            push(item, result)
+        delocal int item = 0
+        i += 1
+    until i = n
+    delocal int i = n
+
+procedure main()
+    local channel ch = empty
+    local stack result = nil
+    local int n = 5
+    local int key = 17
+    par
+        call producer(ch, n, key)
+    and
+        call consumer(ch, result, n, key)
+    rap
+    delocal int key = 17
+    delocal int n = 5
+    delocal stack result = nil
+    delocal channel ch = empty
