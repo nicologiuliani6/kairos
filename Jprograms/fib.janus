@@ -36,9 +36,9 @@ procedure main()
     int Fib_of_n_minus_1
     int n
     n+=4
-    //call fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
-    //show(Fib_of_n)
-    //uncall fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
+    call fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
+    show(Fib_of_n)
+    uncall fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
     show(Fib_of_n)
     call fib_ricorsivo(Fib_of_n_minus_1, Fib_of_n, n)
     show(Fib_of_n)
