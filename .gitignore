@@ -9,6 +9,5 @@ __pycache__/
 *.pyd
 
 # build
-build/
 dist/
 *.egg-info/
