@@ -1,49 +1,35 @@
-procedure fib_iter(int x1, int x2, int n)
+procedure producer(stack buffer, int n)
     local int i = 0
-    local int tmp = 0
+    from i = 0 loop
+        i += 1
+        local int item = 0
+            item += i
+            push(item, buffer)
+        delocal int item = 0
+    until i = n
+    delocal int i = n
 
-    x1 += 1
-    x2 += 1
-
-    i += n
-
-    from i = n loop
-        x1 += x2
-        x1 <=> x2
-        i -= 1
-    until i = 0
-
-    delocal int tmp = 0
-    delocal int i = 0
-
-
-procedure fib_ricorsivo(int x1, int x2, int n)
-    local int zero = 0
-    if n = 0 then
-        x1 += 1
-        x2 += 1
-    else
-        n -= 1
-        call fib_ricorsivo(x1, x2, n)
-        n += 1
-        x1 += x2
-        x1 <=> x2
-        zero += 1
-    fi zero = 1
-    delocal int zero = 0
+procedure consumer(stack buffer, stack result, int n)
+    local int i = 0
+    from i = 0 loop
+        local int item = 0
+            pop(item, buffer)
+            //show(item)
+            push(item, result)
+        delocal int item = 0
+        i += 1
+    until i = n
+    delocal int i = n
 
 procedure main()
-    local int Fib_of_n = 0
-    local int Fib_of_n_minus_1 = 0
-    local int n = 4
-    call fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
-    show(Fib_of_n)
-    uncall fib_iter(Fib_of_n_minus_1, Fib_of_n, n)
-    show(Fib_of_n)
-    call fib_ricorsivo(Fib_of_n_minus_1, Fib_of_n, n)
-    show(Fib_of_n)
-    uncall fib_ricorsivo(Fib_of_n_minus_1, Fib_of_n, n)
-    show(Fib_of_n)
-    delocal int n = 4
-    delocal int Fib_of_n_minus_1 = 0
-    delocal int Fib_of_n = 0
+    stack result
+    local stack buffer = nil
+    local int n = 5
+    call producer(buffer, n)
+    call consumer(buffer, result, n)
+    show(result)
+    uncall consumer(buffer, result, n)
+    uncall producer(buffer, n)
+    show(result)
+    delocal int n = 5
+    delocal stack buffer = nil

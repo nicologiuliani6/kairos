@@ -1,62 +1,52 @@
 0000  START
-0001  PROC fib_iter
-0002  PARAM int x1
-0003  PARAM int x2
-0004  PARAM int n
-0005  LOCAL int i 0
-0006  LOCAL int tmp 0
-0007  PUSHEQ x1 1
-0008  PUSHEQ x2 1
-0009  PUSHEQ i n
-0010  EVAL i n
-0011  JMPF FROM_ERR_10
-0012  LABEL FROM_START_10
-0013  PUSHEQ x1 x2
-0014  SWAP x1 x2
-0015  MINEQ i 1
-0016  EVAL i 0
-0017  JMPF FROM_START_10
-0018  LABEL FROM_END_10
-0019  LABEL FROM_ERR_10
-0020  DELOCAL int tmp 0
-0021  DELOCAL int i 0
-0022  END_PROC fib_iter
-0023  PROC fib_ricorsivo
-0024  PARAM int x1
-0025  PARAM int x2
-0026  PARAM int n
-0027  LOCAL int zero 0
-0028  EVAL n 0
-0029  JMPF ELSE_28
-0030  PUSHEQ x1 1
-0031  PUSHEQ x2 1
-0032  JMP FI_28
-0033  LABEL ELSE_28
-0034  MINEQ n 1
-0035  CALL fib_ricorsivo x1 x2 n
-0036  PUSHEQ n 1
-0037  PUSHEQ x1 x2
-0038  SWAP x1 x2
-0039  PUSHEQ zero 1
-0040  LABEL FI_28
-0041  EVAL zero 1
-0042  ASSERT n 0
-0043  DELOCAL int zero 0
-0044  END_PROC fib_ricorsivo
-0045  PROC main
-0046  LOCAL int Fib_of_n 0
-0047  LOCAL int Fib_of_n_minus_1 0
-0048  LOCAL int n 4
-0049  CALL fib_iter Fib_of_n_minus_1 Fib_of_n n
-0050  SHOW Fib_of_n
-0051  UNCALL fib_iter Fib_of_n_minus_1 Fib_of_n n
-0052  SHOW Fib_of_n
-0053  CALL fib_ricorsivo Fib_of_n_minus_1 Fib_of_n n
-0054  SHOW Fib_of_n
-0055  UNCALL fib_ricorsivo Fib_of_n_minus_1 Fib_of_n n
-0056  SHOW Fib_of_n
-0057  DELOCAL int n 4
-0058  DELOCAL int Fib_of_n_minus_1 0
-0059  DELOCAL int Fib_of_n 0
-0060  END_PROC main
-0061  HALT
+0001  PROC producer
+0002  PARAM stack buffer
+0003  PARAM int n
+0004  LOCAL int i 0
+0005  EVAL i 0
+0006  JMPF FROM_ERR_5
+0007  LABEL FROM_START_5
+0008  PUSHEQ i 1
+0009  LOCAL int item 0
+0010  PUSHEQ item i
+0011  PUSH item buffer
+0012  DELOCAL int item 0
+0013  EVAL i n
+0014  JMPF FROM_START_5
+0015  LABEL FROM_END_5
+0016  LABEL FROM_ERR_5
+0017  DELOCAL int i n
+0018  END_PROC producer
+0019  PROC consumer
+0020  PARAM stack buffer
+0021  PARAM stack result
+0022  PARAM int n
+0023  LOCAL int i 0
+0024  EVAL i 0
+0025  JMPF FROM_ERR_24
+0026  LABEL FROM_START_24
+0027  LOCAL int item 0
+0028  POP item buffer
+0029  PUSH item result
+0030  DELOCAL int item 0
+0031  PUSHEQ i 1
+0032  EVAL i n
+0033  JMPF FROM_START_24
+0034  LABEL FROM_END_24
+0035  LABEL FROM_ERR_24
+0036  DELOCAL int i n
+0037  END_PROC consumer
+0038  PROC main
+0039  DECL stack result
+0040  LOCAL stack buffer nil
+0041  LOCAL int n 5
+0042  CALL producer buffer n
+0043  CALL consumer buffer result n
+0044  SHOW result
+0045  UNCALL consumer buffer result n
+0046  UNCALL producer buffer n
+0047  SHOW result
+0048  DELOCAL int n 5
+0049  DELOCAL stack buffer nil
+0050  END_PROC main
+0051  HALT

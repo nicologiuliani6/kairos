@@ -14,7 +14,7 @@ procedure consumer(stack buffer, stack result, int n)
     from i = 0 loop
         local int item = 0
             pop(item, buffer)
-            show(item)
+            //show(item)
             push(item, result)
         delocal int item = 0
         i += 1
@@ -27,6 +27,9 @@ procedure main()
     local int n = 5
     call producer(buffer, n)
     call consumer(buffer, result, n)
-    show(buffer)
+    show(result)
+    uncall consumer(buffer, result, n)
+    uncall producer(buffer, n)
+    show(result)
     delocal int n = 5
     delocal stack buffer = nil

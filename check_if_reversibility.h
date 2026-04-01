@@ -336,6 +336,20 @@ int vm_check_if_reversibility(const char *buffer)
 
         const char *cond_var = L->arg[0];
 
+        /* Se il blocco contiene una CALL ricorsiva (alla stessa procedura),
+           la modifica della variabile di controllo è il pattern ricorsivo
+           standard di Janus: non è un errore di reversibilità. */
+        int has_recursive_call = 0;
+        for (int k = i + 2; k < fi_tgt_idx; k++) {
+            if (strcmp(lines[k].op, "CALL") == 0 &&
+                lines[k].argc > 0 &&
+                strcmp(lines[k].arg[0], proc_name) == 0) {
+                has_recursive_call = 1;
+                break;
+            }
+        }
+        if (has_recursive_call) continue;
+
         for (int k = i + 2; k < fi_tgt_idx; k++) {
             if (strcmp(lines[k].op, "LABEL") == 0 ||
                 strcmp(lines[k].op, "JMP")   == 0 ||

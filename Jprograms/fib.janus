@@ -18,7 +18,6 @@ procedure fib_iter(int x1, int x2, int n)
 
 
 procedure fib_ricorsivo(int x1, int x2, int n)
-    int zero
     if n = 0 then
         x1 += 1
         x2 += 1
@@ -28,8 +27,7 @@ procedure fib_ricorsivo(int x1, int x2, int n)
         n += 1
         x1 += x2
         x1 <=> x2
-        zero += 1
-    fi zero = 1
+    fi n = 0        
 
 procedure main()
     local int Fib_of_n = 0
