@@ -7,24 +7,20 @@ import ply.lex as lex
 #definiamo le parole riservate del linguaggio
 reserved = {
     'procedure': 'PROCEDURE',
-    'int' : 'INT',
-    'stack' : 'STACK', 'nil' : 'NIL',
-    'local' : 'LOCAL',
-    'delocal' : 'DELOCAL',
-    'call' : 'CALL',
-    'uncall' : 'UNCALL',
-    'if' : 'IF', 'then' : 'THEN',
-    'else' : 'ELSE',
-    'fi' : 'FI',
-    'from' : 'FROM', 'loop' : 'LOOP', 
-    'until' : 'UNTIL',
+    'int' : 'INT', 'stack' : 'STACK', 'nil' : 'NIL',
+    'channel' : 'CHANNEL', 'empty' : 'EMPT',
+    'local' : 'LOCAL', 'delocal' : 'DELOCAL',
+    'call' : 'CALL', 'uncall' : 'UNCALL',
+    'if' : 'IF', 'then' : 'THEN', 'else' : 'ELSE', 'fi' : 'FI',
+    'from' : 'FROM', 'loop' : 'LOOP', 'until' : 'UNTIL',
+    'par' : 'PAR', 'and' : 'AND', 'rap' : 'RAP'
     }
 #definiamo i token del lexer
 tokens = (
         'PROCEDURE',
-        'INT', 'STACK',
+        'INT', 'STACK', 'CHANNEL',
         'ID',
-        'NUMBER', 'NIL',
+        'NUMBER', 'NIL', 'EMPT',
         'EQUALS',
         'PLUSEQUALS', 'MINUSEQUALS', 'PRODEQUALS', 'DIVEQUALS', 'EXPEQUALS', 'MODEQUALS', 'SWAP', # operatori composti
         'PLUS', 'MINUS', 'PROD', 'DIV', 'EXP', 'MOD',                                    # operatori semplici
@@ -33,6 +29,7 @@ tokens = (
         'CALL', 'UNCALL',
         'IF', 'THEN', 'ELSE', 'FI',
         'FROM', 'LOOP', 'UNTIL',
+        'PAR', 'AND', 'RAP',
         'COMMA'
         )
 #regex sintassi per identificare i token riservati o ID

@@ -55,7 +55,8 @@ def p_empty(p):
 
 def p_type(p):
     '''type : INT
-            | STACK'''
+            | STACK
+            | CHANNEL'''
     p[0] = p[1]
 
 def p_expr_binop(p):
@@ -95,6 +96,7 @@ def p_declaration(p):
 def p_value(p):
     '''value : NUMBER
              | NIL
+             | EMPT
              | ID'''
     p[0] = p[1]
 
@@ -169,6 +171,19 @@ def p_if(p):
     else:
         p[0] = ('if', p[2], p[4], p[6], p[8])
         if VERBOSE: print(f"if: {p[2]} else fi: {p[8]}")
+
+def p_par_branch_list(p):
+    '''par_branch_list : body
+                       | par_branch_list AND body'''
+    if len(p) == 2:
+        p[0] = [p[1]]
+    else:
+        p[0] = p[1] + [p[3]]
+
+def p_par(p):
+    '''statement : PAR par_branch_list RAP'''
+    p[0] = ('par', p[2])
+    if VERBOSE: print(f"par: {p[2]}")
 
 def p_error(p):
     if p:

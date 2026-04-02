@@ -1,76 +1,58 @@
 0000  START
-0001  PROC encrypt
-0002  PARAM int m
-0003  PARAM int k
-0004  EVAL k 0
-0005  JMPF ELSE_4
-0006  JMP FI_4
-0007  LABEL ELSE_4
-0008  PUSHEQ m k
-0009  MINEQ k 1
-0010  CALL encrypt m k
-0011  LABEL FI_4
-0012  EVAL k 0
-0013  ASSERT k 0
-0014  END_PROC encrypt
-0015  PROC producer
-0016  PARAM stack buffer
-0017  PARAM int n
-0018  LOCAL int pub_key 17
-0019  LOCAL int i 0
-0020  EVAL i 0
-0021  JMPF FROM_ERR_20
-0022  LABEL FROM_START_20
-0023  PUSHEQ i 1
-0024  LOCAL int item 0
-0025  PUSHEQ item i
-0026  LOCAL int k pub_key
-0027  CALL encrypt item k
-0028  DELOCAL int k 0
-0029  PUSH item buffer
-0030  DELOCAL int item 0
-0031  EVAL i n
-0032  JMPF FROM_START_20
-0033  LABEL FROM_END_20
-0034  LABEL FROM_ERR_20
-0035  DELOCAL int i n
-0036  DELOCAL int pub_key 17
-0037  END_PROC producer
-0038  PROC consumer
-0039  PARAM stack buffer
-0040  PARAM stack result
-0041  PARAM int n
-0042  LOCAL int priv_key 17
-0043  LOCAL int i 0
-0044  EVAL i 0
-0045  JMPF FROM_ERR_44
-0046  LABEL FROM_START_44
-0047  LOCAL int item 0
-0048  POP item buffer
-0049  LOCAL int k 0
-0050  UNCALL encrypt item k
-0051  DELOCAL int k priv_key
-0052  PUSH item result
-0053  DELOCAL int item 0
-0054  PUSHEQ i 1
-0055  EVAL i n
-0056  JMPF FROM_START_44
-0057  LABEL FROM_END_44
-0058  LABEL FROM_ERR_44
-0059  DELOCAL int i n
-0060  DELOCAL int priv_key 17
-0061  END_PROC consumer
-0062  PROC main
-0063  DECL stack result
-0064  LOCAL stack buffer nil
-0065  LOCAL int n 5
-0066  CALL producer buffer n
-0067  CALL consumer buffer result n
-0068  SHOW result
-0069  UNCALL consumer buffer result n
-0070  UNCALL producer buffer n
-0071  SHOW result
-0072  DELOCAL int n 5
-0073  DELOCAL stack buffer nil
-0074  END_PROC main
-0075  HALT
+0001  PROC producer
+0002  PARAM channel ch
+0003  PARAM int n
+0004  LOCAL int pub_key 17
+0005  LOCAL int i 0
+0006  EVAL i 0
+0007  JMPF FROM_ERR_6
+0008  LABEL FROM_START_6
+0009  PUSHEQ i 1
+0010  LOCAL int item 0
+0011  PUSHEQ item i
+0012  SHOW item
+0013  SSEND item ch
+0014  DELOCAL int item 0
+0015  EVAL i n
+0016  JMPF FROM_START_6
+0017  LABEL FROM_END_6
+0018  LABEL FROM_ERR_6
+0019  DELOCAL int i n
+0020  DELOCAL int pub_key 17
+0021  END_PROC producer
+0022  PROC consumer
+0023  PARAM channel ch
+0024  PARAM stack result
+0025  PARAM int n
+0026  LOCAL int priv_key 17
+0027  LOCAL int i 0
+0028  EVAL i 0
+0029  JMPF FROM_ERR_28
+0030  LABEL FROM_START_28
+0031  LOCAL int item 0
+0032  SRECV item ch
+0033  SHOW item
+0034  PUSH item result
+0035  DELOCAL int item 0
+0036  PUSHEQ i 1
+0037  EVAL i n
+0038  JMPF FROM_START_28
+0039  LABEL FROM_END_28
+0040  LABEL FROM_ERR_28
+0041  DELOCAL int i n
+0042  DELOCAL int priv_key 17
+0043  END_PROC consumer
+0044  PROC main
+0045  LOCAL channel ch empty
+0046  DECL stack result
+0047  LOCAL int n 5
+0048  PAR_START
+0049  THREAD_0
+0050  CALL producer ch n
+0051  THREAD_1
+0052  CALL consumer ch result n
+0053  PAR_END
+0054  DELOCAL int n 5
+0055  DELOCAL channel ch empty
+0056  END_PROC main
+0057  HALT

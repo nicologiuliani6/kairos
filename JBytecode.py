@@ -202,6 +202,16 @@ class ByteCode_Compiler:
                 self.labels[err_label] = self.addr
                 self.emit(f"LABEL {err_label}")
                 #self.emit("HALT")
+            case 'par':
+                # ('par', [[stmt, ...], [stmt, ...], ...])
+                branches = ast[1]
+                self.emit("PAR_START")
+                for i, branch in enumerate(branches):
+                    self.emit(f"THREAD_{i}")
+                    for stmt in branch:          # branch is a body (list of stmts)
+                        if stmt is not None:
+                            self.process(stmt)
+                self.emit("PAR_END")
             case _:
                 print(f"[BYTECODE] nodo AST non gestito: {head}  →  {ast}")
                 exit(1)
@@ -229,5 +239,5 @@ if __name__ == '__main__':
             addr, instr = BT_Compiler.queue.get()
             line = f"{addr:04d}  {instr}\n"
             f.write(line)
-            #print(line, end="")  # opzionale: stampa anche a video
+            print(line, end="")  # opzionale: stampa anche a video
     
