@@ -4,6 +4,7 @@ procedure producer(channel ch, int n)
         i += 1
         local int item = 0
             item += i
+            show(item)
             ssend(item, ch)
         delocal int item = 0
     until i = n
@@ -23,7 +24,7 @@ procedure consumer(channel ch, stack result, int n)
 
 procedure main()
     local channel ch = empty
-    local stack result = nil
+    stack result
     local int n = 5
     par
         call producer(ch, n)
@@ -31,5 +32,4 @@ procedure main()
         call consumer(ch, result, n)
     rap
     delocal int n = 5
-    delocal stack result = nil
     delocal channel ch = empty

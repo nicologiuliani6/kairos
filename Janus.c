@@ -93,6 +93,8 @@ struct ThreadArgs {
 };
 
 static __thread ThreadArgs *current_thread_args = NULL;
+static __thread char *strtok_saveptr = NULL;
+#define strtok(str, delim) strtok_r((str), (delim), &strtok_saveptr)
 /* ======================================================================
  *  HELPER FUNCTIONS
  * ====================================================================== */
@@ -190,49 +192,48 @@ void op_push(VM *vm, const char *frame_name);
 void op_pop(VM *vm, const char *frame_name);
 
 // variabile thread-local
-void op_wait(Channel *ch, int is_send)
+/* ritorna 1 se sender era in coda (deve aspettare turn_done dopo),
+   ritorna 0 se receiver era in coda (op_wait ha già sincronizzato) */
+static int op_wait(Channel *ch, int is_send)
 {
     pthread_mutex_lock(&ch->mtx);
-    fprintf(stderr, "[WAIT] is_send=%d send_q=%p recv_q=%p current=%p\n",      is_send, ch->send_q_head, ch->recv_q_head, current_thread_args);
+    //fprintf(stderr, "[WAIT] is_send=%d send_q=%p recv_q=%p current=%p\n",      is_send, ch->send_q_head, ch->recv_q_head, current_thread_args);
     Waiter self;
     pthread_cond_init(&self.cond, NULL);
-    self.ready = 0;
-    self.next  = NULL;
+    self.ready       = 0;
+    self.next        = NULL;
+    self.thread_args = current_thread_args;
 
     if (is_send) {
         if (ch->recv_q_head) {
-            // match immediato: sender sblocca receiver
+            /* match immediato: receiver era in coda */
             Waiter *w = ch->recv_q_head;
             ch->recv_q_head = w->next;
             if (!ch->recv_q_head) ch->recv_q_tail = NULL;
 
-            ThreadArgs *receiver = ch->receiver_args;
-            ch->receiver_args = NULL;
-
+            ThreadArgs *receiver = w->thread_args;
             w->ready = 1;
             pthread_cond_signal(&w->cond);
             pthread_mutex_unlock(&ch->mtx);
 
-            // aspetta che il receiver finisca o si ri-blocchi
+            /* aspetta che il receiver completi il POP */
             if (receiver) {
                 pthread_mutex_lock(receiver->done_mtx);
-                while (!receiver->finished && !receiver->blocked)
+                while (!receiver->finished && !receiver->turn_done)
                     pthread_cond_wait(receiver->done_cond, receiver->done_mtx);
+                receiver->turn_done = 0;
                 pthread_mutex_unlock(receiver->done_mtx);
             }
-            return;
+            return 0; /* già sincronizzato, op_push NON deve aspettare */
 
         } else {
-            // nessun receiver in attesa: mettiti in coda e bloccati
-            self.thread_args = current_thread_args;  // ← salva nei Waiter, non nel channel
-
+            /* nessun receiver: sender si accoda e si blocca */
             if (ch->send_q_tail)
                 ch->send_q_tail->next = &self;
             else
                 ch->send_q_head = &self;
             ch->send_q_tail = &self;
 
-            // segnala al main che questo thread si è bloccato
             if (current_thread_args) {
                 pthread_mutex_lock(current_thread_args->done_mtx);
                 current_thread_args->blocked = 1;
@@ -243,57 +244,39 @@ void op_wait(Channel *ch, int is_send)
             while (!self.ready)
                 pthread_cond_wait(&self.cond, &ch->mtx);
 
-            // sbloccato: resetta blocked e segnala turn_done
             if (current_thread_args) {
                 pthread_mutex_lock(current_thread_args->done_mtx);
                 current_thread_args->blocked = 0;
-                current_thread_args->turn_done = 1;
-                pthread_cond_signal(current_thread_args->done_cond);
                 pthread_mutex_unlock(current_thread_args->done_mtx);
             }
-            ch->sender_args = NULL;
+            pthread_mutex_unlock(&ch->mtx);
+            return 1; /* sender era in coda, op_push DEVE aspettare turn_done */
         }
 
-    } else { // recv
-        fprintf(stderr, "[RECV] send_q_head=%p\n", ch->send_q_head);
+    } else { /* recv */
         if (ch->send_q_head) {
-            fprintf(stderr, "[RECV] first sender args=%p\n", ch->sender_args);
-            // match immediato: receiver sblocca sender
+            /* match immediato: sender era in coda */
             Waiter *w = ch->send_q_head;
             ch->send_q_head = w->next;
             if (!ch->send_q_head) ch->send_q_tail = NULL;
 
-            ThreadArgs *sender = w->thread_args;  // ← dal Waiter, non dal channel
-            fprintf(stderr, "[RECV match] sender=%p sender->blocked=%d sender->finished=%d\n",sender, sender ? sender->blocked : -1, sender ? sender->finished : -1);
-            ch->sender_args = NULL;
+            //ThreadArgs *sender = w->thread_args;
+            //fprintf(stderr, "[RECV match] sender=%p sender->blocked=%d sender->finished=%d\n",      sender, sender ? sender->blocked : -1, sender ? sender->finished : -1);
 
             w->ready = 1;
             pthread_cond_signal(&w->cond);
             pthread_mutex_unlock(&ch->mtx);
-
-            // aspetta che il sender finisca il suo turno
-            // aspetta che il sender finisca il suo turno
-            if (sender) {
-                pthread_mutex_lock(sender->done_mtx);
-                while (!sender->finished && !sender->turn_done)
-                    pthread_cond_wait(sender->done_cond, sender->done_mtx);
-                // reset per usi futuri
-                sender->turn_done = 0;
-                pthread_mutex_unlock(sender->done_mtx);
-            }
-            return;
+            return 0;
 
         } else {
-            // nessun sender in attesa: mettiti in coda e bloccati
+            /* nessun sender: receiver si accoda e si blocca */
             if (ch->recv_q_tail)
                 ch->recv_q_tail->next = &self;
             else
                 ch->recv_q_head = &self;
             ch->recv_q_tail = &self;
+            self.thread_args = current_thread_args;
 
-            ch->receiver_args = current_thread_args;
-
-            // segnala al main che questo thread si è bloccato
             if (current_thread_args) {
                 pthread_mutex_lock(current_thread_args->done_mtx);
                 current_thread_args->blocked = 1;
@@ -304,18 +287,17 @@ void op_wait(Channel *ch, int is_send)
             while (!self.ready)
                 pthread_cond_wait(&self.cond, &ch->mtx);
 
-            // sbloccato dal sender
             if (current_thread_args) {
                 pthread_mutex_lock(current_thread_args->done_mtx);
                 current_thread_args->blocked = 0;
                 pthread_mutex_unlock(current_thread_args->done_mtx);
             }
-            ch->receiver_args = NULL;
+            pthread_mutex_unlock(&ch->mtx);
+            return 0;
         }
     }
-
-    pthread_mutex_unlock(&ch->mtx);
 }
+
 void op_push(VM *vm, const char *frame_name)
 {
     char *C_val   = strtok(NULL, " \t");
@@ -345,9 +327,20 @@ void op_push(VM *vm, const char *frame_name)
     if (!stack_var->value) perror("realloc failed\n");
     stack_var->value[stack_var->stack_len++] = val;
 
-    if (stack_var->T == TYPE_CHANNEL)
-        op_wait(stack_var->channel, 1);  // is_send=1
+    if (stack_var->T == TYPE_CHANNEL) {
+        int was_queued = op_wait(stack_var->channel, 1);
+
+        /* aspetta turn_done solo se il sender era in coda */
+        if (was_queued && current_thread_args) {
+            pthread_mutex_lock(current_thread_args->done_mtx);
+            while (!current_thread_args->turn_done && !current_thread_args->finished)
+                pthread_cond_wait(current_thread_args->done_cond, current_thread_args->done_mtx);
+            current_thread_args->turn_done = 0;
+            pthread_mutex_unlock(current_thread_args->done_mtx);
+        }
+    }
 }
+
 void op_pop(VM *vm, const char *frame_name)
 {
     char *C_dest  = strtok(NULL, " \t");
@@ -366,8 +359,25 @@ void op_pop(VM *vm, const char *frame_name)
     if (stack_var->T == TYPE_STACK && stack_var->stack_len == 0)
         perror("[VM] POP: stack vuoto!\n");
 
+    ThreadArgs *sender_to_notify = NULL;
+    int sender_was_waiting = 0;
+    if (stack_var->T == TYPE_CHANNEL) {
+        pthread_mutex_lock(&stack_var->channel->mtx);
+        if (stack_var->channel->send_q_head) {
+            sender_to_notify   = stack_var->channel->send_q_head->thread_args;
+            sender_was_waiting = 1;
+        }
+        pthread_mutex_unlock(&stack_var->channel->mtx);
+    }
+
     if (stack_var->T == TYPE_CHANNEL)
-        op_wait(stack_var->channel, 0);  // is_send=0 → recv, aspetta prima di leggere
+        op_wait(stack_var->channel, 0);
+
+    /* dopo op_wait il valore è stato scritto dal sender, stack_len >= 1 */
+    if (stack_var->stack_len == 0) {
+        fprintf(stderr, "[VM] POP: channel vuoto dopo op_wait!\n");
+        exit(EXIT_FAILURE);
+    }
 
     int popped = stack_var->value[--stack_var->stack_len];
     if (stack_var->stack_len > 0)
@@ -375,7 +385,27 @@ void op_pop(VM *vm, const char *frame_name)
 
     Var *dest = get_var(vm, Findex, C_dest, "POP");
     *(dest->value) += popped;
+
+    if (stack_var->T == TYPE_CHANNEL) {
+        if (sender_was_waiting && sender_to_notify) {
+            /* caso A: sender era in coda, segnalagli che il POP è fatto */
+            pthread_mutex_lock(sender_to_notify->done_mtx);
+            sender_to_notify->turn_done = 1;
+            pthread_cond_signal(sender_to_notify->done_cond);
+            pthread_mutex_unlock(sender_to_notify->done_mtx);
+        } else {
+            /* caso B: receiver era in coda, segnala su se stesso
+               così op_wait(is_send=1) nel sender si sblocca */
+            if (current_thread_args) {
+                pthread_mutex_lock(current_thread_args->done_mtx);
+                current_thread_args->turn_done = 1;
+                pthread_cond_signal(current_thread_args->done_cond);
+                pthread_mutex_unlock(current_thread_args->done_mtx);
+            }
+        }
+    }
 }
+
 /* ======================================================================
  *  SHOW
  * ====================================================================== */
@@ -1733,10 +1763,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             ptr = new_ptr;
             continue;
         } else if (strcmp(firstWord, "SSEND") == 0){
-            printf("SSEND\n");
+            //printf("SSEND\n");
             op_push(vm, frame_name); 
         } else if (strcmp(firstWord, "SRECV") == 0){
-            printf("SRECV\n");
+            //printf("SRECV\n");
             op_pop(vm, frame_name);
         } else if (strcmp(firstWord, "PAR_START") == 0) {
             *newline = '\n';
@@ -1813,17 +1843,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
             ptr = scan + 1;
             continue;
-        } else if (strncmp(firstWord, "THREAD_", 7) == 0){
-            printf("THREAD_\n");
-            //creazione di un nuovo thread
-            //se abbiamo THREAD_0 lo creiamo, e aspettiasmo finche non finisce o vada in un SSEND o SRECV. Andiamo avanti saltando fino a THREAD_1 nel BT, li lo creiamo aspettiamo che finisca, e poi saltiamo a PAR_END, MA
-            //nota che se siamo il main dobbiamo saltare al ULTIMO PAR_END, mentre se siamo un thread di livello k dobbiamo saltayre a PAR_END-k
-            //se THREAD1 sblocca THREAD0 perche aveva fatto una SSEND e t1 fa SRECV, prima si sblocca t0, finisce/o si riblocca e poi SOLO DOPO parte t1, ecc.
-            //se siamo THREAD_0 e incontriamo THREAD_1 vuol dire che THREAD_0 e' terminato, lo killiamo
-        } else if (strcmp(firstWord, "PAR_END") == 0){
-            printf("PAR_END\n");
-            //ora qui dovrebbe poter arrivare solo THREAD_1, se e' arrivato lo killiamo, mentre se siamo il main continiamo
-        }
+        } 
         *newline = '\n';
         ptr = newline + 1;
     }
