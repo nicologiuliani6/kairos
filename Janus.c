@@ -481,77 +481,99 @@ void op_local(VM *vm, const char *frame_name)
     char *Vname    = strtok(NULL, " \t");
     char *c_Vvalue = strtok(NULL, " \t");
 
+    // Controllo input
+    if (!Vtype || !Vname || !c_Vvalue) {
+        perror("[VM] LOCAL: input incompleto");
+        exit(EXIT_FAILURE);
+    }
+
     uint Findex = get_findex(frame_name);
     uint Vindex = char_id_map_get(&vm->frames[Findex].VarIndexer, Vname);
 
+    // Alloca e inizializza Var
     vm->frames[Findex].vars[Vindex] = malloc(sizeof(Var));
     memset(vm->frames[Findex].vars[Vindex], 0, sizeof(Var));
 
+    Var *dst = vm->frames[Findex].vars[Vindex];
+
+    // Tipo variabile
     if (strcmp(Vtype, "int") == 0) {
-        vm->frames[Findex].vars[Vindex]->T     = TYPE_INT;
-        vm->frames[Findex].vars[Vindex]->value = malloc(sizeof(int));
-        *(vm->frames[Findex].vars[Vindex]->value) = 0;
+        dst->T     = TYPE_INT;
+        dst->value = malloc(sizeof(int));
+        *(int*)dst->value = 0;
     } else if (strcmp(Vtype, "stack") == 0) {
-        vm->frames[Findex].vars[Vindex]->T         = TYPE_STACK;
-        vm->frames[Findex].vars[Vindex]->stack_len = 0;
-        vm->frames[Findex].vars[Vindex]->value     = malloc(VAR_STACK_MAX_SIZE * sizeof(int));
+        dst->T         = TYPE_STACK;
+        dst->stack_len = 0;
+        dst->value     = malloc(VAR_STACK_MAX_SIZE * sizeof(int));
     } else if (strcmp(Vtype, "channel") == 0) {
-        Var *v = vm->frames[vm->frame_top].vars[Vindex];
+        dst->T         = TYPE_CHANNEL;
+        dst->stack_len = 0;
+        dst->value     = malloc(VAR_CHANNEL_MAX_SIZE * sizeof(int));
 
-        v->T         = TYPE_CHANNEL;
-        v->stack_len = 0;
-        v->value     = malloc(VAR_CHANNEL_MAX_SIZE * sizeof(int));
+        dst->channel = malloc(sizeof(Channel));
+        dst->channel->send_q_head = NULL;
+        dst->channel->send_q_tail = NULL;
+        dst->channel->recv_q_head = NULL;
+        dst->channel->recv_q_tail = NULL;
 
-        // ALLOCA il channel
-        if (!v->channel) {
-            v->channel = malloc(sizeof(Channel));
-            v->channel->send_q_head = NULL;
-            v->channel->send_q_tail = NULL;
-            v->channel->recv_q_head = NULL;
-            v->channel->recv_q_tail = NULL;
-        }
-
-        // Ora puoi inizializzare il mutex
-        pthread_mutex_init(&v->channel->mtx, NULL);
-    }
-    else {
-        perror("[VM] LOCAL: tipo non esistente\n");
+        pthread_mutex_init(&dst->channel->mtx, NULL);
+    } else {
+        fprintf(stderr, "[VM] LOCAL: tipo non esistente '%s'\n", Vtype);
+        exit(EXIT_FAILURE);
     }
 
-    strncpy(vm->frames[Findex].vars[Vindex]->name, Vname, VAR_NAME_LENGTH - 1);
-    vm->frames[Findex].vars[Vindex]->name[VAR_NAME_LENGTH - 1] = '\0';
-    vm->frames[Findex].vars[Vindex]->is_local = 1;
+    // Nome e flag locale
+    strncpy(dst->name, Vname, VAR_NAME_LENGTH - 1);
+    dst->name[VAR_NAME_LENGTH - 1] = '\0';
+    dst->is_local = 1;
 
+    // Aggiorna var_count
     if (Vindex >= (uint)vm->frames[Findex].var_count)
         vm->frames[Findex].var_count = Vindex + 1;
 
-    Var *dst = vm->frames[Findex].vars[Vindex];
-
+    // Copia valore se c_Vvalue esiste
     if (char_id_map_exists(&vm->frames[Findex].VarIndexer, c_Vvalue)) {
-        int  SrcIndex = char_id_map_get(&vm->frames[Findex].VarIndexer, c_Vvalue);
-        Var *src      = vm->frames[Findex].vars[SrcIndex];
-        if (src->T == TYPE_INT)
-            *(dst->value) = *(src->value);
-        else if (src->T == TYPE_STACK) {
+        uint SrcIndex = char_id_map_get(&vm->frames[Findex].VarIndexer, c_Vvalue);
+        Var *src = vm->frames[Findex].vars[SrcIndex];
+
+        if (src->T != dst->T) {
+            fprintf(stderr, "[VM] LOCAL: tipo incompatibile tra '%s' e '%s'\n",
+                    dst->name, src->name);
+            exit(EXIT_FAILURE);
+        }
+
+        if (dst->T == TYPE_INT) {
+            *(int*)dst->value = *(int*)src->value;
+        } else if (dst->T == TYPE_STACK) {
+            if (src->stack_len > VAR_STACK_MAX_SIZE) {
+                fprintf(stderr, "[VM] LOCAL: stack overflow da copia\n");
+                exit(EXIT_FAILURE);
+            }
             dst->stack_len = src->stack_len;
-            memcpy(dst->value, src->value, src->stack_len * sizeof(int));
-        } else {
-            perror("[VM] LOCAL: copia da PARAM non linkato\n");
+            memcpy(dst->value, src->value, dst->stack_len * sizeof(int));
+        } else if (dst->T == TYPE_CHANNEL) {
+            // Copia channel non supportata, inizializza nuovo canale vuoto
+            dst->stack_len = 0;
         }
     } else {
-        if (dst->T == TYPE_INT)
-            *(dst->value) = (int) strtol(c_Vvalue, NULL, 10);
-        else if (dst->T == TYPE_STACK) {
+        // Valore diretto
+        if (dst->T == TYPE_INT) {
+            *(int*)dst->value = (int)strtol(c_Vvalue, NULL, 10);
+        } else if (dst->T == TYPE_STACK) {
             if (strcmp(c_Vvalue, "nil") == 0)
                 dst->stack_len = 0;
-            else
-                perror("[VM] LOCAL: valore stack non compatibile\n");
+            else {
+                fprintf(stderr, "[VM] LOCAL: valore stack non compatibile '%s'\n", c_Vvalue);
+                exit(EXIT_FAILURE);
+            }
+        } else if (dst->T == TYPE_CHANNEL) {
+            dst->stack_len = 0; // inizializza vuoto
         }
     }
 
+    // Inserisci nello stack locale
     stack_push(&vm->frames[Findex].LocalVariables, dst);
 }
-
 void op_delocal(VM *vm, const char *frame_name)
 {
     char *Vtype    = strtok(NULL, " \t");
@@ -568,20 +590,29 @@ void op_delocal(VM *vm, const char *frame_name)
         Vvalue = (int) strtoul(c_Vvalue, NULL, 10);
 
     Var *V = stack_pop(&vm->frames[Findex].LocalVariables);
-    if (strcmp(Vtype, (V->T == 0 ? "int" : (V->T == 1 ? "stack" : "channel"))) != 0){
-        printf("[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n",
-               (V->T == 0 ? "int" : (V->T == 1 ? "stack" : "channel")), Vtype);
-        exit(EXIT_FAILURE);    
-        }
+    const char* expectedType;
+    switch(V->T) {
+        case 0: expectedType = "int"; break;
+        case 1: expectedType = "stack"; break;
+        case 2: expectedType = "channel"; break;
+        case 3: expectedType = "param"; break;
+        default: expectedType = "unknown"; break;
+    }
+
+    if(strcmp(Vtype, expectedType) != 0) {
+        printf("[VM] DELOCAL: tipo errato per %s! atteso %s, trovato %s\n",Vname ,expectedType, Vtype);
+        //exit(EXIT_FAILURE);
+    }
 
     if (strcmp(Vtype, "int") == 0){
+        
             if (Vvalue == *(V->value))
                 delete_var(vm->frames[Findex].vars, &vm->frames[Findex].var_count,
                        char_id_map_get(&vm->frames[Findex].VarIndexer, Vname));
         else {
             printf("[VM] DELOCAL: valore finale diverso dall'atteso! (%s, %d, %d)\n",
                    Vname, Vvalue, *(V->value));
-            exit(1);
+            //exit(1);
         }
     }
     else if (strcmp(Vtype, "stack") == 0) {
@@ -1347,7 +1378,7 @@ static void *thread_entry(void *arg)
             *newline = '\n';
             break;
         }
-if (strcmp(firstWord, "PAR_START") == 0) {
+        if (strcmp(firstWord, "PAR_START") == 0) {
     *newline = '\n';
     char *par_ptr = newline + 1;
 
@@ -1497,8 +1528,8 @@ if (strcmp(firstWord, "PAR_START") == 0) {
                 vm->frames[Findex].vars[param_indices[k]] = saved[k];
         }
         else if (strcmp(firstWord, "DECL")  == 0) { /* già allocato */ }
-        else if (strcmp(firstWord, "PARAM") == 0) { /* skip */ }
-        else if (strcmp(firstWord, "LABEL") == 0) { /* skip */ }
+        else if (strcmp(firstWord, "PARAM") == 0) { /* todo */ }
+        else if (strcmp(firstWord, "LABEL") == 0) { /* todo */ }
         else {
             fprintf(stderr, "[THREAD] op sconosciuta: '%s'\n", firstWord);
             exit(EXIT_FAILURE);

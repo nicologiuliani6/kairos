@@ -1,56 +1,53 @@
 procedure encrypt(int m, int k)
-    show(k)
-    if k = 0 then
-        //skip
-    else
-        m += k
-        k -= 1
-        call encrypt(m, k)
-    fi k = 0
+    m+=k
+    k-=k //va
 
-procedure producer(channel ch, int n)
-    local int pub_key = 17
-    local int i = 0
-    from i = 0 loop
-        i += 1
-        local int item = 0
-            item += i
-            local int k1 = pub_key //la chiave pubblica è quella che viene usata per criptare
-            call encrypt(item, k1)
-            delocal int k1 = 0
-            ssend(item, ch)
-        delocal int item = 0
-    until i = n
-    delocal int i = n
-    delocal int pub_key = 17
-
-procedure consumer(channel ch, stack result, int n)
-    local int priv_key = 17
-    local int i = 0
-    from i = 0 loop
-        local int item = 0
-            srecv(item, ch)
-            local int k2 = 0
-            show(k2)
-            uncall encrypt(item, k2)
-            show(k2)
-            delocal int k = 0 //controlliamo se la chiave combacia con la privata
-            //show(item)
-            push(item, result)
-        delocal int item = 0
-        i += 1
-    until i = n
-    delocal int i = n
-    delocal int priv_key = 17
+procedure decrypt(int m2, int k2)
+    show(m2)
+    m2-=k2 //non va
+    k2-=k2 //non va
+    show(m2)
 
 procedure main()
-    local channel ch = empty
-    stack result
-    local int n = 5
-    par
-        call producer(ch, n)
-    and
-        call consumer(ch, result, n)
+    channel ch
+    local int key = 17
+    local int msg1 = 0
+    int msg2
+    par 
+        
+        local int i = 0
+        from i = 0 loop
+            local int k1 = key
+            show(msg1)
+            show(k1)
+            call encrypt(msg1, k1)
+            show(msg1)
+            show(k1)
+            ssend(msg1, ch)
+            i+=1
+            delocal int k1 = 0
+        until i = 1
+        i-=1
+        show(i)
+        delocal int i = 0
+    and 
+        local int j = 0
+        from j = 0 loop
+            local int k2 = 0 
+            srecv(msg2, ch)
+            show(msg2)          // 153 (17+16+...+1)
+            show(k2)          // 0 
+            call decrypt(msg2, k2) //fix che non fa ne call che uncall2
+            show(msg2)          // =msg1
+            show(k2)            //17 
+            delocal int k2 = key //bug su k2 che sembra gia deallocato
+            j+=1
+            show(j)
+        until j = 1 //fix che qua esce 
+        j-=1
+        show(j)
+        delocal int j = 0 //bug su j che sembra deallocato
     rap
-    delocal int n = 5
-    delocal channel ch = empty
+    delocal int msg1 = 0
+    delocal int key = 17
+

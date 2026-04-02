@@ -13,12 +13,15 @@ procedure main()
     local int msg = 0
     show(msg)          // 0
     show(key)          // 17
-    par
+    par 
         call encrypt(msg, key)
-    and
+    and 
+        show(msg)          // 153 (17+16+...+1)
+        show(key)          // 0 
         uncall encrypt(msg, key)
     rap
     show(msg)          // torna 0
     show(key)          // torna 17
     delocal int msg = 0
     delocal int key = 17
+
