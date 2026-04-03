@@ -1,11 +1,10 @@
-procedure encrypt(int m, int k)
-    if k = 0 then
-        //skip
-    else
+procedure encrypt(int m, int key)
+    local int k = key
+    from k = key loop
         m += k
         k -= 1
-        call encrypt(m, k)
-    fi k = 0
+    until k = 0
+    delocal int k = 0
 
 procedure producer(channel ch, int n)
     local int pub_key = 17
@@ -14,9 +13,11 @@ procedure producer(channel ch, int n)
         i += 1
         local int item = 0
             item += i
-            local int k = pub_key //la chiave pubblica è quella che viene usata per criptare
-            call encrypt(item, k)
-            delocal int k = 0
+            local int k1 = pub_key       // copia della chiave
+            show(k1)
+            call encrypt(item, k1)
+            show(k1)
+            delocal int k1 = pub_key
             ssend(item, ch)
         delocal int item = 0
     until i = n
@@ -29,10 +30,11 @@ procedure consumer(channel ch, stack result, int n)
     from i = 0 loop
         local int item = 0
             srecv(item, ch)
-            local int k = 0
-            uncall encrypt(item, k)
-            delocal int k = priv_key //controlliamo se la chiave combacia con la privata
-            //show(item)
+            local int k2 = priv_key      // copia della chiave privata
+            show(k2)
+            uncall encrypt(item, k2)
+            show(k2)
+            delocal int k2 = priv_key
             push(item, result)
         delocal int item = 0
         i += 1
@@ -42,7 +44,7 @@ procedure consumer(channel ch, stack result, int n)
 
 procedure main()
     local channel ch = empty
-    local stack result = nil
+    stack result
     local int n = 5
     par
         call producer(ch, n)
@@ -50,5 +52,4 @@ procedure main()
         call consumer(ch, result, n)
     rap
     delocal int n = 5
-    delocal stack result = nil
     delocal channel ch = empty

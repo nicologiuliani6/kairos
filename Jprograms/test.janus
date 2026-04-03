@@ -1,6 +1,11 @@
-procedure encrypt(int m, int k)
-    m+=k
-
+procedure encrypt(int m, int key)
+    local int k = key
+    from k = key loop
+        m += k
+        k -= 1
+        //show(m)
+    until k = 0
+    delocal int k = 0
 
 procedure producer(channel ch, int n)
     local int pub_key = 17
@@ -9,12 +14,12 @@ procedure producer(channel ch, int n)
         i += 1
         local int item = 0
             item += i
-            local int k1 = pub_key //la chiave pubblica è quella che viene usata per criptare
+            local int k1 = pub_key       // copia della chiave
             show(k1)
             call encrypt(item, k1)
             show(k1)
             delocal int k1 = pub_key
-            ssend(item, ch)
+            ssend(item, ch) //ssend deve aspettare che t1 finisca o rivada su un ssend/srecv
         delocal int item = 0
     until i = n
     delocal int i = n
@@ -25,13 +30,12 @@ procedure consumer(channel ch, stack result, int n)
     local int i = 0
     from i = 0 loop
         local int item = 0
-            srecv(item, ch)
-            local int k2 = priv_key
+            srecv(item, ch) //srecv deve aspettare un ssend, si sveglia, lavora e alal fine/ssend/srecv sveglia t0 con ssend
+            local int k2 = priv_key      // copia della chiave privata
             show(k2)
             uncall encrypt(item, k2)
             show(k2)
-            delocal int k2 = priv_key //controlliamo se la chiave combacia con la privata
-            //show(item)
+            delocal int k2 = priv_key
             push(item, result)
         delocal int item = 0
         i += 1

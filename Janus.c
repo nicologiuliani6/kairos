@@ -89,6 +89,7 @@ struct ThreadArgs {
     pthread_t  tid;
     pthread_mutex_t *done_mtx;
     pthread_cond_t  *done_cond;
+    ThreadArgs *sender_to_notify;   /* ← NUOVO */
 };
 
 static __thread ThreadArgs *current_thread_args = NULL;
@@ -197,9 +198,20 @@ void op_swap(VM *vm, const char *frame_name)
  * ====================================================================== */
 void op_push(VM *vm, const char *frame_name);
 void op_pop(VM *vm, const char *frame_name);
-
-static int op_wait(Channel *ch, int is_send)
+static void notify_sender_turn_done(ThreadArgs *sender)
 {
+    if (!sender) return;
+    pthread_mutex_lock(sender->done_mtx);
+    sender->turn_done = 1;
+    pthread_cond_signal(sender->done_cond);
+    pthread_mutex_unlock(sender->done_mtx);
+}
+static int op_wait(Channel *ch, int is_send)
+{ if (!is_send && current_thread_args && current_thread_args->sender_to_notify) {
+        ThreadArgs *s = current_thread_args->sender_to_notify;
+        current_thread_args->sender_to_notify = NULL;
+        notify_sender_turn_done(s);
+    }
     fprintf(stderr, "[op_wait] is_send=%d send_q=%p recv_q=%p\n",
             is_send, ch->send_q_head, ch->recv_q_head);
 
@@ -427,25 +439,21 @@ void op_pop(VM *vm, const char *frame_name)
     *(dest->value) += popped;
 
     if (stack_var->T == TYPE_CHANNEL) {
+        ThreadArgs *sender_to_wake = NULL;
         if (sender_was_waiting && sender_to_notify) {
-            pthread_mutex_lock(sender_to_notify->done_mtx);
-            sender_to_notify->turn_done = 1;
-            pthread_cond_signal(sender_to_notify->done_cond);
-            pthread_mutex_unlock(sender_to_notify->done_mtx);
+            sender_to_wake = sender_to_notify;
         } else {
             pthread_mutex_lock(&stack_var->channel->mtx);
-            ThreadArgs *sender = stack_var->channel->sender_args;
+            sender_to_wake = stack_var->channel->sender_args;
             stack_var->channel->sender_args = NULL;
             pthread_mutex_unlock(&stack_var->channel->mtx);
-            if (sender) {
-                pthread_mutex_lock(sender->done_mtx);
-                sender->turn_done = 1;
-                pthread_cond_signal(sender->done_cond);
-                pthread_mutex_unlock(sender->done_mtx);
-            }
         }
-    }
-}
+        /* Non svegliare subito: il receiver finirà il suo turno
+           e sveglierà il sender solo quando si ri-blocca */
+        if (current_thread_args && sender_to_wake) {
+            current_thread_args->sender_to_notify = sender_to_wake;
+        }
+    }}
 
 /* ======================================================================
  *  SHOW
@@ -1472,6 +1480,7 @@ static void *thread_entry(void *arg)
                 all_args[t]->buffer    = args->buffer;
                 all_args[t]->start_ptr = thread_starts[t];
                 all_args[t]->finished  = 0;
+                all_args[t]->sender_to_notify = NULL;
                 all_args[t]->blocked   = 0;
                 all_args[t]->turn_done = 0;
                 all_args[t]->done_mtx  = &done_mtx;
@@ -1637,7 +1646,12 @@ static void *thread_entry(void *arg)
         *newline = '\n';
         ptr = newline + 1;
     }
-
+    /* Fine thread: se c'è un sender ancora in attesa, sveglialo */
+    if (args->sender_to_notify) {
+        ThreadArgs *s = args->sender_to_notify;
+        args->sender_to_notify = NULL;
+        notify_sender_turn_done(s);
+    }
     pthread_mutex_lock(args->done_mtx);
     args->finished = 1;
     pthread_cond_signal(args->done_cond);
@@ -1924,6 +1938,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 all_args[t]->vm        = vm;
                 all_args[t]->buffer    = strdup(original_buffer);
                 all_args[t]->start_ptr = thread_starts[t];
+                all_args[t]->sender_to_notify = NULL;
                 all_args[t]->finished  = 0;
                 all_args[t]->blocked   = 0;
                 all_args[t]->done_mtx  = &done_mtx;
