@@ -20,7 +20,7 @@ typedef enum {
     TYPE_PARAM = 3
 } ValueType;
 
-typedef struct ThreadArgs ThreadArgs; // forward declaration (sposta qui quella che era dopo)
+typedef struct ThreadArgs ThreadArgs; // forward declaration
 
 typedef struct Waiter {
     pthread_cond_t  cond;
@@ -29,7 +29,7 @@ typedef struct Waiter {
     ThreadArgs     *thread_args;
 } Waiter;
 
-typedef struct ThreadArgs ThreadArgs;// forward declaration
+typedef struct ThreadArgs ThreadArgs;
 typedef struct {
     pthread_mutex_t mtx;
     Waiter *send_q_head;
@@ -44,11 +44,11 @@ typedef struct {
 #define VAR_STACK_MAX_SIZE 128
 #define VAR_CHANNEL_MAX_SIZE 128
 typedef struct Var {
-    ValueType T; //tipo della variabile
-    int      *value; //buffer int o stack
-    size_t    stack_len; 
-    int       is_local; //bool se locale o no
-    char      name[VAR_NAME_LENGTH]; //nome var
+    ValueType T;
+    int      *value;
+    size_t    stack_len;
+    int       is_local;
+    char      name[VAR_NAME_LENGTH];
     Channel *channel;
 } Var;
 
@@ -85,7 +85,7 @@ struct ThreadArgs {
     char      *start_ptr;
     int        finished;
     int        blocked;
-    int        turn_done;   // ← nuovo
+    int        turn_done;
     pthread_t  tid;
     pthread_mutex_t *done_mtx;
     pthread_cond_t  *done_cond;
@@ -97,17 +97,23 @@ static __thread uint thread_val_IF = 0;
 static pthread_mutex_t var_indexer_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 #define strtok(str, delim) strtok_r((str), (delim), &strtok_saveptr)
+
 /* ======================================================================
  *  HELPER FUNCTIONS
  * ====================================================================== */
 
-/* Costruisce la chiave "procname@depth" usata nel FrameIndexer per i frame ricorsivi. */
 static void make_frame_key(const char *name, int depth, char *out, size_t out_sz)
 {
     if (depth == 0)
         snprintf(out, out_sz, "%s", name);
     else
         snprintf(out, out_sz, "%s@%d", name, depth);
+}
+
+/* Crea una chiave per un frame clonato per-thread: "procname@t<tid>" */
+static void make_thread_frame_key(const char *proc_name, char *out, size_t out_sz)
+{
+    snprintf(out, out_sz, "%s@t%lu", proc_name, (unsigned long)pthread_self());
 }
 
 static uint get_findex(const char *frame_name)
@@ -141,22 +147,18 @@ static Var *get_var(VM *vm, uint Findex, const char *name, const char *op_name)
     }
     return vm->frames[Findex].vars[idx];
 }
+
 static char *go_to_line(char *buffer, uint line)
 {
-    //fprintf(stderr, "[go_to_line] cerco riga %u buffer=%p\n", line, buffer);
     if (!buffer)  return NULL;
     if (line == 0) return buffer;
     uint cur = 1;
     char *p = buffer;
     while (*p) {
-        if (cur == line) {
-            //fprintf(stderr, "[go_to_line] trovata riga %u: %.20s\n", line, p);
-            return p;
-        }
+        if (cur == line) return p;
         if (*p == '\n') cur++;
         p++;
     }
-    //fprintf(stderr, "[go_to_line] riga %u non trovata, cur=%u\n", line, cur);
     return NULL;
 }
 
@@ -193,115 +195,152 @@ void op_swap(VM *vm, const char *frame_name)
 /* ======================================================================
  *  STACK/CHANNEL OPS
  * ====================================================================== */
-// forward declarations
 void op_push(VM *vm, const char *frame_name);
 void op_pop(VM *vm, const char *frame_name);
 
-// variabile thread-local
-/* ritorna 1 se sender era in coda (deve aspettare turn_done dopo),
-   ritorna 0 se receiver era in coda (op_wait ha già sincronizzato) */
 static int op_wait(Channel *ch, int is_send)
 {
-        fprintf(stderr, "[op_wait] is_send=%d send_q=%p recv_q=%p\n",
+    fprintf(stderr, "[op_wait] is_send=%d send_q=%p recv_q=%p\n",
             is_send, ch->send_q_head, ch->recv_q_head);
+
     pthread_mutex_lock(&ch->mtx);
-    //fprintf(stderr, "[WAIT] is_send=%d send_q=%p recv_q=%p current=%p\n",      is_send, ch->send_q_head, ch->recv_q_head, current_thread_args);
-    Waiter self;
-    pthread_cond_init(&self.cond, NULL);
-    self.ready       = 0;
-    self.next        = NULL;
-    self.thread_args = current_thread_args;
+
+    Waiter *self = malloc(sizeof(Waiter));
+    pthread_cond_init(&self->cond, NULL);
+    self->ready = 0;
+    self->next = NULL;
+    self->thread_args = current_thread_args;
 
     if (is_send) {
-           if (ch->recv_q_head) {
-        /* match immediato: receiver era in coda */
-        Waiter *w = ch->recv_q_head;
-        ch->recv_q_head = w->next;
-        if (!ch->recv_q_head) ch->recv_q_tail = NULL;
 
-        w->ready = 1;
-        pthread_cond_signal(&w->cond);
-        pthread_mutex_unlock(&ch->mtx);
+        // 🔥 MATCH IMMEDIATO CON RECV
+        if (ch->recv_q_head) {
+            Waiter *w = ch->recv_q_head;
+            ch->recv_q_head = w->next;
+            if (!ch->recv_q_head) ch->recv_q_tail = NULL;
 
-        // ← RIMUOVI completamente l'attesa su receiver->turn_done
-        // Il valore è già nello stack, il receiver si sveglierà da solo
+            // salva sender
+            ch->sender_args = self->thread_args;
 
-        return 0;
-    
+            // sveglia receiver
+            w->ready = 1;
+            pthread_cond_signal(&w->cond);
 
-        } else {
-            /* nessun receiver: sender si accoda e si blocca */
-            if (ch->send_q_tail)
-                ch->send_q_tail->next = &self;
-            else
-                ch->send_q_head = &self;
-            ch->send_q_tail = &self;
-            fprintf(stderr, "[WAIT send queue] self=%p current=%p\n", &self, current_thread_args); // ← QUI
+            pthread_mutex_unlock(&ch->mtx);
+
+            // 🔥 FIX DETERMINISTICO: sender aspetta il receiver
             if (current_thread_args) {
                 pthread_mutex_lock(current_thread_args->done_mtx);
                 current_thread_args->blocked = 1;
-                pthread_cond_signal(current_thread_args->done_cond);
-                pthread_mutex_unlock(current_thread_args->done_mtx);
-            }
 
-            while (!self.ready)
-                pthread_cond_wait(&self.cond, &ch->mtx);
+                while (!current_thread_args->turn_done &&
+                       !current_thread_args->finished)
+                    pthread_cond_wait(current_thread_args->done_cond,
+                                      current_thread_args->done_mtx);
 
-            if (current_thread_args) {
-                pthread_mutex_lock(current_thread_args->done_mtx);
+                current_thread_args->turn_done = 0;
                 current_thread_args->blocked = 0;
                 pthread_mutex_unlock(current_thread_args->done_mtx);
             }
-            pthread_mutex_unlock(&ch->mtx);
-            return 1; /* sender era in coda, op_push DEVE aspettare turn_done */
-        }
 
-    } else { /* recv */
-            fprintf(stderr, "[WAIT recv] send_q_head=%p\n", ch->send_q_head);
-        if (ch->send_q_head) {
-        Waiter *w = ch->send_q_head;
-        ch->send_q_head = w->next;
-        if (!ch->send_q_head) ch->send_q_tail = NULL;
-
-        fprintf(stderr, "[WAIT recv match] w=%p send_q_head dopo=%p\n", w, ch->send_q_head); // ← QUI
-        ch->sender_args = w->thread_args;
-
-        w->ready = 1;
-        pthread_cond_signal(&w->cond);
-        pthread_mutex_unlock(&ch->mtx);
-        return 0;
-
-        } else {
-            /* nessun sender: receiver si accoda e si blocca */
-            if (ch->recv_q_tail)
-                ch->recv_q_tail->next = &self;
-            else
-                ch->recv_q_head = &self;
-            ch->recv_q_tail = &self;
-            fprintf(stderr, "[WAIT send queue] current_thread_args=%p\n", current_thread_args);
-            self.thread_args = current_thread_args;
-
-            if (current_thread_args) {
-                pthread_mutex_lock(current_thread_args->done_mtx);
-                current_thread_args->blocked = 1;
-                pthread_cond_signal(current_thread_args->done_cond);
-                pthread_mutex_unlock(current_thread_args->done_mtx);
-            }
-
-            while (!self.ready)
-                pthread_cond_wait(&self.cond, &ch->mtx);
-
-            if (current_thread_args) {
-                pthread_mutex_lock(current_thread_args->done_mtx);
-                current_thread_args->blocked = 0;
-                pthread_mutex_unlock(current_thread_args->done_mtx);
-            }
-            pthread_mutex_unlock(&ch->mtx);
+            pthread_cond_destroy(&self->cond);
+            free(self);
             return 0;
         }
+
+        // 🔵 NO MATCH → METTITI IN CODA
+        if (ch->send_q_tail)
+            ch->send_q_tail->next = self;
+        else
+            ch->send_q_head = self;
+        ch->send_q_tail = self;
+
+        fprintf(stderr, "[WAIT send queue] self=%p current=%p\n",
+                self, current_thread_args);
+
+        if (current_thread_args) {
+            pthread_mutex_lock(current_thread_args->done_mtx);
+            current_thread_args->blocked = 1;
+            pthread_cond_signal(current_thread_args->done_cond);
+            pthread_mutex_unlock(current_thread_args->done_mtx);
+        }
+
+        while (!self->ready)
+            pthread_cond_wait(&self->cond, &ch->mtx);
+
+        if (current_thread_args) {
+            pthread_mutex_lock(current_thread_args->done_mtx);
+            current_thread_args->blocked = 0;
+            pthread_mutex_unlock(current_thread_args->done_mtx);
+        }
+
+        pthread_mutex_unlock(&ch->mtx);
+
+        pthread_cond_destroy(&self->cond);
+        free(self);
+        return 1;
+    }
+
+    else {
+
+        fprintf(stderr, "[WAIT recv] send_q_head=%p\n", ch->send_q_head);
+
+        // 🔥 MATCH IMMEDIATO CON SEND
+        if (ch->send_q_head) {
+            Waiter *w = ch->send_q_head;
+            ch->send_q_head = w->next;
+            if (!ch->send_q_head) ch->send_q_tail = NULL;
+
+            fprintf(stderr, "[WAIT recv match] w=%p send_q_head dopo=%p\n",
+                    w, ch->send_q_head);
+
+            // salva sender
+            ch->sender_args = w->thread_args;
+
+            // sveglia sender
+            w->ready = 1;
+            pthread_cond_signal(&w->cond);
+
+            pthread_mutex_unlock(&ch->mtx);
+
+            pthread_cond_destroy(&self->cond);
+            free(self);
+            return 0;
+        }
+
+        // 🔵 NO MATCH → METTITI IN CODA
+        if (ch->recv_q_tail)
+            ch->recv_q_tail->next = self;
+        else
+            ch->recv_q_head = self;
+        ch->recv_q_tail = self;
+
+        fprintf(stderr, "[WAIT recv queue] current_thread_args=%p\n",
+                current_thread_args);
+
+        if (current_thread_args) {
+            pthread_mutex_lock(current_thread_args->done_mtx);
+            current_thread_args->blocked = 1;
+            pthread_cond_signal(current_thread_args->done_cond);
+            pthread_mutex_unlock(current_thread_args->done_mtx);
+        }
+
+        while (!self->ready)
+            pthread_cond_wait(&self->cond, &ch->mtx);
+
+        if (current_thread_args) {
+            pthread_mutex_lock(current_thread_args->done_mtx);
+            current_thread_args->blocked = 0;
+            pthread_mutex_unlock(current_thread_args->done_mtx);
+        }
+
+        pthread_mutex_unlock(&ch->mtx);
+
+        pthread_cond_destroy(&self->cond);
+        free(self);
+        return 0;
     }
 }
-
 void op_push(VM *vm, const char *frame_name)
 {
     char *C_val   = strtok(NULL, " \t");
@@ -333,8 +372,6 @@ void op_push(VM *vm, const char *frame_name)
 
     if (stack_var->T == TYPE_CHANNEL) {
         int was_queued = op_wait(stack_var->channel, 1);
-
-        /* aspetta turn_done solo se il sender era in coda */
         if (was_queued && current_thread_args) {
             pthread_mutex_lock(current_thread_args->done_mtx);
             while (!current_thread_args->turn_done && !current_thread_args->finished)
@@ -374,7 +411,6 @@ void op_pop(VM *vm, const char *frame_name)
             sender_was_waiting = 1;
         }
         pthread_mutex_unlock(&stack_var->channel->mtx);
-
         op_wait(stack_var->channel, 0);
     }
 
@@ -392,19 +428,15 @@ void op_pop(VM *vm, const char *frame_name)
 
     if (stack_var->T == TYPE_CHANNEL) {
         if (sender_was_waiting && sender_to_notify) {
-            /* caso A: sender era già in coda quando siamo arrivati */
             pthread_mutex_lock(sender_to_notify->done_mtx);
             sender_to_notify->turn_done = 1;
             pthread_cond_signal(sender_to_notify->done_cond);
             pthread_mutex_unlock(sender_to_notify->done_mtx);
         } else {
-            /* caso B: eravamo noi in coda, sender arrivato dopo,
-               sender_args scritto da op_wait prima di svegliarci */
             pthread_mutex_lock(&stack_var->channel->mtx);
             ThreadArgs *sender = stack_var->channel->sender_args;
             stack_var->channel->sender_args = NULL;
             pthread_mutex_unlock(&stack_var->channel->mtx);
-
             if (sender) {
                 pthread_mutex_lock(sender->done_mtx);
                 sender->turn_done = 1;
@@ -454,6 +486,7 @@ void op_eval(VM *vm, const char *frame_name)
     int   rhs     = resolve_value(vm, Findex, C_value);
     thread_val_IF = (*(v->value) == rhs);
 }
+
 /* ======================================================================
  *  SALTI
  * ====================================================================== */
@@ -472,16 +505,13 @@ char *op_jmpf(VM *vm, const char *frame_name, char *original_buffer)
 {
     char *c_label = strtok(NULL, " \t");
     uint  Findex  = get_findex(frame_name);
-    //fprintf(stderr, "[JMPF] label='%s' val_IF=%d\n", c_label ? c_label : "NULL", thread_val_IF);
     if (thread_val_IF)
         return NULL;
     if (!char_id_map_exists(&vm->frames[Findex].LabelIndexer, c_label)) {
-        //fprintf(stderr, "[JMPF] label '%s' non trovata nel LabelIndexer!\n", c_label);
         exit(EXIT_FAILURE);
     }
     uint  Lindex  = char_id_map_get(&vm->frames[Findex].LabelIndexer, c_label);
     char *new_ptr = go_to_line(original_buffer, vm->frames[Findex].label[Lindex] + 1);
-    //fprintf(stderr, "[JMPF] salto a label=%s riga=%u new_ptr=%p\n",  c_label, vm->frames[Findex].label[Lindex], new_ptr);
     if (!new_ptr) perror("[VM] JMP: label non trovata!\n");
     return new_ptr;
 }
@@ -520,11 +550,11 @@ void op_local(VM *vm, const char *frame_name)
         v->value     = malloc(VAR_CHANNEL_MAX_SIZE * sizeof(int));
         if (!v->channel) {
             v->channel = malloc(sizeof(Channel));
-            v->channel->send_q_head  = NULL;
-            v->channel->send_q_tail  = NULL;
-            v->channel->recv_q_head  = NULL;
-            v->channel->recv_q_tail  = NULL;
-            v->channel->sender_args  = NULL;
+            v->channel->send_q_head   = NULL;
+            v->channel->send_q_tail   = NULL;
+            v->channel->recv_q_head   = NULL;
+            v->channel->recv_q_tail   = NULL;
+            v->channel->sender_args   = NULL;
             v->channel->receiver_args = NULL;
         }
         pthread_mutex_init(&v->channel->mtx, NULL);
@@ -638,8 +668,7 @@ void op_assert(VM *vm, const char *frame_name)
     unsigned long val1 = resolve_value(vm, Findex, ID1);
     unsigned long val2 = resolve_value(vm, Findex, ID2);
     if (val1 != val2) {
-        //printf("[VM] ASSERT fallito! (v1=%lu, v2=%lu)\n", val1, val2);
-        //exit(EXIT_FAILURE);
+        /* assertion failed - currently non-fatal */
     }
 }
 
@@ -656,8 +685,7 @@ static char *skip_lineno(char *line)
 }
 
 /* ======================================================================
- *  clone_frame_for_depth
- *  Crea il frame "proc_name@depth" copiando metadati dal frame base.
+ *  clone_frame_for_depth  (ricorsione)
  * ====================================================================== */
 static uint clone_frame_for_depth(VM *vm, const char *proc_name, int depth)
 {
@@ -668,7 +696,7 @@ static uint clone_frame_for_depth(VM *vm, const char *proc_name, int depth)
         return char_id_map_get(&FrameIndexer, key);
 
     uint base_fi  = char_id_map_get(&FrameIndexer, proc_name);
-    uint clone_fi = char_id_map_get(&FrameIndexer, key);   /* crea l'entry */
+    uint clone_fi = char_id_map_get(&FrameIndexer, key);
 
     Frame *base  = &vm->frames[base_fi];
     Frame *clone = &vm->frames[clone_fi];
@@ -687,7 +715,54 @@ static uint clone_frame_for_depth(VM *vm, const char *proc_name, int depth)
 
     stack_init(&clone->LocalVariables);
 
-    /* Alloca i Var per i PARAM; il valore verrà linkato dal chiamante */
+    for (int k = 0; k < clone->param_count; k++) {
+        int pidx = clone->param_indices[k];
+        clone->vars[pidx] = malloc(sizeof(Var));
+        memset(clone->vars[pidx], 0, sizeof(Var));
+        strncpy(clone->vars[pidx]->name,
+                base->vars[pidx]->name, VAR_NAME_LENGTH - 1);
+        clone->vars[pidx]->T        = TYPE_PARAM;
+        clone->vars[pidx]->is_local = 0;
+    }
+
+    return clone_fi;
+}
+
+/* ======================================================================
+ *  clone_frame_for_thread  (parallelismo)
+ *  Crea il frame "procname@t<tid>" per isolare le chiamate per-thread.
+ *  Deve essere chiamata con var_indexer_mtx già acquisito.
+ * ====================================================================== */
+static uint clone_frame_for_thread(VM *vm, const char *proc_name)
+{
+    char key[VAR_NAME_LENGTH];
+    make_thread_frame_key(proc_name, key, sizeof(key));
+
+    /* Se esiste già per questo thread, riusalo */
+    if (char_id_map_exists(&FrameIndexer, key))
+        return char_id_map_get(&FrameIndexer, key);
+
+    uint base_fi  = char_id_map_get(&FrameIndexer, proc_name);
+    uint clone_fi = char_id_map_get(&FrameIndexer, key); /* alloca la entry */
+
+    Frame *base  = &vm->frames[base_fi];
+    Frame *clone = &vm->frames[clone_fi];
+
+    memset(clone, 0, sizeof(Frame));
+
+    clone->VarIndexer   = base->VarIndexer;
+    clone->LabelIndexer = base->LabelIndexer;
+    clone->addr         = base->addr;
+    clone->end_addr     = base->end_addr;
+    clone->var_count    = base->var_count;
+    clone->param_count  = base->param_count;
+    memcpy(clone->param_indices, base->param_indices, sizeof(base->param_indices));
+    snprintf(clone->name, VAR_NAME_LENGTH, "%s", key);
+    memcpy(clone->label, base->label, sizeof(base->label));
+
+    stack_init(&clone->LocalVariables);
+
+    /* Alloca slot PARAM; i valori verranno linkati dal chiamante */
     for (int k = 0; k < clone->param_count; k++) {
         int pidx = clone->param_indices[k];
         clone->vars[pidx] = malloc(sizeof(Var));
@@ -723,7 +798,6 @@ static int collect_loops(VM *vm, const char *frame_name,
                           char *original_buffer,
                           LoopDescriptor *loops_out, int max_loops)
 {
-    /* Usa il frame BASE (senza @depth) per addr/end_addr */
     char base_name[VAR_NAME_LENGTH];
     strncpy(base_name, frame_name, VAR_NAME_LENGTH - 1);
     char *at = strchr(base_name, '@');
@@ -958,7 +1032,6 @@ static IfZone line_if_zone(uint line, IfDescriptor *ifs, int nifs, int *if_idx)
     return IF_ZONE_NONE;
 }
 
-
 static void do_eval(VM *vm, uint findex, const char *id, const char *val)
 {
     int rhs = 0;
@@ -1082,7 +1155,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     char *original_buffer = strdup(buffer);
     if (!original_buffer) { fprintf(stderr, "[UNCALL] strdup fallita\n"); exit(EXIT_FAILURE); }
 
-    /* Usa il frame BASE (senza @depth) per reset LocalVariables */
     char base_name[VAR_NAME_LENGTH];
     strncpy(base_name, frame_name, VAR_NAME_LENGTH - 1);
     char *at_sign = strchr(base_name, '@');
@@ -1108,7 +1180,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
     uint findex     = char_id_map_get(&FrameIndexer, cur_frame);
     uint start_line = vm->frames[findex_reset].addr + 1;
-    //fprintf(stderr, "[DBG INVERT] frame=%s start_line=%u nloops=%d nifs=%d\n", frame_name, start_line, nloops, nifs);
 
     char *line_ptrs[MAX_LINES];
     uint  line_nos [MAX_LINES];
@@ -1146,7 +1217,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if (!firstWord) { i--; continue; }
 
-        /* ---- zone loop ---- */
         int loop_idx = -1;
         LoopZone lzone = line_loop_zone(cur_line, loops, nloops, &loop_idx);
 
@@ -1159,8 +1229,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             do_eval(vm, findex,
                     loops[loop_idx].eval_entry_id,
                     loops[loop_idx].eval_entry_val);
-
-            if (thread_val_IF) {                
+            if (thread_val_IF) {
                 i--;
             } else {
                 int target = -1;
@@ -1175,7 +1244,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             do_eval(vm, findex,
                     loops[loop_idx].eval_exit_id,
                     loops[loop_idx].eval_exit_val);
-
             if (thread_val_IF) {
                 i--;
             } else {
@@ -1188,7 +1256,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             continue;
         }
 
-        /* ---- zone if ---- */
         int if_idx = -1;
         IfZone izone = line_if_zone(cur_line, ifs, nifs, &if_idx);
 
@@ -1204,24 +1271,20 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             for (int d = 0; d < depth; d++) {
                 Stack saved_lv = vm->frames[findex].LocalVariables;
                 stack_init(&vm->frames[findex].LocalVariables);
-
                 exec_branch_inverse(vm, original_buffer, cur_frame,
                                     ifs[if_idx].else_label_line + 1,
                                     ifs[if_idx].fi_label_line,
                                     findex);
-
                 vm->frames[findex].LocalVariables = saved_lv;
             }
 
             {
                 Stack saved_lv = vm->frames[findex].LocalVariables;
                 stack_init(&vm->frames[findex].LocalVariables);
-
                 exec_branch_inverse(vm, original_buffer, cur_frame,
                                     ifs[if_idx].jmpf_else_line + 1,
                                     ifs[if_idx].jmp_fi_line,
                                     findex);
-
                 vm->frames[findex].LocalVariables = saved_lv;
             }
 
@@ -1237,7 +1300,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             i--; continue;
         }
 
-        /* ---- CALL → UNCALL ricorsivo ---- */
         if (strcmp(firstWord, "CALL") == 0) {
             char *proc_name = strtok(NULL, " \t");
             uint  callee_fi = char_id_map_get(&FrameIndexer, proc_name);
@@ -1267,7 +1329,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             i--; continue;
         }
 
-        /* ---- UNCALL → CALL forward ---- */
         if (strcmp(firstWord, "UNCALL") == 0) {
             char *proc_name = strtok(NULL, " \t");
             uint  callee_fi = char_id_map_get(&FrameIndexer, proc_name);
@@ -1294,7 +1355,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             i--; continue;
         }
 
-        /* ---- op inverse ---- */
         if      (strcmp(firstWord, "PUSHEQ") == 0) op_pusheq_inv(vm, cur_frame);
         else if (strcmp(firstWord, "MINEQ")  == 0) op_mineq_inv (vm, cur_frame);
         else if (strcmp(firstWord, "PRODEQ") == 0) op_prodeq_inv(vm, cur_frame);
@@ -1335,6 +1395,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 /* ======================================================================
  *  vm_run_BT
  * ====================================================================== */
+
 static void *thread_entry(void *arg)
 {
     ThreadArgs *args = (ThreadArgs *)arg;
@@ -1343,7 +1404,6 @@ static void *thread_entry(void *arg)
     strncpy(fname, args->frame_name, VAR_NAME_LENGTH - 1);
     fname[VAR_NAME_LENGTH - 1] = '\0';
 
-    // imposta la variabile thread-local
     current_thread_args = args;
 
     char *ptr = args->start_ptr;
@@ -1363,88 +1423,90 @@ static void *thread_entry(void *arg)
         if (!firstWord) { *newline = '\n'; ptr = newline + 1; continue; }
 
         if (strncmp(firstWord, "THREAD_", 7) == 0 ||
-            strcmp(firstWord, "PAR_END")     == 0){
+            strcmp(firstWord, "PAR_END")     == 0) {
             *newline = '\n';
             break;
         }
+
         if (strcmp(firstWord, "PAR_START") == 0) {
-    *newline = '\n';
-    char *par_ptr = newline + 1;
+            *newline = '\n';
+            char *par_ptr = newline + 1;
 
-    char *thread_starts[16];
-    int   n_threads = 0;
-    int   depth = 1;
-    char *scan = par_ptr;
-    char *par_end_ptr = NULL;
+            char *thread_starts[16];
+            int   n_threads = 0;
+            int   depth = 1;
+            char *scan = par_ptr;
+            char *par_end_ptr = NULL;
 
-    while (*scan && depth > 0) {
-        char *nl = strchr(scan, '\n');
-        if (!nl) break;
-        *nl = '\0';
-        char tmp[512];
-        strncpy(tmp, scan, sizeof(tmp)-1);
-        char *fw = strtok(skip_lineno(tmp), " \t");
-        if (fw) {
-            if (strcmp(fw, "PAR_START") == 0) depth++;
-            else if (strcmp(fw, "PAR_END") == 0) {
-                depth--;
-                if (depth == 0) {
-                    par_end_ptr = nl;
-                    *nl = '\n';
-                    break;
+            while (*scan && depth > 0) {
+                char *nl = strchr(scan, '\n');
+                if (!nl) break;
+                *nl = '\0';
+                char tmp[512];
+                strncpy(tmp, scan, sizeof(tmp)-1);
+                char *fw = strtok(skip_lineno(tmp), " \t");
+                if (fw) {
+                    if (strcmp(fw, "PAR_START") == 0) depth++;
+                    else if (strcmp(fw, "PAR_END") == 0) {
+                        depth--;
+                        if (depth == 0) {
+                            par_end_ptr = nl;
+                            *nl = '\n';
+                            break;
+                        }
+                    } else if (strncmp(fw, "THREAD_", 7) == 0 && depth == 1) {
+                        thread_starts[n_threads++] = nl + 1;
+                    }
                 }
-            } else if (strncmp(fw, "THREAD_", 7) == 0 && depth == 1) {
-                thread_starts[n_threads++] = nl + 1;
+                *nl = '\n';
+                scan = nl + 1;
             }
+
+            pthread_mutex_t done_mtx  = PTHREAD_MUTEX_INITIALIZER;
+            pthread_cond_t  done_cond = PTHREAD_COND_INITIALIZER;
+
+            ThreadArgs *all_args[16];
+            for (int t = 0; t < n_threads; t++) {
+                all_args[t] = malloc(sizeof(ThreadArgs));
+                all_args[t]->vm        = vm;
+                all_args[t]->buffer    = args->buffer;
+                all_args[t]->start_ptr = thread_starts[t];
+                all_args[t]->finished  = 0;
+                all_args[t]->blocked   = 0;
+                all_args[t]->turn_done = 0;
+                all_args[t]->done_mtx  = &done_mtx;
+                all_args[t]->done_cond = &done_cond;
+                strncpy(all_args[t]->frame_name, fname, VAR_NAME_LENGTH-1);
+            }
+
+            for (int t = 0; t < n_threads; t++) {
+                pthread_create(&all_args[t]->tid, NULL, thread_entry, all_args[t]);
+                pthread_mutex_lock(&done_mtx);
+                while (!all_args[t]->finished && !all_args[t]->blocked)
+                    pthread_cond_wait(&done_cond, &done_mtx);
+                pthread_mutex_unlock(&done_mtx);
+            }
+
+            pthread_mutex_lock(&done_mtx);
+            int finished_count = 0;
+            while (finished_count < n_threads) {
+                finished_count = 0;
+                for (int t = 0; t < n_threads; t++)
+                    if (all_args[t]->finished) finished_count++;
+                if (finished_count < n_threads)
+                    pthread_cond_wait(&done_cond, &done_mtx);
+            }
+            pthread_mutex_unlock(&done_mtx);
+
+            for (int t = 0; t < n_threads; t++) {
+                pthread_join(all_args[t]->tid, NULL);
+                free(all_args[t]);
+            }
+
+            ptr = par_end_ptr ? par_end_ptr + 1 : scan + 1;
+            continue;
         }
-        *nl = '\n';
-        scan = nl + 1;
-    }
 
-    pthread_mutex_t done_mtx  = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t  done_cond = PTHREAD_COND_INITIALIZER;
-
-    ThreadArgs *all_args[16];
-    for (int t = 0; t < n_threads; t++) {
-        all_args[t] = malloc(sizeof(ThreadArgs));
-        all_args[t]->vm        = vm;
-        all_args[t]->buffer    = args->buffer;
-        all_args[t]->start_ptr = thread_starts[t];
-        all_args[t]->finished  = 0;
-        all_args[t]->blocked   = 0;
-        all_args[t]->turn_done = 0;
-        all_args[t]->done_mtx  = &done_mtx;
-        all_args[t]->done_cond = &done_cond;
-        strncpy(all_args[t]->frame_name, fname, VAR_NAME_LENGTH-1);
-    }
-
-    for (int t = 0; t < n_threads; t++) {
-        pthread_create(&all_args[t]->tid, NULL, thread_entry, all_args[t]);
-        pthread_mutex_lock(&done_mtx);
-        while (!all_args[t]->finished && !all_args[t]->blocked)
-            pthread_cond_wait(&done_cond, &done_mtx);
-        pthread_mutex_unlock(&done_mtx);
-    }
-
-    pthread_mutex_lock(&done_mtx);
-    int finished_count = 0;
-    while (finished_count < n_threads) {
-        finished_count = 0;
-        for (int t = 0; t < n_threads; t++)
-            if (all_args[t]->finished) finished_count++;
-        if (finished_count < n_threads)
-            pthread_cond_wait(&done_cond, &done_mtx);
-    }
-    pthread_mutex_unlock(&done_mtx);
-
-    for (int t = 0; t < n_threads; t++) {
-        pthread_join(all_args[t]->tid, NULL);
-        free(all_args[t]);
-    }
-
-    ptr = par_end_ptr ? par_end_ptr + 1 : scan + 1;
-    continue;
-}
         if      (strcmp(firstWord, "SHOW")    == 0) op_show   (vm, fname);
         else if (strcmp(firstWord, "PUSHEQ")  == 0) op_pusheq (vm, fname);
         else if (strcmp(firstWord, "MINEQ")   == 0) op_mineq  (vm, fname);
@@ -1458,34 +1520,55 @@ static void *thread_entry(void *arg)
         else if (strcmp(firstWord, "LOCAL")   == 0) op_local  (vm, fname);
         else if (strcmp(firstWord, "DELOCAL") == 0) op_delocal(vm, fname);
         else if (strcmp(firstWord, "SSEND")   == 0) op_push   (vm, fname);
-        else if (strcmp(firstWord, "SRECV")   == 0) {fprintf(stderr, "[THREAD] SRECV\n"); op_pop    (vm, fname);}
+        else if (strcmp(firstWord, "SRECV")   == 0) { fprintf(stderr, "[THREAD] SRECV\n"); op_pop(vm, fname); }
         else if (strcmp(firstWord, "EVAL")    == 0) {
-              fprintf(stderr, "[THREAD] EVAL\n");
-              op_eval   (vm, fname);
-fprintf(stderr, "[THREAD] val_IF=%d\n", thread_val_IF);        }
-        else if (strcmp(firstWord, "ASSERT")  == 0) op_assert (vm, fname);
+            fprintf(stderr, "[THREAD] EVAL\n");
+            op_eval(vm, fname);
+            fprintf(stderr, "[THREAD] val_IF=%d\n", thread_val_IF);
+        }
+        else if (strcmp(firstWord, "ASSERT")  == 0) op_assert(vm, fname);
         else if (strcmp(firstWord, "JMPF") == 0) {
-fprintf(stderr, "[THREAD] JMPF val_IF=%d\n", thread_val_IF);    *newline = '\n';
-    char *new_ptr = op_jmpf(vm, fname, args->buffer);
-    if (new_ptr) { ptr = new_ptr; continue; }
-    ptr = newline + 1;
-    continue;
-}
+            fprintf(stderr, "[THREAD] JMPF val_IF=%d\n", thread_val_IF);
+            *newline = '\n';
+            char *new_ptr = op_jmpf(vm, fname, args->buffer);
+            if (new_ptr) { ptr = new_ptr; continue; }
+            ptr = newline + 1;
+            continue;
+        }
         else if (strcmp(firstWord, "JMP") == 0) {
             *newline = '\n';
             char *new_ptr = op_jmp(vm, fname, args->buffer);
             ptr = new_ptr;
             continue;
         }
+
+        /* ----------------------------------------------------------------
+         *  CALL dentro un thread → clone per-thread per evitare la race
+         *  condition sui parametri del frame chiamato.
+         * -------------------------------------------------------------- */
         else if (strcmp(firstWord, "CALL") == 0) {
             char *proc_name  = strtok(NULL, " \t");
             uint  cur_Findex = get_findex(fname);
-            uint  Findex     = char_id_map_get(&FrameIndexer, proc_name);
+
+            /* Crea (o recupera) il frame clone per questo thread */
+            char thread_key[VAR_NAME_LENGTH];
+            make_thread_frame_key(proc_name, thread_key, sizeof(thread_key));
+
+            pthread_mutex_lock(&var_indexer_mtx);
+            uint Findex = clone_frame_for_thread(vm, proc_name);
+            pthread_mutex_unlock(&var_indexer_mtx);
+
             int   param_count   = vm->frames[Findex].param_count;
             int  *param_indices = vm->frames[Findex].param_indices;
-            Var  *saved[64];
+
+            /* Salva i puntatori attuali e linka le variabili del chiamante */
+            Var *saved[64];
             for (int k = 0; k < param_count; k++)
                 saved[k] = vm->frames[Findex].vars[param_indices[k]];
+
+            Stack saved_lv = vm->frames[Findex].LocalVariables;
+            stack_init(&vm->frames[Findex].LocalVariables);
+
             char *param = NULL; int ii = 0;
             while ((param = strtok(NULL, " \t")) != NULL && ii < param_count) {
                 int src_idx = char_id_map_get(&vm->frames[cur_Findex].VarIndexer, param);
@@ -1493,19 +1576,39 @@ fprintf(stderr, "[THREAD] JMPF val_IF=%d\n", thread_val_IF);    *newline = '\n';
                     vm->frames[cur_Findex].vars[src_idx];
                 ii++;
             }
-            vm_run_BT(vm, args->buffer, proc_name);
+
+            vm_run_BT(vm, args->buffer, thread_key);
+
+            /* Ripristina */
             for (int k = 0; k < param_count; k++)
                 vm->frames[Findex].vars[param_indices[k]] = saved[k];
+            vm->frames[Findex].LocalVariables = saved_lv;
         }
+
+        /* ----------------------------------------------------------------
+         *  UNCALL dentro un thread → clone per-thread
+         * -------------------------------------------------------------- */
         else if (strcmp(firstWord, "UNCALL") == 0) {
             char *proc_name  = strtok(NULL, " \t");
             uint  cur_Findex = get_findex(fname);
-            uint  Findex     = char_id_map_get(&FrameIndexer, proc_name);
+
+            char thread_key[VAR_NAME_LENGTH];
+            make_thread_frame_key(proc_name, thread_key, sizeof(thread_key));
+
+            pthread_mutex_lock(&var_indexer_mtx);
+            uint Findex = clone_frame_for_thread(vm, proc_name);
+            pthread_mutex_unlock(&var_indexer_mtx);
+
             int   param_count   = vm->frames[Findex].param_count;
             int  *param_indices = vm->frames[Findex].param_indices;
-            Var  *saved[64];
+
+            Var *saved[64];
             for (int k = 0; k < param_count; k++)
                 saved[k] = vm->frames[Findex].vars[param_indices[k]];
+
+            Stack saved_lv = vm->frames[Findex].LocalVariables;
+            stack_init(&vm->frames[Findex].LocalVariables);
+
             char *param = NULL; int ii = 0;
             while ((param = strtok(NULL, " \t")) != NULL && ii < param_count) {
                 int src_idx = char_id_map_get(&vm->frames[cur_Findex].VarIndexer, param);
@@ -1513,12 +1616,16 @@ fprintf(stderr, "[THREAD] JMPF val_IF=%d\n", thread_val_IF);    *newline = '\n';
                     vm->frames[cur_Findex].vars[src_idx];
                 ii++;
             }
-            invert_op_to_line(vm, proc_name, args->buffer,
+
+            invert_op_to_line(vm, thread_key, args->buffer,
                               vm->frames[Findex].end_addr - 1,
                               vm->frames[Findex].addr + 1);
+
             for (int k = 0; k < param_count; k++)
                 vm->frames[Findex].vars[param_indices[k]] = saved[k];
+            vm->frames[Findex].LocalVariables = saved_lv;
         }
+
         else if (strcmp(firstWord, "DECL")  == 0) { /* già allocato */ }
         else if (strcmp(firstWord, "PARAM") == 0) { /* skip */ }
         else if (strcmp(firstWord, "LABEL") == 0) { /* skip */ }
@@ -1531,7 +1638,6 @@ fprintf(stderr, "[THREAD] JMPF val_IF=%d\n", thread_val_IF);    *newline = '\n';
         ptr = newline + 1;
     }
 
-    // segnala completamento
     pthread_mutex_lock(args->done_mtx);
     args->finished = 1;
     pthread_cond_signal(args->done_cond);
@@ -1555,7 +1661,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         int   saved_param_count;
         int   callee_findex;
         Stack saved_local_vars;
-        int   is_recursive_clone;   /* frame clonato per ricorsione */
+        int   is_recursive_clone;
     } CallRecord;
 
     CallRecord call_stack[MAX_FRAMES];
@@ -1588,7 +1694,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             continue;
         }
 
-        /* ---------- fine procedura ---------- */
         if (strcmp(firstWord, "END_PROC") == 0) {
             uint Findex = get_findex(frame_name);
             if (stack_size(&vm->frames[Findex].LocalVariables) > -1)
@@ -1606,11 +1711,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
                 vm->frames[cfi].LocalVariables = call_stack[call_top].saved_local_vars;
 
-                /* Se era un frame clonato (depth>0), libera i suoi slot PARAM */
                 if (call_stack[call_top].is_recursive_clone) {
                     for (int k = 0; k < vm->frames[cfi].param_count; k++) {
                         int pidx = vm->frames[cfi].param_indices[k];
-                        /* NON free value: punta alla var del chiamante */
                         free(vm->frames[cfi].vars[pidx]);
                         vm->frames[cfi].vars[pidx] = NULL;
                     }
@@ -1629,7 +1732,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             char *proc_name  = strtok(NULL, " \t");
             uint  cur_Findex = get_findex(frame_name);
 
-            /* Estrae il nome base del frame corrente (parte prima di '@') */
             char cur_base[VAR_NAME_LENGTH];
             strncpy(cur_base, frame_name, VAR_NAME_LENGTH - 1);
             char *at = strchr(cur_base, '@');
@@ -1637,7 +1739,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
             int is_recursive = (strcmp(proc_name, cur_base) == 0);
 
-            /* Calcola il depth del nuovo frame */
             int new_depth = 0;
             if (is_recursive) {
                 char *at2 = strchr(frame_name, '@');
@@ -1645,7 +1746,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 new_depth = cur_depth + 1;
             }
 
-            /* Ottieni (o crea) il frame da usare per la chiamata */
             uint Findex;
             int  is_clone = 0;
             if (is_recursive) {
@@ -1704,13 +1804,11 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 exit(EXIT_FAILURE);
             }
 
-            /* Aggiorna recursion_depth sul frame BASE */
             if (is_recursive) {
                 uint base_fi = char_id_map_get(&FrameIndexer, proc_name);
                 vm->frames[base_fi].recursion_depth = new_depth;
             }
 
-            /* Aggiorna frame_name e salta al corpo */
             char new_frame_name[VAR_NAME_LENGTH];
             if (is_recursive)
                 make_frame_key(proc_name, new_depth, new_frame_name, sizeof(new_frame_name));
@@ -1750,7 +1848,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 fprintf(stderr, "ERROR: parametri UNCALL mismatch '%s'\n", proc_name);
                 exit(EXIT_FAILURE);
             }
-            //printf("[VM] UNCALL %s\n", proc_name);
             invert_op_to_line(vm, proc_name, original_buffer,
                               vm->frames[Findex].end_addr - 1,
                               vm->frames[Findex].addr + 1);
@@ -1785,11 +1882,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             char *new_ptr = op_jmp(vm, frame_name, original_buffer);
             ptr = new_ptr;
             continue;
-        } else if (strcmp(firstWord, "SSEND") == 0){
-            //printf("SSEND\n");
-            op_push(vm, frame_name); 
-        } else if (strcmp(firstWord, "SRECV") == 0){
-            //printf("SRECV\n");
+        } else if (strcmp(firstWord, "SSEND") == 0) {
+            op_push(vm, frame_name);
+        } else if (strcmp(firstWord, "SRECV") == 0) {
             op_pop(vm, frame_name);
         } else if (strcmp(firstWord, "PAR_START") == 0) {
             *newline = '\n';
@@ -1827,7 +1922,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             for (int t = 0; t < n_threads; t++) {
                 all_args[t] = malloc(sizeof(ThreadArgs));
                 all_args[t]->vm        = vm;
-                all_args[t]->buffer    = strdup(original_buffer);  // ← copia per ogni thread      
+                all_args[t]->buffer    = strdup(original_buffer);
                 all_args[t]->start_ptr = thread_starts[t];
                 all_args[t]->finished  = 0;
                 all_args[t]->blocked   = 0;
@@ -1839,15 +1934,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
             for (int t = 0; t < n_threads; t++) {
                 pthread_create(&all_args[t]->tid, NULL, thread_entry, all_args[t]);
-
-                // aspetta che t finisca OPPURE si blocchi su channel
                 pthread_mutex_lock(&done_mtx);
                 while (!all_args[t]->finished && !all_args[t]->blocked)
                     pthread_cond_wait(&done_cond, &done_mtx);
                 pthread_mutex_unlock(&done_mtx);
             }
 
-            // aspetta che tutti finiscano
             pthread_mutex_lock(&done_mtx);
             int finished_count = 0;
             while (finished_count < n_threads) {
@@ -1861,13 +1953,14 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
             for (int t = 0; t < n_threads; t++) {
                 pthread_join(all_args[t]->tid, NULL);
-                free(all_args[t]->buffer);  // ← libera la copia
+                free(all_args[t]->buffer);
                 free(all_args[t]);
             }
 
             ptr = scan + 1;
             continue;
-        } 
+        }
+
         *newline = '\n';
         ptr = newline + 1;
     }
@@ -1876,7 +1969,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 }
 
 /* ======================================================================
- *  Tutto il resto rimane INVARIATO dal file originale
+ *  Tutto il resto rimane INVARIATO
  * ====================================================================== */
 
 void delete_frame(VM *vm, int n)
@@ -1946,28 +2039,22 @@ void vm_exec(VM *vm, char *buffer)
                         vm->frames[vm->frame_top].vars[Vindex]->stack_len = 0;
                         vm->frames[vm->frame_top].vars[Vindex]->value     =
                             malloc(VAR_STACK_MAX_SIZE * sizeof(int));
-                    }  else if (strcmp(type, "channel") == 0) {
+                    } else if (strcmp(type, "channel") == 0) {
                         Var *v = vm->frames[vm->frame_top].vars[Vindex];
-
                         v->T         = TYPE_CHANNEL;
                         v->stack_len = 0;
                         v->value     = malloc(VAR_CHANNEL_MAX_SIZE * sizeof(int));
-
-                        // ALLOCA il channel
                         if (!v->channel) {
                             v->channel = malloc(sizeof(Channel));
-                            v->channel->send_q_head = NULL;
-                            v->channel->send_q_tail = NULL;
-                            v->channel->recv_q_head = NULL;
-                            v->channel->recv_q_tail = NULL;
-                            v->channel->sender_args = NULL;    // ← AGGIUNTO
-v->channel->receiver_args = NULL;  // ← AGGIUNTO
+                            v->channel->send_q_head   = NULL;
+                            v->channel->send_q_tail   = NULL;
+                            v->channel->recv_q_head   = NULL;
+                            v->channel->recv_q_tail   = NULL;
+                            v->channel->sender_args   = NULL;
+                            v->channel->receiver_args = NULL;
                         }
-
-                        // Ora puoi inizializzare il mutex
                         pthread_mutex_init(&v->channel->mtx, NULL);
-                    }
-                    else {
+                    } else {
                         perror("[VM] DECL: tipo non esistente\n");
                     }
 
@@ -2087,7 +2174,6 @@ void vm_dump(VM *vm)
  *  MAIN / vm_run_from_string
  * ====================================================================== */
 
- 
 #define START_BUFFER 256
 #define AST_BUFFER  (1024 * 10)
 #include "check_if_reversibility.h"
