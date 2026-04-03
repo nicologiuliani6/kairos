@@ -25,57 +25,56 @@
 0024  PUSHEQ i 1
 0025  LOCAL int item 0
 0026  PUSHEQ item i
-0027  LOCAL int k1 pub_key
-0028  SHOW k1
-0029  CALL encrypt item k1
-0030  SHOW k1
-0031  DELOCAL int k1 pub_key
-0032  SSEND item ch
-0033  DELOCAL int item 0
-0034  EVAL i n
-0035  JMPF FROM_START_21
-0036  LABEL FROM_END_21
-0037  LABEL FROM_ERR_21
-0038  DELOCAL int i n
-0039  DELOCAL int pub_key 17
-0040  END_PROC producer
-0041  PROC consumer
-0042  PARAM channel ch
-0043  PARAM stack result
-0044  PARAM int n
-0045  LOCAL int priv_key 17
-0046  LOCAL int i 0
-0047  EVAL i 0
-0048  JMPF FROM_ERR_47
-0049  LABEL FROM_START_47
-0050  LOCAL int item 0
-0051  SRECV item ch
-0052  LOCAL int k2 priv_key
-0053  SHOW k2
-0054  UNCALL encrypt item k2
-0055  SHOW k2
-0056  DELOCAL int k2 priv_key
-0057  PUSH item result
-0058  DELOCAL int item 0
-0059  PUSHEQ i 1
-0060  EVAL i n
-0061  JMPF FROM_START_47
-0062  LABEL FROM_END_47
-0063  LABEL FROM_ERR_47
-0064  DELOCAL int i n
-0065  DELOCAL int priv_key 17
-0066  END_PROC consumer
-0067  PROC main
-0068  LOCAL channel ch empty
-0069  DECL stack result
-0070  LOCAL int n 5
-0071  PAR_START
-0072  THREAD_0
-0073  CALL producer ch n
-0074  THREAD_1
-0075  CALL consumer ch result n
-0076  PAR_END
-0077  DELOCAL int n 5
-0078  DELOCAL channel ch empty
-0079  END_PROC main
-0080  HALT
+0027  CALL encrypt item pub_key
+0028  SSEND item ch
+0029  DELOCAL int item 0
+0030  EVAL i n
+0031  JMPF FROM_START_21
+0032  LABEL FROM_END_21
+0033  LABEL FROM_ERR_21
+0034  DELOCAL int i n
+0035  DELOCAL int pub_key 17
+0036  END_PROC producer
+0037  PROC consumer
+0038  PARAM channel ch
+0039  PARAM stack result
+0040  PARAM int n
+0041  LOCAL int priv_key 17
+0042  LOCAL int i 0
+0043  EVAL i 0
+0044  JMPF FROM_ERR_43
+0045  LABEL FROM_START_43
+0046  LOCAL int item 0
+0047  SRECV item ch
+0048  UNCALL encrypt item priv_key
+0049  PUSH item result
+0050  DELOCAL int item 0
+0051  PUSHEQ i 1
+0052  EVAL i n
+0053  JMPF FROM_START_43
+0054  LABEL FROM_END_43
+0055  LABEL FROM_ERR_43
+0056  DELOCAL int i n
+0057  DELOCAL int priv_key 17
+0058  END_PROC consumer
+0059  PROC go
+0060  PARAM channel ch
+0061  PARAM stack result
+0062  PARAM int n
+0063  PAR_START
+0064  THREAD_0
+0065  CALL producer ch n
+0066  THREAD_1
+0067  CALL consumer ch result n
+0068  PAR_END
+0069  END_PROC go
+0070  PROC main
+0071  LOCAL channel ch empty
+0072  DECL stack result
+0073  LOCAL int n 5
+0074  CALL go ch result n
+0075  UNCALL go ch result n
+0076  DELOCAL int n 5
+0077  DELOCAL channel ch empty
+0078  END_PROC main
+0079  HALT

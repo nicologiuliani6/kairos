@@ -14,12 +14,8 @@ procedure producer(channel ch, int n)
         i += 1
         local int item = 0
             item += i
-            local int k1 = pub_key       // copia della chiave
-            show(k1)
-            call encrypt(item, k1)
-            show(k1)
-            delocal int k1 = pub_key
-            ssend(item, ch) //ssend deve aspettare che t1 finisca o rivada su un ssend/srecv
+            call encrypt(item, pub_key)
+            ssend(item, ch) 
         delocal int item = 0
     until i = n
     delocal int i = n
@@ -30,12 +26,8 @@ procedure consumer(channel ch, stack result, int n)
     local int i = 0
     from i = 0 loop
         local int item = 0
-            srecv(item, ch) //srecv deve aspettare un ssend, si sveglia, lavora e alal fine/ssend/srecv sveglia t0 con ssend
-            local int k2 = priv_key      // copia della chiave privata
-            show(k2)
-            uncall encrypt(item, k2)
-            show(k2)
-            delocal int k2 = priv_key
+            srecv(item, ch) 
+            uncall encrypt(item, priv_key)
             push(item, result)
         delocal int item = 0
         i += 1
@@ -43,14 +35,18 @@ procedure consumer(channel ch, stack result, int n)
     delocal int i = n
     delocal int priv_key = 17
 
-procedure main()
-    local channel ch = empty
-    stack result
-    local int n = 5
+procedure go(channel ch, stack result, int n)
     par
         call producer(ch, n)
     and
         call consumer(ch, result, n)
     rap
+
+procedure main()
+    local channel ch = empty
+    stack result
+    local int n = 5
+    call go(ch, result, n)
+    uncall go(ch, result, n)
     delocal int n = 5
     delocal channel ch = empty

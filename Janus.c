@@ -212,8 +212,7 @@ static int op_wait(Channel *ch, int is_send)
         current_thread_args->sender_to_notify = NULL;
         notify_sender_turn_done(s);
     }
-    fprintf(stderr, "[op_wait] is_send=%d send_q=%p recv_q=%p\n",
-            is_send, ch->send_q_head, ch->recv_q_head);
+    //fprintf(stderr, "[op_wait] is_send=%d send_q=%p recv_q=%p\n", is_send, ch->send_q_head, ch->recv_q_head);
 
     pthread_mutex_lock(&ch->mtx);
 
@@ -267,8 +266,7 @@ static int op_wait(Channel *ch, int is_send)
             ch->send_q_head = self;
         ch->send_q_tail = self;
 
-        fprintf(stderr, "[WAIT send queue] self=%p current=%p\n",
-                self, current_thread_args);
+        //fprintf(stderr, "[WAIT send queue] self=%p current=%p\n", self, current_thread_args);
 
         if (current_thread_args) {
             pthread_mutex_lock(current_thread_args->done_mtx);
@@ -295,7 +293,7 @@ static int op_wait(Channel *ch, int is_send)
 
     else {
 
-        fprintf(stderr, "[WAIT recv] send_q_head=%p\n", ch->send_q_head);
+        //fprintf(stderr, "[WAIT recv] send_q_head=%p\n", ch->send_q_head);
 
         // 🔥 MATCH IMMEDIATO CON SEND
         if (ch->send_q_head) {
@@ -303,8 +301,7 @@ static int op_wait(Channel *ch, int is_send)
             ch->send_q_head = w->next;
             if (!ch->send_q_head) ch->send_q_tail = NULL;
 
-            fprintf(stderr, "[WAIT recv match] w=%p send_q_head dopo=%p\n",
-                    w, ch->send_q_head);
+            //fprintf(stderr, "[WAIT recv match] w=%p send_q_head dopo=%p\n", w, ch->send_q_head);
 
             // salva sender
             ch->sender_args = w->thread_args;
@@ -327,8 +324,7 @@ static int op_wait(Channel *ch, int is_send)
             ch->recv_q_head = self;
         ch->recv_q_tail = self;
 
-        fprintf(stderr, "[WAIT recv queue] current_thread_args=%p\n",
-                current_thread_args);
+        //fprintf(stderr, "[WAIT recv queue] current_thread_args=%p\n", current_thread_args);
 
         if (current_thread_args) {
             pthread_mutex_lock(current_thread_args->done_mtx);
@@ -476,6 +472,13 @@ void op_show(VM *vm, const char *frame_name)
             if (k + 1 < v->stack_len) printf(", ");
         }
         printf("]\n");
+    } else if (v->T == TYPE_CHANNEL) {
+        printf("%s: <", ID);
+        for (size_t k = 0; k < v->stack_len; k++) {
+            printf("%d", v->value[k]);
+            if (k + 1 < v->stack_len) printf(", ");
+        }
+        printf(">\n");
     } else {
         perror("[VM] SHOW su variabile PARAM non linkata!\n");
     }

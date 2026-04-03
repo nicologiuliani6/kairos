@@ -7,7 +7,6 @@ procedure encrypt(int m, int k)
         call encrypt(m, k)
     fi k = 0
 
-
 procedure producer(stack buffer, int n)
     local int pub_key = 17
     local int i = 0
