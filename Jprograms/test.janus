@@ -1,11 +1,9 @@
 procedure encrypt(int m, int k)
     m+=k
-    k-=k //va
 
 procedure decrypt(int m2, int k2)
     show(m2)
     m2-=k2 //non va
-    k2-=k2 //non va
     show(m2)
 
 procedure main()
@@ -13,39 +11,34 @@ procedure main()
     local int key = 17
     local int msg1 = 0
     int msg2
+    int n
+    n+=2
     par 
         
         local int i = 0
         from i = 0 loop
-            local int k1 = key
             show(msg1)
-            show(k1)
-            call encrypt(msg1, k1)
+            call encrypt(msg1, key)
             show(msg1)
-            show(k1)
             ssend(msg1, ch)
             i+=1
-            delocal int k1 = 0
-        until i = 1
-        i-=1
+        until i = n
+        i-=n
         show(i)
         delocal int i = 0
     and 
         local int j = 0
         from j = 0 loop
-            local int k2 = 0 
             srecv(msg2, ch)
             show(msg2)          // 153 (17+16+...+1)
-            show(k2)          // 0 
-            call decrypt(msg2, k2) //fix che non fa ne call che uncall2
+            call decrypt(msg2, key) //fix che non fa ne call che uncall2
             show(msg2)          // =msg1
-            show(k2)            //17 
-            delocal int k2 = key //bug su k2 che sembra gia deallocato
             j+=1
-            show(j)
-        until j = 1 //fix che qua esce 
-        j-=1
-        show(j)
+            show(j) //1
+        until j = n //per qualche motivo rileva 1 = 2
+        show(j) //1
+        j-=n //1-2 = -1
+        show(j) //-1
         delocal int j = 0 //bug su j che sembra deallocato
     rap
     delocal int msg1 = 0
