@@ -75,8 +75,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             } else break;
             continue;
         }
-
-        if (!strcmp(fw, "CALL")) {
+        else if (!strcmp(fw, "CALL")) {
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
             char  base[VAR_NAME_LENGTH]; strncpy(base, fname, VAR_NAME_LENGTH - 1);
@@ -124,8 +123,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             if (!ptr) vm_fatal("[VM] CALL: indirizzo non trovato!\n");
             continue;
         }
-
-        if (!strcmp(fw, "UNCALL")) {
+        else if (!strcmp(fw, "UNCALL")) {
             char *pn  = strtok(NULL, " \t");
             uint  cfi = char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
@@ -141,16 +139,14 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             *nl = '\n'; ptr = nl + 1; continue;
         }
-
-        if (!strcmp(fw, "PAR_START")) {
+        else if (!strcmp(fw, "PAR_START")) {
             *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
             exec_par_threads(vm, orig, fname, &pb, 1);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             continue;
         }
-
-        if      (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
+        else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
         else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
         else if (!strcmp(fw, "SHOW"))    op_show   (vm, fname);
         else if (!strcmp(fw, "PUSHEQ"))  op_pusheq (vm, fname);

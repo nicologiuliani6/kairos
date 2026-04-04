@@ -16,7 +16,7 @@ all: $(LIBVM)
 
 # Compila la VM condivisa
 $(LIBVM): $(VM_DIR)/Janus.c
-	gcc -shared -fPIC -o $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR) -Wall
+	gcc -shared -fPIC -O $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR) -Wall
 	@echo "VM compilata: $(LIBVM)"
 
 # -----------------------------
