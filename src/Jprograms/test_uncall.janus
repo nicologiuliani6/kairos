@@ -1,0 +1,21 @@
+procedure increment(int x)
+    x += 5
+
+procedure apply_twice(int a, int b)
+    call increment(a)
+    call increment(b)
+    a += b
+
+procedure main()
+    local int a = 3
+    local int b = 7
+    show(a)            // 3
+    show(b)            // 7
+    call apply_twice(a, b)
+    show(a)            // (3+5) + (7+5) = 20
+    show(b)            // 12
+    uncall apply_twice(a, b)
+    show(a)            // torna 3
+    show(b)            // torna 7
+    delocal int b = 7
+    delocal int a = 3
