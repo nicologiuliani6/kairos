@@ -6,7 +6,26 @@
 //        k -= 1
 //    until k = 0
 //    delocal int k = 0
-    
+procedure encrypt2(int m, int k)
+int l
+int r
+
+// copia reversibile
+l += m
+r += k
+
+int i
+from i == 0 loop
+    l += r
+    r += l
+
+    l += k
+    r -= k
+
+    i += 1
+until i == 8
+
+m -= l
 procedure encrypt(int m, int k)
     if k = 0 then
         //skip

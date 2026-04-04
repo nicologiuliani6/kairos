@@ -119,7 +119,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
 }
 
 /* ======================================================================
- *  SHOW / EVAL / ASSERT
+ *  SHOW
  * ====================================================================== */
 
 static inline void op_show(VM *vm, const char *frame_name)
@@ -145,22 +145,64 @@ static inline void op_show(VM *vm, const char *frame_name)
     }
 }
 
+/* ======================================================================
+ *  eval_cond — valuta  lval <op> rval  e ritorna 0 o 1
+ *  Usato sia da op_eval che da op_assert.
+ * ====================================================================== */
+
+static inline int eval_cond(int lval, const char *op, int rval)
+{
+    if (!strcmp(op, "==")) return lval == rval;
+    if (!strcmp(op, "!=")) return lval != rval;
+    if (!strcmp(op, ">=")) return lval >= rval;
+    if (!strcmp(op, "<=")) return lval <= rval;
+    if (!strcmp(op, ">"))  return lval >  rval;
+    if (!strcmp(op, "<"))  return lval <  rval;
+    fprintf(stderr, "[VM] operatore di confronto sconosciuto: '%s'\n", op);
+    exit(EXIT_FAILURE);
+}
+
+/* ======================================================================
+ *  EVAL  <lhs> <op> <rhs_expr>
+ *
+ *  Formato bytecode:   EVAL x >= 0
+ *                      EVAL x == (y + 1)
+ *  Imposta thread_val_IF = 1 se la condizione è vera, 0 altrimenti.
+ * ====================================================================== */
+
 static inline void op_eval(VM *vm, const char *frame_name)
 {
-    char *ID = strtok(NULL, " \t");
-    char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
-    uint  fi = get_findex(frame_name);
-    Var  *v  = get_var(vm, fi, ID, "EVAL");
-    thread_val_IF = (*(v->value) == resolve_value(vm, fi, expr));
+    char *lhs_tok = strtok(NULL, " \t");   /* ID o numero a sinistra  */
+    char *op_tok  = strtok(NULL, " \t");   /* operatore               */
+    char  rhs[256]; read_rest_of_expr(rhs, sizeof(rhs)); /* espressione destra */
+
+    if (!lhs_tok || !op_tok || rhs[0] == '\0') {
+        fprintf(stderr, "[VM] EVAL: formato errato (atteso: EVAL <lhs> <op> <rhs>)\n");
+        exit(EXIT_FAILURE);
+    }
+
+    uint fi   = get_findex(frame_name);
+    int  lval = resolve_value(vm, fi, lhs_tok);
+    int  rval = resolve_value(vm, fi, rhs);
+
+    thread_val_IF = eval_cond(lval, op_tok, rval);
 }
+
+/* ======================================================================
+ *  ASSERT  <lhs> <op> <rhs_expr>
+ *
+ *  Formato bytecode:   ASSERT x == 0
+ *  Termina la VM se la condizione è falsa (violazione di reversibilità).
+ * ====================================================================== */
 
 static inline void op_assert(VM *vm, const char *frame_name)
 {
-    char *ID1 = strtok(NULL, " \t"), *ID2 = strtok(NULL, " \t");
-    if (!ID1 || !ID2) { fprintf(stderr, "[VM] ASSERT: argomenti mancanti\n"); return; }
-    uint fi = get_findex(frame_name);
-    if (resolve_value(vm, fi, ID1) != resolve_value(vm, fi, ID2)) {
-        fprintf(stderr, "[VM] ASSERT fallita: %s != %s\n", ID1, ID2);
+    char *lhs_tok = strtok(NULL, " \t");
+    char *op_tok  = strtok(NULL, " \t");
+    char  rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
+
+    if (!lhs_tok || !op_tok || rhs[0] == '\0') {
+        fprintf(stderr, "[VM] ASSERT: formato errato (atteso: ASSERT <lhs> <op> <rhs>)\n");
         exit(EXIT_FAILURE);
     }
 }
@@ -206,11 +248,8 @@ static inline void op_local(VM *vm, const char *frame_name)
     uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
     pthread_mutex_unlock(&var_indexer_mtx);
 
-    /*
-     * Se vm_exec ha già allocato questa variabile tramite DECL, la
-     * liberiamo prima di rimpiazzarla: LOCAL è l'allocazione runtime
-     * autorevole e deve ripartire da zero.
-     */
+    /* Se vm_exec ha già allocato questa variabile tramite DECL, la
+       liberiamo: LOCAL è l'allocazione runtime autorevole. */
     if (vm->frames[fi].vars[vi]) {
         free(vm->frames[fi].vars[vi]->value);
         if (vm->frames[fi].vars[vi]->channel) {
@@ -230,7 +269,6 @@ static inline void op_local(VM *vm, const char *frame_name)
 
     Var *dst = vm->frames[fi].vars[vi];
 
-    /* Imposta valore iniziale */
     if (c_val && char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
         uint  si  = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
         Var  *src = vm->frames[fi].vars[si];
@@ -252,10 +290,7 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     }
 
-    /* Push DOPO aver fissato il valore iniziale */
     stack_push(&vm->frames[fi].LocalVariables, dst);
-
-
 }
 
 static inline void op_delocal(VM *vm, const char *frame_name)
@@ -265,7 +300,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     char *c_val = strtok(NULL, " \t");
     uint  fi    = get_findex(frame_name);
 
-    /* ── 1. Recupera il valore atteso ── */
+    /* ── 1. Valore atteso ── */
     int Vvalue = 0;
     if (c_val) {
         if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
@@ -277,15 +312,8 @@ static inline void op_delocal(VM *vm, const char *frame_name)
         }
     }
 
-    /* ── 2. Pop dalla pila locale ── */
+    /* ── 2. Pop ── */
     Var *V = stack_pop(&vm->frames[fi].LocalVariables);
-
-    /* ── DEBUG ── */
-    pthread_mutex_lock(&var_indexer_mtx);
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
-    pthread_mutex_unlock(&var_indexer_mtx);
-
-
 
     /* ── 3. Ordine LIFO ── */
     if (strcmp(V->name, Vname) != 0) {
@@ -296,9 +324,9 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     }
 
     /* ── 4. Tipo ── */
-    const char *actual_type = (V->T == TYPE_INT)     ? "int"
-                            : (V->T == TYPE_STACK)    ? "stack"
-                                                      : "channel";
+    const char *actual_type = (V->T == TYPE_INT)  ? "int"
+                            : (V->T == TYPE_STACK) ? "stack"
+                                                   : "channel";
     if (strcmp(Vtype, actual_type) != 0) {
         fprintf(stderr, "[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n",
                 actual_type, Vtype);
@@ -313,14 +341,19 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     if (!ok) {
         if (V->T == TYPE_INT)
-            fprintf(stderr, "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",
-                    Vname, Vvalue, *(V->value));
+            fprintf(stderr,
+                "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",
+                Vname, Vvalue, *(V->value));
         else
             fprintf(stderr, "[VM] DELOCAL: %s non è nil/empty!\n", Vname);
         exit(EXIT_FAILURE);
     }
 
     /* ── 6. Distruggi ── */
+    pthread_mutex_lock(&var_indexer_mtx);
+    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
+    pthread_mutex_unlock(&var_indexer_mtx);
+
     delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count, (int)vi);
 }
 
