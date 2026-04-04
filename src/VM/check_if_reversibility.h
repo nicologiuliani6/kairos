@@ -111,7 +111,7 @@ static int parse_lines(const char *buffer, CIR_Line *lines, int max_lines)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Check: LOCAL/DELOCAL reversibility                                  */
+/*  Check: LOCAL/DELOCAL reversibility                                */
 /* ------------------------------------------------------------------ */
 
 static int vm_check_local_src_modified(const char *buffer)
@@ -141,12 +141,10 @@ static int vm_check_local_src_modified(const char *buffer)
 
         if (strcmp(src, "nil") == 0) continue;
 
-        /* è src un letterale numerico? */
         char *endptr;
-        long  src_num      = strtol(src, &endptr, 10);
+        /*long  src_num      =*/ strtol(src, &endptr, 10);
         int   src_is_literal = (*endptr == '\0');
 
-        /* Cerca il DELOCAL corrispondente */
         int depth = 0;
         for (int j = i + 1; j < nlines; j++) {
             CIR_Line *M = &lines[j];
@@ -169,7 +167,6 @@ static int vm_check_local_src_modified(const char *buffer)
                 int   delocal_is_literal = (*ep2 == '\0');
                 int   delocal_is_zero    = (delocal_is_literal && delocal_num == 0);
 
-                /* CHECK 1: src variabile modificata tra LOCAL e DELOCAL */
                 if (!src_is_literal) {
                     for (int k = i + 1; k < j; k++) {
                         if (writes_to(&lines[k], src)) {
@@ -187,9 +184,6 @@ static int vm_check_local_src_modified(const char *buffer)
                     }
                 }
 
-                /* CHECK 2: LOCAL da variabile + DELOCAL a 0
-                   + dst azzerata da se stessa (MINEQ dst dst)
-                   → in UNCALL dst non può essere ricostruito */
                 if (!src_is_literal && delocal_is_zero) {
                     for (int k = i + 1; k < j; k++) {
                         CIR_Line *Op = &lines[k];
@@ -209,7 +203,6 @@ static int vm_check_local_src_modified(const char *buffer)
                             errors++;
                         }
 
-                        /* PRODEQ dst 0 o MODEQ dst 0 azzerano dst */
                         if ((strcmp(Op->op, "PRODEQ") == 0 ||
                              strcmp(Op->op, "MODEQ")  == 0) &&
                             Op->argc >= 2 &&
@@ -219,8 +212,7 @@ static int vm_check_local_src_modified(const char *buffer)
                                    "LOCAL int %s %s (riga %d) inizializza da variabile, "
                                    "ma '%s %s 0' (riga %d) azzera '%s' "
                                    "e DELOCAL (riga %d) verifica 0: "
-                                   "in UNCALL '%s' non puo' essere ricostruito. "
-                                   "Il programma non e' reversibile.\n",
+                                   "in UNCALL '%s' non puo' essere ricostruito.\n",
                                    proc_name, dst, src, L->lineno,
                                    Op->op, dst, Op->lineno, dst,
                                    M->lineno, dst);
@@ -228,8 +220,7 @@ static int vm_check_local_src_modified(const char *buffer)
                         }
                     }
                 }
-
-                /* CHECK 3: entrambi letterali ma diversi */
+                /*
                 if (src_is_literal && delocal_is_literal && src_num != delocal_num) {
                     printf("[WARNING] Procedura \"%s\": "
                            "LOCAL int %s %ld (riga %d) ma "
@@ -241,6 +232,7 @@ static int vm_check_local_src_modified(const char *buffer)
                            dst, delocal_num, M->lineno);
                     errors++;
                 }
+                */
 
                 break;
             }
@@ -293,6 +285,19 @@ int vm_check_if_reversibility(const char *buffer)
         if (strcmp(L->op, "END_PROC") == 0) { in_proc = 0; continue; }
         if (!in_proc) continue;
 
+        /* ---- Controllo int/stack fuori da MAIN ---- */
+        if (strcmp(proc_name, "main") != 0) {
+            const char *op = L->op;
+            if (strcmp(op, "DECL") == 0) 
+            {
+                printf("[ERROR] In una funzione (%s) puoi dichiarare solo variabili local!\n (riga %d)\n",
+                       proc_name,L->lineno);
+                errors++;
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        /* ---- Check blocchi if-fi e chiamate ricorsive ---- */
         if (strcmp(L->op, "EVAL") != 0 || L->argc < 2) continue;
         if (i + 1 >= nlines)                            continue;
 
@@ -305,7 +310,6 @@ int vm_check_if_reversibility(const char *buffer)
 
         int jmpf_tgt_idx = idx_at_lineno(lines, nlines, jmpf_target);
 
-        /* Distingui loop da if-fi */
         int is_loop = 0;
         for (int k = i + 2; k < jmpf_tgt_idx; k++) {
             if (strcmp(lines[k].op, "JMPF") == 0 && lines[k].argc > 0) {
@@ -320,7 +324,6 @@ int vm_check_if_reversibility(const char *buffer)
 
         int fi_tgt_lineno = jmpf_target;
         int found_else    = 0;
-
         for (int k = i + 2; k < jmpf_tgt_idx; k++) {
             if (strcmp(lines[k].op, "JMP") == 0 && lines[k].argc > 0) {
                 int jt = label_lineno(labels, nlabels, lines[k].arg[0]);
@@ -333,12 +336,8 @@ int vm_check_if_reversibility(const char *buffer)
         }
 
         int fi_tgt_idx = idx_at_lineno(lines, nlines, fi_tgt_lineno);
-
         const char *cond_var = L->arg[0];
 
-        /* Se il blocco contiene una CALL ricorsiva (alla stessa procedura),
-           la modifica della variabile di controllo è il pattern ricorsivo
-           standard di Janus: non è un errore di reversibilità. */
         int has_recursive_call = 0;
         for (int k = i + 2; k < fi_tgt_idx; k++) {
             if (strcmp(lines[k].op, "CALL") == 0 &&

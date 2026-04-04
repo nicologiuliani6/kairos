@@ -22,8 +22,15 @@ tokens = (
     'INT', 'STACK', 'CHANNEL',
     'ID',
     'NUMBER', 'NIL', 'EMPT',
-    'EQEQ',                                # == confronto nelle condition
-    'EQUALS',                              # =  assegnamento in local/delocal
+    # confronto (tutti prima di EQUALS)
+    'EQEQ',                                # ==
+    'NEQ',                                 # !=
+    'GEQ',                                 # >=
+    'LEQ',                                 # <=
+    'GT',                                  # >
+    'LT',                                  # <
+    # assegnamento
+    'EQUALS',                              # =
     'PLUSEQUALS', 'MINUSEQUALS', 'SWAP',   # operatori composti
     'PLUS', 'MINUS',                       # operatori semplici
     'LPAREN', 'RPAREN',
@@ -46,11 +53,46 @@ def t_NUMBER(t):
     t.value = int(t.value)
     return t
 
-# operatori composti PRIMA di quelli semplici
-t_EQEQ        = r'=='       # deve stare PRIMA di t_EQUALS
+# ── Operatori composti: DEVONO stare PRIMA di quelli semplici ──────────────
+# Il lexer PLY usa la lunghezza della stringa per ordinare le funzioni-regex,
+# ma le stringhe semplici vengono ordinate per lunghezza decrescente
+# automaticamente. Per sicurezza usiamo funzioni per i token a 2 caratteri.
+
+def t_EQEQ(t):
+    r'=='
+    return t
+
+def t_NEQ(t):
+    r'!='
+    return t
+
+def t_GEQ(t):
+    r'>='
+    return t
+
+def t_LEQ(t):
+    r'<='
+    return t
+
+# Assegnamento reversibile  <=>  deve stare PRIMA di LEQ (<= già definito
+# come funzione, quindi l'ordine delle funzioni conta: PLY le ordina per
+# lunghezza del pattern, non per ordine di definizione.
+# '<=' ha lunghezza 2, '<=>' ha lunghezza 3 → '<=>' vince automaticamente
+# se definito come stringa; ma per chiarezza lo teniamo come funzione.
+def t_SWAP(t):
+    r'<=>'
+    return t
+
+def t_GT(t):
+    r'>'
+    return t
+
+def t_LT(t):
+    r'<'
+    return t
+
 t_PLUSEQUALS  = r'[+]='
 t_MINUSEQUALS = r'[-]='
-t_SWAP        = r'<=>'
 
 # operatori semplici
 t_EQUALS = r'='

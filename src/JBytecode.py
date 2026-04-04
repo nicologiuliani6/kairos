@@ -24,6 +24,14 @@ class ByteCode_Compiler:
             return f"({l} {op} {r})"
         return str(expr)
 
+    def cond_to_str(self, cond):
+        """
+        Restituisce (lhs_str, op_str, rhs_str) da un nodo ('cond', op, l, r).
+        Il bytecode EVAL usa il formato:  EVAL <lhs> <op> <rhs>
+        """
+        _, op, lhs, rhs = cond
+        return self.expr_to_str(lhs), op, self.expr_to_str(rhs)
+
     def process(self, ast):
         if not ast:
             return
@@ -81,7 +89,9 @@ class ByteCode_Compiler:
                 else_label = f"ELSE_{uid}"
                 fi_label   = f"FI_{uid}"
 
-                self.emit(f"EVAL {self.expr_to_str(entry_cond[1])} {self.expr_to_str(entry_cond[2])}")
+                # EVAL <lhs> <op> <rhs>
+                lhs, op, rhs = self.cond_to_str(entry_cond)
+                self.emit(f"EVAL {lhs} {op} {rhs}")
                 self.emit(f"JMPF {else_label}")
                 for stmt in then_body:
                     self.process(stmt)
@@ -92,8 +102,10 @@ class ByteCode_Compiler:
                     self.process(stmt)
 
                 self.emit(f"LABEL {fi_label}")
-                self.emit(f"EVAL {self.expr_to_str(fi_cond[1])} {self.expr_to_str(fi_cond[2])}")
-                self.emit(f"ASSERT {self.expr_to_str(entry_cond[1])} {self.expr_to_str(entry_cond[2])}")
+                lhs_fi, op_fi, rhs_fi = self.cond_to_str(fi_cond)
+                self.emit(f"EVAL {lhs_fi} {op_fi} {rhs_fi}")
+                lhs_e, op_e, rhs_e = self.cond_to_str(entry_cond)
+                self.emit(f"ASSERT {lhs_e} {op_e} {rhs_e}")
 
             case 'from':
                 entry_cond, body, until_cond = ast[1], ast[2], ast[3]
@@ -101,14 +113,16 @@ class ByteCode_Compiler:
                 start_label = f"FROM_START_{uid}"
                 err_label   = f"FROM_ERR_{uid}"
 
-                self.emit(f"EVAL {self.expr_to_str(entry_cond[1])} {self.expr_to_str(entry_cond[2])}")
+                lhs, op, rhs = self.cond_to_str(entry_cond)
+                self.emit(f"EVAL {lhs} {op} {rhs}")
                 self.emit(f"JMPF {err_label}")
 
                 self.emit(f"LABEL {start_label}")
                 for stmt in body:
                     self.process(stmt)
 
-                self.emit(f"EVAL {self.expr_to_str(until_cond[1])} {self.expr_to_str(until_cond[2])}")
+                lhs_u, op_u, rhs_u = self.cond_to_str(until_cond)
+                self.emit(f"EVAL {lhs_u} {op_u} {rhs_u}")
                 self.emit(f"JMPF {start_label}")
 
                 self.emit(f"LABEL FROM_END_{uid}")

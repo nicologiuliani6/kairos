@@ -39,11 +39,6 @@ def p_procedure(p):
         if VERBOSE: print(f"procedure: {p[2]}({p[4]})")
 
 # ── Body ────────────────────────────────────────────────────────────────────
-# opt_body: sequenza di statement (anche vuota)
-#   NON usiamo mai "body : empty" — quella era la fonte dei 77 S/R.
-#   opt_body compare ovunque un corpo può essere vuoto;
-#   body (non-empty) non esiste più come regola separata.
-
 def p_opt_body_empty(p):
     '''opt_body : '''
     p[0] = []
@@ -82,10 +77,18 @@ def p_value(p):
              | ID'''
     p[0] = p[1]
 
-# ── Condizioni  (usa == ) ───────────────────────────────────────────────────
+# ── Operatori di confronto ──────────────────────────────────────────────────
+# Tutti i 6 operatori. La condizione è un nodo ('cond', op, left, right)
+# così il bytecode compiler può emettere l'operatore corretto.
+
 def p_condition(p):
-    '''condition : expr EQEQ expr'''
-    p[0] = ('cond', p[1], p[3])
+    '''condition : expr EQEQ expr
+                 | expr NEQ  expr
+                 | expr GEQ  expr
+                 | expr LEQ  expr
+                 | expr GT   expr
+                 | expr LT   expr'''
+    p[0] = ('cond', p[2], p[1], p[3])
 
 # ── Dichiarazioni di tipo ───────────────────────────────────────────────────
 def p_type_decl(p):
