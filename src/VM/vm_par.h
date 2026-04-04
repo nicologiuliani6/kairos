@@ -120,16 +120,14 @@ static void *thread_entry(void *arg)
 
         if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END"))
             { *nl = '\n'; break; }
-
-        if (!strcmp(fw, "PAR_START")) {
+        else if (!strcmp(fw, "PAR_START")) {
             *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
             exec_par_threads(vm, args->buffer, fname, &pb, 0);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             continue;
         }
-
-        if      (!strcmp(fw, "SHOW"))   op_show   (vm, fname);
+        else if (!strcmp(fw, "SHOW"))   op_show   (vm, fname);
         else if (!strcmp(fw, "PUSHEQ")) op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))  op_mineq  (vm, fname);
         else if (!strcmp(fw, "SWAP"))   op_swap   (vm, fname);
