@@ -1,11 +1,11 @@
 procedure check_boolean(int flag)
-    if flag = 1 then
+    if flag == 1 then
         //do something
         show(flag)
     else
         //do something
         show(flag)
-    fi flag = 1
+    fi flag == 1
 
 procedure main()
     local int flag = 0

@@ -2,7 +2,13 @@ import sys
 from src.Jast import parser, lexer
 from queue import Queue
 
-_ASSIGN_OPS = {'+=': 'PUSHEQ', '-=': 'MINEQ', '<=>': 'SWAP'}
+# in _ASSIGN_OPS aggiungi:
+_ASSIGN_OPS = {
+    '+=':  'PUSHEQ',
+    '-=':  'MINEQ',
+    '^=':  'XOREQ',
+    '<=>': 'SWAP'
+}
 
 class ByteCode_Compiler:
     def __init__(self):

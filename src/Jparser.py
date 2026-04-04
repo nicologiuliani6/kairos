@@ -97,12 +97,13 @@ def p_type_decl(p):
     if VERBOSE: print(f"dichiarazione: {p[2]} ({p[1]})")
 
 # ── Assegnamenti reversibili ────────────────────────────────────────────────
+# in p_assign, aggiungi il caso XOR:
 def p_assign(p):
     '''statement : ID PLUSEQUALS expr
                  | ID MINUSEQUALS expr
+                 | ID XOREQUALS expr
                  | ID SWAP expr'''
     p[0] = ('assign', p[1], p[2], p[3])
-    if VERBOSE: print(f"assegnamento: {p[1]} {p[2]} {p[3]}")
 
 # ── Local / Delocal ─────────────────────────────────────────────────────────
 def p_local(p):

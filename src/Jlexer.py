@@ -31,7 +31,7 @@ tokens = (
     'LT',                                  # <
     # assegnamento
     'EQUALS',                              # =
-    'PLUSEQUALS', 'MINUSEQUALS', 'SWAP',   # operatori composti
+    'PLUSEQUALS', 'MINUSEQUALS', 'SWAP', 'XOREQUALS',   # operatori composti
     'PLUS', 'MINUS',                       # operatori semplici
     'LPAREN', 'RPAREN',
     'LOCAL', 'DELOCAL',
@@ -66,6 +66,10 @@ def t_NEQ(t):
     r'!='
     return t
 
+def t_SWAP(t):
+    r'<=>'
+    return t
+
 def t_GEQ(t):
     r'>='
     return t
@@ -79,8 +83,10 @@ def t_LEQ(t):
 # lunghezza del pattern, non per ordine di definizione.
 # '<=' ha lunghezza 2, '<=>' ha lunghezza 3 → '<=>' vince automaticamente
 # se definito come stringa; ma per chiarezza lo teniamo come funzione.
-def t_SWAP(t):
-    r'<=>'
+
+
+def t_XOREQUALS(t):
+    r'\^='
     return t
 
 def t_GT(t):

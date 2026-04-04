@@ -130,6 +130,7 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "SHOW"))   op_show   (vm, fname);
         else if (!strcmp(fw, "PUSHEQ")) op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))  op_mineq  (vm, fname);
+        else if (!strcmp(fw, "XOREQ"))  op_xoreq  (vm, fname);  /* ← XOR */
         else if (!strcmp(fw, "SWAP"))   op_swap   (vm, fname);
         else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND")) op_push(vm, fname);
         else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV")) op_pop (vm, fname);

@@ -1,11 +1,11 @@
 procedure encrypt(int m, int k)
-    if k = 0 then
+    if k == 0 then
         //skip
     else
         m += k
         k -= 1
         call encrypt(m, k)
-    fi k = 0
+    fi k == 0
 
 
 procedure main()

@@ -28,6 +28,7 @@ static int writes_to(const CIR_Line *L, const char *var_name)
     const char *op = L->op;
 
     if (strcmp(op, "PUSHEQ") == 0 || strcmp(op, "MINEQ")  == 0 ||
+        strcmp(op, "XOREQ")  == 0 ||
         strcmp(op, "PRODEQ") == 0 || strcmp(op, "DIVEQ")  == 0 ||
         strcmp(op, "MODEQ")  == 0 || strcmp(op, "EXPEQ")  == 0)
         return L->argc >= 1 && strcmp(L->arg[0], var_name) == 0;

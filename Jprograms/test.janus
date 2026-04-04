@@ -1,27 +1,12 @@
-procedure mod(int x, int m, int q)
-    from x >= m loop
-        x -= m
-        q += 1
-    until x < m
-
-procedure encrypt(int msg, int key)
-    local int q = 0
-    local int modulus = 256
-        msg += key
-        call mod(msg, modulus, q)
-    delocal int modulus = 256
-    delocal int q = 0
-
+procedure test()
+    local int i = 0
+    show(i)
+    from i == 0 loop
+        i += 1
+        show(i)
+    until i == 1
+    show(i)
+    delocal int i = 1
 procedure main()
-    local int msg = 0
-    local int key = 17
-    from msg == 0 loop
-            show(msg)
-        call encrypt(msg, key)
-            show(msg)
-        uncall encrypt(msg, key)
-            //show(msg)
-        msg+=1
-    until msg == 10
-    delocal int key = 17
-    delocal int msg = 10
+    call test()
+    uncall test()

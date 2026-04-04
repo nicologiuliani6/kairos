@@ -342,8 +342,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     if (!ok) {
         if (V->T == TYPE_INT)
             fprintf(stderr,
-                "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",
-                Vname, Vvalue, *(V->value));
+                "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",Vname, Vvalue, *(V->value));
         else
             fprintf(stderr, "[VM] DELOCAL: %s non è nil/empty!\n", Vname);
         exit(EXIT_FAILURE);

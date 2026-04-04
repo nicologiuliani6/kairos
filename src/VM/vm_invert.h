@@ -333,6 +333,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, cur_frame);
         else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, cur_frame);
+        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, cur_frame);  /* ← XOR inverso */
         else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, cur_frame);
         else if (!strcmp(fw, "PUSH"))   op_pop       (vm, cur_frame);
         else if (!strcmp(fw, "POP"))    op_push      (vm, cur_frame);
@@ -403,6 +404,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         if (!fw || !strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) continue;
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
         else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
+        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);  /* ← XOR inverso */
         else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
         else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
         else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
