@@ -80,14 +80,6 @@ class ByteCode_Compiler:
                         operator = 'PUSHEQ'
                     case '-=':
                         operator = 'MINEQ'
-                    case '*=':
-                        operator = 'PRODEQ'
-                    case '/=':
-                        operator = 'DIVEQ'
-                    case '%=':
-                        operator = 'MODEQ'
-                    case '^=':
-                        operator = 'EXPEQ'
                     case '<=>':
                         operator = 'SWAP'
                     case _:

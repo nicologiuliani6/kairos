@@ -6,8 +6,6 @@ VERBOSE = False
 
 precedence = (
     ('left', 'PLUS', 'MINUS'),
-    ('left', 'PROD', 'DIV', 'MOD'),
-    ('right', 'EXP'),
 )
 
 def p_program(p):
@@ -61,11 +59,7 @@ def p_type(p):
 
 def p_expr_binop(p):
     '''expr : expr PLUS expr
-            | expr MINUS expr
-            | expr PROD expr
-            | expr DIV expr
-            | expr EXP expr
-            | expr MOD expr'''
+            | expr MINUS expr'''
     p[0] = ('binop', p[2], p[1], p[3])
 
 def p_expr_paren(p):
@@ -81,10 +75,6 @@ def p_declaration(p):
     '''statement : type ID
                  | ID PLUSEQUALS expr
                  | ID MINUSEQUALS expr
-                 | ID PRODEQUALS expr
-                 | ID DIVEQUALS expr
-                 | ID EXPEQUALS expr
-                 | ID MODEQUALS expr
                  | ID SWAP expr'''
     if len(p) == 3:
         p[0] = ('decl', p[1], p[2])
@@ -191,7 +181,12 @@ def p_error(p):
     else:
         print("[PARSER] errore sintattico: fine file inattesa")
 
-parser = yacc.yacc()    
+parser = yacc.yacc(
+    debug=False,
+    write_tables=False,
+    optimize=True,
+    errorlog=yacc.NullLogger()
+)
 if __name__ == '__main__':
     VERBOSE = True
     if len(sys.argv) < 2:

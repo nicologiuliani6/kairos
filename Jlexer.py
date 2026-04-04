@@ -22,8 +22,8 @@ tokens = (
         'ID',
         'NUMBER', 'NIL', 'EMPT',
         'EQUALS',
-        'PLUSEQUALS', 'MINUSEQUALS', 'PRODEQUALS', 'DIVEQUALS', 'EXPEQUALS', 'MODEQUALS', 'SWAP', # operatori composti
-        'PLUS', 'MINUS', 'PROD', 'DIV', 'EXP', 'MOD',                                    # operatori semplici
+        'PLUSEQUALS', 'MINUSEQUALS', 'SWAP', # operatori composti
+        'PLUS', 'MINUS',                                     # operatori semplici
         'LPAREN', 'RPAREN',
         'LOCAL', 'DELOCAL',
         'CALL', 'UNCALL',
@@ -45,19 +45,11 @@ def t_NUMBER(t):
 # operatori composti PRIMA di quelli semplici!
 t_PLUSEQUALS  = r'[+]='
 t_MINUSEQUALS = r'[-]='
-t_PRODEQUALS  = r'[*]='
-t_DIVEQUALS   = r'[/]='
-t_EXPEQUALS   = r'[\^]='
-t_MODEQUALS   = r'[%]='
 t_SWAP = r'<=>'
 # operatori semplici
 t_EQUALS = r'='
 t_PLUS   = r'[+]'
 t_MINUS  = r'[-]'
-t_PROD   = r'[*]'
-t_DIV    = r'[/]'
-t_EXP    = r'[\^]'
-t_MOD    = r'[%]'
 #parentesi e virgole
 t_LPAREN = r'[(]'
 t_RPAREN = r'[)]'

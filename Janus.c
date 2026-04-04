@@ -1123,10 +1123,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
 
         if      (strcmp(fw, "PUSHEQ") == 0) op_pusheq_inv(vm, frame_name);
         else if (strcmp(fw, "MINEQ")  == 0) op_mineq_inv (vm, frame_name);
-        else if (strcmp(fw, "PRODEQ") == 0) op_prodeq_inv(vm, frame_name);
-        else if (strcmp(fw, "DIVEQ")  == 0) op_diveq_inv (vm, frame_name);
-        else if (strcmp(fw, "MODEQ")  == 0) op_modeq_inv (vm, frame_name);
-        else if (strcmp(fw, "EXPEQ")  == 0) op_expeq_inv (vm, frame_name);
+
         else if (strcmp(fw, "SWAP")   == 0) op_swap_inv  (vm, frame_name);
         else if (strcmp(fw, "PUSH")   == 0) op_pop       (vm, frame_name);
         else if (strcmp(fw, "POP")    == 0) op_push      (vm, frame_name);
@@ -1368,10 +1365,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if      (strcmp(firstWord, "PUSHEQ") == 0) op_pusheq_inv(vm, cur_frame);
         else if (strcmp(firstWord, "MINEQ")  == 0) op_mineq_inv (vm, cur_frame);
-        else if (strcmp(firstWord, "PRODEQ") == 0) op_prodeq_inv(vm, cur_frame);
-        else if (strcmp(firstWord, "DIVEQ")  == 0) op_diveq_inv (vm, cur_frame);
-        else if (strcmp(firstWord, "MODEQ")  == 0) op_modeq_inv (vm, cur_frame);
-        else if (strcmp(firstWord, "EXPEQ")  == 0) op_expeq_inv (vm, cur_frame);
+       
         else if (strcmp(firstWord, "SWAP")   == 0) op_swap_inv  (vm, cur_frame);
         else if (strcmp(firstWord, "PUSH")   == 0) op_pop       (vm, cur_frame);
         else if (strcmp(firstWord, "POP")    == 0) op_push      (vm, cur_frame);
@@ -1522,10 +1516,7 @@ static void *thread_entry(void *arg)
         if      (strcmp(firstWord, "SHOW")    == 0) op_show   (vm, fname);
         else if (strcmp(firstWord, "PUSHEQ")  == 0) op_pusheq (vm, fname);
         else if (strcmp(firstWord, "MINEQ")   == 0) op_mineq  (vm, fname);
-        else if (strcmp(firstWord, "PRODEQ")  == 0) op_prodeq (vm, fname);
-        else if (strcmp(firstWord, "DIVEQ")   == 0) op_diveq  (vm, fname);
-        else if (strcmp(firstWord, "MODEQ")   == 0) op_modeq  (vm, fname);
-        else if (strcmp(firstWord, "EXPEQ")   == 0) op_expeq  (vm, fname);
+        
         else if (strcmp(firstWord, "SWAP")    == 0) op_swap   (vm, fname);
         else if (strcmp(firstWord, "PUSH")    == 0) op_push   (vm, fname);
         else if (strcmp(firstWord, "POP")     == 0) op_pop    (vm, fname);
@@ -1881,10 +1872,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         } else if (strcmp(firstWord, "SHOW")    == 0) { op_show   (vm, frame_name);
         } else if (strcmp(firstWord, "PUSHEQ")  == 0) { op_pusheq (vm, frame_name);
         } else if (strcmp(firstWord, "MINEQ")   == 0) { op_mineq  (vm, frame_name);
-        } else if (strcmp(firstWord, "PRODEQ")  == 0) { op_prodeq (vm, frame_name);
-        } else if (strcmp(firstWord, "DIVEQ")   == 0) { op_diveq  (vm, frame_name);
-        } else if (strcmp(firstWord, "MODEQ")   == 0) { op_modeq  (vm, frame_name);
-        } else if (strcmp(firstWord, "EXPEQ")   == 0) { op_expeq  (vm, frame_name);
         } else if (strcmp(firstWord, "SWAP")    == 0) { op_swap   (vm, frame_name);
         } else if (strcmp(firstWord, "PUSH")    == 0) { op_push   (vm, frame_name);
         } else if (strcmp(firstWord, "POP")     == 0) { op_pop    (vm, frame_name);
@@ -2123,10 +2110,6 @@ void vm_exec(VM *vm, char *buffer)
                            strcmp(firstWord, "SHOW")    == 0 ||
                            strcmp(firstWord, "PUSHEQ")  == 0 ||
                            strcmp(firstWord, "MINEQ")   == 0 ||
-                           strcmp(firstWord, "PRODEQ")  == 0 ||
-                           strcmp(firstWord, "DIVEQ")   == 0 ||
-                           strcmp(firstWord, "MODEQ")   == 0 ||
-                           strcmp(firstWord, "EXPEQ")   == 0 ||
                            strcmp(firstWord, "SWAP")    == 0 ||
                            strcmp(firstWord, "PUSH")    == 0 ||
                            strcmp(firstWord, "POP")     == 0 ||
