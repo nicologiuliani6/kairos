@@ -1,0 +1,137 @@
+import sys
+from src.Jast import parser, lexer
+from queue import Queue
+
+_ASSIGN_OPS = {'+=': 'PUSHEQ', '-=': 'MINEQ', '<=>': 'SWAP'}
+
+class ByteCode_Compiler:
+    def __init__(self):
+        self.queue = Queue()
+        self.addr  = 0
+
+    def emit(self, instr):
+        self.queue.put((self.addr, instr))
+        self.addr += 1
+
+    def process(self, ast):
+        if not ast:
+            return
+        match ast[0]:
+
+            case 'program':
+                self.emit("START")
+                for child in (ast[1] if len(ast) > 1 else []):
+                    if isinstance(child, (list, tuple)):
+                        self.process(child)
+                self.emit("HALT")
+
+            case 'procedure':
+                name   = ast[1]
+                params = ast[2] if len(ast) > 2 else []
+                body   = ast[3] if len(ast) > 3 else []
+                self.emit(f"PROC {name}")
+                for tipo, pname in params:
+                    self.emit(f"PARAM {tipo} {pname}")
+                for stmt in body:
+                    self.process(stmt)
+                self.emit(f"END_PROC {name}")
+
+            case 'decl':
+                self.emit(f"DECL {ast[1]} {ast[2]}")
+
+            case 'local':
+                self.emit(f"LOCAL {ast[1]} {ast[2]} {ast[3]}")
+
+            case 'delocal':
+                self.emit(f"DELOCAL {ast[1]} {ast[2]} {ast[3]}")
+
+            case 'assign':
+                op = _ASSIGN_OPS.get(ast[2])
+                if op is None:
+                    print(f"[BYTECODE] operatore aritmetico non supportato: {ast[2]}")
+                    sys.exit(1)
+                self.emit(f"{op} {ast[1]} {ast[3]}")
+
+            case 'call':
+                args_str = " ".join(str(a) for a in (ast[2] if len(ast) > 2 else []))
+                self.emit(f"CALL {ast[1]} {args_str}".rstrip())
+
+            case 'uncall':
+                args_str = " ".join(str(a) for a in (ast[2] if len(ast) > 2 else []))
+                self.emit(f"UNCALL {ast[1]} {args_str}".rstrip())
+
+            case 'call_direct':
+                args_str = " ".join(str(a) for a in (ast[2] if len(ast) > 2 else []))
+                self.emit(f"{ast[1].upper()} {args_str}".rstrip())
+
+            case 'if':
+                entry_cond, then_body, else_body, fi_cond = ast[1], ast[2], ast[3], ast[4]
+                uid        = self.addr
+                else_label = f"ELSE_{uid}"
+                fi_label   = f"FI_{uid}"
+
+                self.emit(f"EVAL {entry_cond[1]} {entry_cond[2]}")
+                self.emit(f"JMPF {else_label}")
+                for stmt in then_body:
+                    self.process(stmt)
+                self.emit(f"JMP {fi_label}")
+
+                self.emit(f"LABEL {else_label}")
+                for stmt in else_body:
+                    self.process(stmt)
+
+                self.emit(f"LABEL {fi_label}")
+                self.emit(f"EVAL {fi_cond[1]} {fi_cond[2]}")
+                self.emit(f"ASSERT {entry_cond[1]} {entry_cond[2]}")
+
+            case 'from':
+                entry_cond, body, until_cond = ast[1], ast[2], ast[3]
+                uid         = self.addr
+                start_label = f"FROM_START_{uid}"
+                err_label   = f"FROM_ERR_{uid}"
+
+                self.emit(f"EVAL {entry_cond[1]} {entry_cond[2]}")
+                self.emit(f"JMPF {err_label}")
+
+                self.emit(f"LABEL {start_label}")
+                for stmt in body:
+                    self.process(stmt)
+
+                self.emit(f"EVAL {until_cond[1]} {until_cond[2]}")
+                self.emit(f"JMPF {start_label}")
+
+                self.emit(f"LABEL FROM_END_{uid}")
+                self.emit(f"LABEL {err_label}")
+
+            case 'par':
+                self.emit("PAR_START")
+                for i, branch in enumerate(ast[1]):
+                    self.emit(f"THREAD_{i}")
+                    for stmt in branch:
+                        if stmt is not None:
+                            self.process(stmt)
+                self.emit("PAR_END")
+
+            case _:
+                print(f"[BYTECODE] nodo AST non gestito: {ast[0]}  →  {ast}")
+                sys.exit(1)
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("Uso: python JBytecode.py <file>")
+        sys.exit(1)
+
+    with open(sys.argv[1], 'r') as f:
+        source = f.read()
+
+    ast = list(parser.parse(source, lexer=lexer))
+    compiler = ByteCode_Compiler()
+    compiler.process(ast)
+
+    with open("bytecode.txt", "w") as f:
+        while not compiler.queue.empty():
+            addr, instr = compiler.queue.get()
+            line = f"{addr:04d}  {instr}\n"
+            f.write(line)
+            print(line, end="")
