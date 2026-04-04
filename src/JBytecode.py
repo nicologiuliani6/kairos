@@ -13,6 +13,17 @@ class ByteCode_Compiler:
         self.queue.put((self.addr, instr))
         self.addr += 1
 
+    def expr_to_str(self, expr):
+        """Riduce ricorsivamente un nodo expr a una stringa piatta valutabile."""
+        if not isinstance(expr, tuple):
+            return str(expr)
+        if expr[0] == 'binop':
+            _, op, left, right = expr
+            l = self.expr_to_str(left)
+            r = self.expr_to_str(right)
+            return f"({l} {op} {r})"
+        return str(expr)
+
     def process(self, ast):
         if not ast:
             return
@@ -50,7 +61,7 @@ class ByteCode_Compiler:
                 if op is None:
                     print(f"[BYTECODE] operatore aritmetico non supportato: {ast[2]}")
                     sys.exit(1)
-                self.emit(f"{op} {ast[1]} {ast[3]}")
+                self.emit(f"{op} {ast[1]} {self.expr_to_str(ast[3])}")
 
             case 'call':
                 args_str = " ".join(str(a) for a in (ast[2] if len(ast) > 2 else []))
@@ -70,7 +81,7 @@ class ByteCode_Compiler:
                 else_label = f"ELSE_{uid}"
                 fi_label   = f"FI_{uid}"
 
-                self.emit(f"EVAL {entry_cond[1]} {entry_cond[2]}")
+                self.emit(f"EVAL {self.expr_to_str(entry_cond[1])} {self.expr_to_str(entry_cond[2])}")
                 self.emit(f"JMPF {else_label}")
                 for stmt in then_body:
                     self.process(stmt)
@@ -81,8 +92,8 @@ class ByteCode_Compiler:
                     self.process(stmt)
 
                 self.emit(f"LABEL {fi_label}")
-                self.emit(f"EVAL {fi_cond[1]} {fi_cond[2]}")
-                self.emit(f"ASSERT {entry_cond[1]} {entry_cond[2]}")
+                self.emit(f"EVAL {self.expr_to_str(fi_cond[1])} {self.expr_to_str(fi_cond[2])}")
+                self.emit(f"ASSERT {self.expr_to_str(entry_cond[1])} {self.expr_to_str(entry_cond[2])}")
 
             case 'from':
                 entry_cond, body, until_cond = ast[1], ast[2], ast[3]
@@ -90,14 +101,14 @@ class ByteCode_Compiler:
                 start_label = f"FROM_START_{uid}"
                 err_label   = f"FROM_ERR_{uid}"
 
-                self.emit(f"EVAL {entry_cond[1]} {entry_cond[2]}")
+                self.emit(f"EVAL {self.expr_to_str(entry_cond[1])} {self.expr_to_str(entry_cond[2])}")
                 self.emit(f"JMPF {err_label}")
 
                 self.emit(f"LABEL {start_label}")
                 for stmt in body:
                     self.process(stmt)
 
-                self.emit(f"EVAL {until_cond[1]} {until_cond[2]}")
+                self.emit(f"EVAL {self.expr_to_str(until_cond[1])} {self.expr_to_str(until_cond[2])}")
                 self.emit(f"JMPF {start_label}")
 
                 self.emit(f"LABEL FROM_END_{uid}")

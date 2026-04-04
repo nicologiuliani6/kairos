@@ -30,13 +30,102 @@ static inline uint get_findex(const char *name)
     return char_id_map_get(&FrameIndexer, name);
 }
 
-static inline int resolve_value(VM *vm, uint fi, const char *tok)
+/* ======================================================================
+ *  resolve_expr — valuta ricorsivamente espressioni della forma:
+ *    atom      ::= ID | NUMBER
+ *    expr      ::= atom | '(' expr op expr ')'
+ *    op        ::= '+' | '-'
+ *  Esempi: "x", "42", "(y + 1)", "((a + b) - c)"
+ * ====================================================================== */
+static inline int resolve_expr(VM *vm, uint fi, const char *tok);
+
+static inline int resolve_atom(VM *vm, uint fi, const char *s)
 {
-    if (char_id_map_exists(&vm->frames[fi].VarIndexer, tok)) {
-        uint idx = char_id_map_get(&vm->frames[fi].VarIndexer, tok);
+    if (char_id_map_exists(&vm->frames[fi].VarIndexer, s)) {
+        uint idx = char_id_map_get(&vm->frames[fi].VarIndexer, s);
         return *(vm->frames[fi].vars[idx]->value);
     }
-    return (int)strtol(tok, NULL, 10);
+    return (int)strtol(s, NULL, 10);
+}
+
+/*
+ * Trova il token (atom o sotto-espressione parentesizzata) che inizia
+ * a `p` e ne restituisce la lunghezza. `end` punta al carattere dopo.
+ */
+static inline int token_len(const char *p)
+{
+    if (*p == '(') {
+        int depth = 0, i = 0;
+        do {
+            if (p[i] == '(') depth++;
+            else if (p[i] == ')') depth--;
+            i++;
+        } while (depth > 0 && p[i]);
+        return i;
+    }
+    int i = 0;
+    while (p[i] && p[i] != ' ' && p[i] != ')' && p[i] != '+' && p[i] != '-')
+        i++;
+    return i > 0 ? i : 1;
+}
+
+static inline int resolve_expr(VM *vm, uint fi, const char *tok)
+{
+    /* Salta spazi iniziali */
+    while (*tok == ' ') tok++;
+
+    /* Espressione parentesizzata: (left op right) */
+    if (*tok == '(') {
+        /* Salta '(' iniziale */
+        const char *inner = tok + 1;
+        while (*inner == ' ') inner++;
+
+        /* Leggi left operand */
+        int llen = token_len(inner);
+        char left[256]; strncpy(left, inner, llen < 255 ? llen : 255); left[llen] = '\0';
+        int lval = resolve_expr(vm, fi, left);
+
+        /* Salta l'operand e spazi */
+        const char *after_left = inner + llen;
+        while (*after_left == ' ') after_left++;
+
+        /* Leggi operatore */
+        char op = *after_left;
+        const char *after_op = after_left + 1;
+        while (*after_op == ' ') after_op++;
+
+        /* Leggi right operand (fino alla ')' di chiusura) */
+        int rlen = token_len(after_op);
+        char right[256]; strncpy(right, after_op, rlen < 255 ? rlen : 255); right[rlen] = '\0';
+        int rval = resolve_expr(vm, fi, right);
+
+        if (op == '+') return lval + rval;
+        if (op == '-') return lval - rval;
+        fprintf(stderr, "[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
+        exit(EXIT_FAILURE);
+    }
+
+    /* Atom semplice */
+    return resolve_atom(vm, fi, tok);
+}
+
+static inline int resolve_value(VM *vm, uint fi, const char *tok)
+{
+    return resolve_expr(vm, fi, tok);
+}
+
+/*
+ * read_rest_of_expr — legge tutto ciò che rimane sulla riga corrente
+ * come unica stringa (gestisce espressioni tipo "(y + z)" che strtok
+ * spezzerebbe in più token).
+ */
+static inline void read_rest_of_expr(char *out, size_t outsz)
+{
+    const char *rest = strtok(NULL, "");
+    if (!rest) rest = "";
+    while (*rest == ' ' || *rest == '\t') rest++;
+    strncpy(out, rest, outsz - 1);
+    out[outsz - 1] = '\0';
 }
 
 static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op)

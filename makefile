@@ -16,7 +16,7 @@ all: $(LIBVM)
 
 # Compila la VM condivisa
 $(LIBVM): $(VM_DIR)/Janus.c
-	gcc -shared -fPIC -o Kairos $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR) -Wall
+	gcc -shared -fPIC -o $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR) -Wall
 	@echo "VM compilata: $(LIBVM)"
 
 # -----------------------------
@@ -47,4 +47,5 @@ build_app: $(LIBVM)
 clean:
 	rm -f $(LIBVM)
 	rm -rf $(SRC_DIR)/build $(SRC_DIR)/dist $(SRC_DIR)/__pycache__ $(SRC_DIR)/*.spec
+	rm $(SRC_DIR)/parser.out $(SRC_DIR)/parsetab.py
 	@echo "Pulizia completata"

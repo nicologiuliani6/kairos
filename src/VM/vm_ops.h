@@ -9,7 +9,7 @@
 #include "vm_channel.h"
 
 /* ======================================================================
- *  SWAP — deve stare prima di ops_arith.h (che usa op_swap_inv → op_swap)
+ *  SWAP
  * ====================================================================== */
 
 void op_swap(VM *vm, const char *frame_name)
@@ -147,10 +147,11 @@ static inline void op_show(VM *vm, const char *frame_name)
 
 static inline void op_eval(VM *vm, const char *frame_name)
 {
-    char *ID = strtok(NULL, " \t"), *C_val = strtok(NULL, " \t");
+    char *ID = strtok(NULL, " \t");
+    char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
     uint  fi = get_findex(frame_name);
     Var  *v  = get_var(vm, fi, ID, "EVAL");
-    thread_val_IF = (*(v->value) == resolve_value(vm, fi, C_val));
+    thread_val_IF = (*(v->value) == resolve_value(vm, fi, expr));
 }
 
 static inline void op_assert(VM *vm, const char *frame_name)
@@ -158,7 +159,10 @@ static inline void op_assert(VM *vm, const char *frame_name)
     char *ID1 = strtok(NULL, " \t"), *ID2 = strtok(NULL, " \t");
     if (!ID1 || !ID2) { fprintf(stderr, "[VM] ASSERT: argomenti mancanti\n"); return; }
     uint fi = get_findex(frame_name);
-    (void)(resolve_value(vm, fi, ID1) != resolve_value(vm, fi, ID2));
+    if (resolve_value(vm, fi, ID1) != resolve_value(vm, fi, ID2)) {
+        fprintf(stderr, "[VM] ASSERT fallita: %s != %s\n", ID1, ID2);
+        exit(EXIT_FAILURE);
+    }
 }
 
 /* ======================================================================
@@ -193,14 +197,32 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
 
 static inline void op_local(VM *vm, const char *frame_name)
 {
-    char *Vtype = strtok(NULL, " \t"), *Vname = strtok(NULL, " \t"), *c_val = strtok(NULL, " \t");
+    char *Vtype = strtok(NULL, " \t");
+    char *Vname = strtok(NULL, " \t");
+    char *c_val = strtok(NULL, " \t");
     uint  fi    = get_findex(frame_name);
 
     pthread_mutex_lock(&var_indexer_mtx);
     uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
     pthread_mutex_unlock(&var_indexer_mtx);
 
+    /*
+     * Se vm_exec ha già allocato questa variabile tramite DECL, la
+     * liberiamo prima di rimpiazzarla: LOCAL è l'allocazione runtime
+     * autorevole e deve ripartire da zero.
+     */
+    if (vm->frames[fi].vars[vi]) {
+        free(vm->frames[fi].vars[vi]->value);
+        if (vm->frames[fi].vars[vi]->channel) {
+            pthread_mutex_destroy(&vm->frames[fi].vars[vi]->channel->mtx);
+            free(vm->frames[fi].vars[vi]->channel);
+        }
+        free(vm->frames[fi].vars[vi]);
+        vm->frames[fi].vars[vi] = NULL;
+    }
+
     vm->frames[fi].vars[vi] = malloc(sizeof(Var));
+    if (!vm->frames[fi].vars[vi]) vm_fatal("[VM] LOCAL: malloc fallita\n");
     alloc_var(vm->frames[fi].vars[vi], Vtype, Vname);
 
     if (vi >= (uint)vm->frames[fi].var_count)
@@ -208,9 +230,11 @@ static inline void op_local(VM *vm, const char *frame_name)
 
     Var *dst = vm->frames[fi].vars[vi];
 
-    if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
-        int  si  = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
-        Var *src = vm->frames[fi].vars[si];
+    /* Imposta valore iniziale */
+    if (c_val && char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
+        uint  si  = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
+        Var  *src = vm->frames[fi].vars[si];
+        if (!src) vm_fatal("[VM] LOCAL: sorgente NULL\n");
         if (src->T == TYPE_INT)
             *(dst->value) = *(src->value);
         else if (src->T == TYPE_STACK) {
@@ -221,54 +245,83 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     } else {
         if (dst->T == TYPE_INT)
-            *(dst->value) = (int)strtol(c_val, NULL, 10);
+            *(dst->value) = c_val ? (int)strtol(c_val, NULL, 10) : 0;
         else if (dst->T == TYPE_STACK) {
-            if (strcmp(c_val, "nil") != 0) vm_fatal("[VM] LOCAL: valore stack non compatibile\n");
+            if (c_val && strcmp(c_val, "nil") != 0)
+                vm_fatal("[VM] LOCAL: valore stack non compatibile\n");
         }
     }
 
+    /* Push DOPO aver fissato il valore iniziale */
     stack_push(&vm->frames[fi].LocalVariables, dst);
+
+
 }
 
 static inline void op_delocal(VM *vm, const char *frame_name)
 {
-    char *Vtype = strtok(NULL, " \t"), *Vname = strtok(NULL, " \t"), *c_val = strtok(NULL, " \t");
+    char *Vtype = strtok(NULL, " \t");
+    char *Vname = strtok(NULL, " \t");
+    char *c_val = strtok(NULL, " \t");
     uint  fi    = get_findex(frame_name);
 
+    /* ── 1. Recupera il valore atteso ── */
     int Vvalue = 0;
     if (c_val) {
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val))
-            Vvalue = *(vm->frames[fi].vars[char_id_map_get(&vm->frames[fi].VarIndexer, c_val)]->value);
-        else
-            Vvalue = (int)strtoul(c_val, NULL, 10);
+        if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
+            uint src_vi = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
+            Var *src    = vm->frames[fi].vars[src_vi];
+            Vvalue = (src && src->T == TYPE_INT) ? *(src->value) : 0;
+        } else {
+            Vvalue = (int)strtol(c_val, NULL, 10);
+        }
     }
 
+    /* ── 2. Pop dalla pila locale ── */
     Var *V = stack_pop(&vm->frames[fi].LocalVariables);
-    const char *actual_type = (V->T == TYPE_INT) ? "int"
-                            : (V->T == TYPE_STACK ? "stack" : "channel");
 
-    if (strcmp(Vtype, actual_type) != 0) {
-        fprintf(stderr, "[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n", actual_type, Vtype);
+    /* ── DEBUG ── */
+    pthread_mutex_lock(&var_indexer_mtx);
+    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
+    pthread_mutex_unlock(&var_indexer_mtx);
+
+
+
+    /* ── 3. Ordine LIFO ── */
+    if (strcmp(V->name, Vname) != 0) {
+        fprintf(stderr,
+            "[VM] DELOCAL: ordine errato! atteso '%s', trovato '%s'\n",
+            Vname, V->name);
         exit(EXIT_FAILURE);
     }
 
+    /* ── 4. Tipo ── */
+    const char *actual_type = (V->T == TYPE_INT)     ? "int"
+                            : (V->T == TYPE_STACK)    ? "stack"
+                                                      : "channel";
+    if (strcmp(Vtype, actual_type) != 0) {
+        fprintf(stderr, "[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n",
+                actual_type, Vtype);
+        exit(EXIT_FAILURE);
+    }
+
+    /* ── 5. Valore finale ── */
     int ok = 0;
-    if      (V->T == TYPE_INT)     ok = (Vvalue == *(V->value));
-    else if (V->T == TYPE_STACK)   ok = (V->stack_len == 0 && strcmp(c_val, "nil")   == 0);
-    else if (V->T == TYPE_CHANNEL) ok = (V->stack_len == 0 && strcmp(c_val, "empty") == 0);
+    if      (V->T == TYPE_INT)     ok = (*(V->value) == Vvalue);
+    else if (V->T == TYPE_STACK)   ok = (V->stack_len == 0 && c_val && strcmp(c_val, "nil")   == 0);
+    else if (V->T == TYPE_CHANNEL) ok = (V->stack_len == 0 && c_val && strcmp(c_val, "empty") == 0);
 
     if (!ok) {
         if (V->T == TYPE_INT)
-            fprintf(stderr, "[VM] DELOCAL: valore finale errato! (%s, %d, %d)\n", Vname, Vvalue, *(V->value));
+            fprintf(stderr, "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",
+                    Vname, Vvalue, *(V->value));
         else
             fprintf(stderr, "[VM] DELOCAL: %s non è nil/empty!\n", Vname);
         exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_lock(&var_indexer_mtx);
-    delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count,
-               char_id_map_get(&vm->frames[fi].VarIndexer, Vname));
-    pthread_mutex_unlock(&var_indexer_mtx);
+    /* ── 6. Distruggi ── */
+    delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count, (int)vi);
 }
 
 #endif /* VM_OPS_H */
