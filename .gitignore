@@ -1,22 +1,21 @@
-# virtual environment
-venv/
-.env/
+# Build artifacts
+build/
+*.so
 
-# cache python
+# PyInstaller
+*.spec
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
 
-# build
-build/
-*.egg-info/
-
-libvm.so
-Janus
-Janus.core
-JanusApp.spec
+# PLY generated
 parser.out
-parsertab.py
-bytecode.txt
+parsetab.py
 
+# Virtualenv
+venv/
+
+# Temp
+bytecode.txt

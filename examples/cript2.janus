@@ -1,0 +1,54 @@
+procedure round(int msg, int k)
+    msg ^= k
+
+procedure encrypt(int msg, int master_key)
+    local int k1 = 0
+    local int k2 = 0
+    local int k3 = 0
+    local int k4 = 0
+    local int c1 = 13
+    local int c2 = 57
+    local int c3 = 42
+    local int c4 = 99
+        k1 += master_key
+        k2 += master_key
+        k3 += master_key
+        k4 += master_key
+    call round(k1, c1)
+    call round(k2, c2)
+    call round(k3, c3)
+    call round(k4, c4)
+    call round(msg, k1)
+    call round(msg, k2)
+    call round(msg, k3)
+    call round(msg, k4)
+    uncall round(k4, c4)
+    uncall round(k3, c3)
+    uncall round(k2, c2)
+    uncall round(k1, c1)
+        k4 -= master_key
+        k3 -= master_key
+        k2 -= master_key
+        k1 -= master_key
+    delocal int c4 = 99
+    delocal int c3 = 42
+    delocal int c2 = 57
+    delocal int c1 = 13
+    delocal int k4 = 0
+    delocal int k3 = 0
+    delocal int k2 = 0
+    delocal int k1 = 0
+
+procedure main()
+    local int key = 17
+    local int msg = 0
+    show(msg)          // 0
+    //show(key)          // 17
+    call encrypt(msg, key)
+    show(msg)          // 153 (17+16+...+1)
+    //show(key)          // 0 
+    uncall encrypt(msg, key)
+    show(msg)          // torna 0
+    //show(key)          // torna 17
+    delocal int msg = 0
+    delocal int key = 17

@@ -1,242 +1,578 @@
-# Janus VM
+# Janus
 
-Interprete/VM per un linguaggio Janus reversibile con supporto a:
+Janus è un linguaggio di programmazione **reversibile e concorrente**. Ogni programma Janus può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito tramite blocchi `par/rap` e comunicazione sincrona tra thread tramite canali tipizzati.
 
-- procedure e `call` / `uncall`
-- variabili `int`, `stack`, `channel`
-- blocchi `local` / `delocal`
-- controllo `if ... then ... else ... fi ...`
-- cicli `from ... loop ... until ...`
-- parallelismo `par ... and ... rap`
-- canali sincroni (`ssend` / `srecv`)
+---
 
-## Prerequisiti
+## Indice
 
-- Linux
-- Python 3
-- GCC
-- libreria Python `ply`
+1. [Struttura del progetto](#struttura-del-progetto)
+2. [Installazione e compilazione](#installazione-e-compilazione)
+3. [Toolchain — comandi make](#toolchain--comandi-make)
+4. [Architettura interna](#architettura-interna)
+5. [Il linguaggio Janus](#il-linguaggio-janus)
+   - [Tipi](#tipi)
+   - [Dichiarazioni globali](#dichiarazioni-globali)
+   - [Variabili locali — local/delocal](#variabili-locali--localdelocal)
+   - [Operatori reversibili](#operatori-reversibili)
+   - [Espressioni](#espressioni)
+   - [Procedure e parametri](#procedure-e-parametri)
+   - [call e uncall](#call-e-uncall)
+   - [Blocco if-fi](#blocco-if-fi)
+   - [Ciclo from-loop-until](#ciclo-from-loop-until)
+   - [Stack — push e pop](#stack--push-e-pop)
+   - [Canali — ssend e srecv](#canali--ssend-e-srecv)
+   - [Parallelismo — par/and/rap](#parallelismo--parandarap)
+   - [show](#show)
+   - [Commenti](#commenti)
+6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
+7. [Esempi completi](#esempi-completi)
+8. [Il bytecode Janus](#il-bytecode-janus)
+9. [Errori comuni](#errori-comuni)
 
-Installazione dipendenza Python:
+---
 
-```bash
-./venv/bin/pip install ply
+## Struttura del progetto
+
+```
+janus/
+├── makefile
+├── README.md
+├── .gitignore
+├── src/
+│   ├── janus.py            ← entry point: compila ed esegue
+│   ├── __init__.py
+│   └── frontend/
+│       ├── lexer.py        ← analisi lessicale (PLY)
+│       ├── parser.py       ← analisi sintattica (PLY)
+│       ├── ast.py          ← utility: stampa AST
+│       └── bytecode.py     ← compilatore AST → bytecode
+├── src/vm/
+│   ├── Janus.c             ← entry point della VM in C
+│   ├── vm_types.h          ← strutture dati (VM, Frame, Var, Channel)
+│   ├── vm_helpers.h        ← funzioni di supporto
+│   ├── vm_ops.h            ← istruzioni runtime (LOCAL, PUSH, EVAL…)
+│   ├── ops_arith.h         ← operatori aritmetici e loro inversi
+│   ├── vm_invert.h         ← motore di inversione (UNCALL)
+│   ├── vm_par.h            ← parallelismo (PAR, thread_entry)
+│   ├── vm_frames.h         ← gestione frame (ricorsione, thread-clone)
+│   ├── vm_channel.h        ← canali sincroni (rendezvous)
+│   ├── stack.h             ← stack di puntatori a Var
+│   ├── char_id_map.h       ← mappa stringa→indice
+│   └── check_if_reversibility.h ← analisi statica reversibilità
+├── build/
+│   └── libvm.so            ← generato da make
+├── tests/
+│   ├── expected/           ← output attesi (opzionale)
+│   ├── ...
+└── examples/
+    ├── ...
 ```
 
-oppure fuori da venv:
+---
+
+## Installazione e compilazione
+
+### Requisiti
+
+| Componente | Versione minima |
+|-----------|----------------|
+| Python    | 3.10           |
+| GCC       | 11             |
+| PLY       | 3.11           |
+| PyInstaller (opzionale) | 5.0 |
+
+### Setup da zero
 
 ```bash
-pip install ply
-```
+# 1. Clona il repository
+git clone <url> janus
+cd janus
 
-## Build (usare il makefile del progetto)
+# 2. Crea il virtualenv e installa le dipendenze Python
+make install-deps
 
-Il repository usa `makefile` (minuscolo) come entrypoint principale.
-
-Build VM:
-
-```bash
+# 3. Compila la VM (debug, con AddressSanitizer)
 make
+
+# oppure solo la build ottimizzata
+make build-release
 ```
 
-equivale a compilare `libvm.so`.
+Dopo `make` troverai `build/libvm.so`.
 
-Build manuale (solo se serve):
+---
+
+## Toolchain — comandi make
+
+| Comando | Descrizione |
+|---------|-------------|
+| `make` | Compila la VM in modalità debug (`-g -fsanitize=address,undefined`) |
+| `make build-debug` | Esplicita build debug con AddressSanitizer |
+| `make build-release` | Compila con `-O2 -DNDEBUG` |
+| `make run FILE=<f>` | Esegue un singolo file `.janus` |
+| `make test` | Esegue tutti i `.janus` in `tests/` e stampa PASS/FAIL |
+| `make test-one FILE=<f>` | Esegue un singolo test con output verboso |
+| `make release` | Build ottimizzata + pacchetto standalone con PyInstaller |
+| `make install-deps` | Crea il venv e installa `ply` e `pyinstaller` |
+| `make clean` | Rimuove tutti gli artefatti generati |
+| `make help` | Mostra il riepilogo dei comandi |
+
+Esempi d'uso:
 
 ```bash
-gcc -shared -fPIC -o libvm.so Janus.c -I. -Wall
+make run FILE=examples/fib.janus
+make test
+make test-one FILE=tests/test_uncall.janus
+make release
 ```
 
-## Esecuzione
+---
 
-Via makefile (consigliato):
+## Architettura interna
 
-```bash
-make run FILE=Jprograms/test.janus
+```
+file.janus
+    │
+    ▼
+[ lexer.py ]  ──  analisi lessicale con PLY
+    │
+    ▼
+[ parser.py ]  ── analisi sintattica LALR(1), produce AST come tuple Python
+    │
+    ▼
+[ bytecode.py ] ── visita l'AST e produce il bytecode testuale
+    │
+    ▼  (stringa in memoria)
+[ Janus.c / libvm.so ] ── VM in C che interpreta il bytecode
+    │
+    ├── vm_exec()      prima passata: raccoglie frame, DECL, PARAM, LABEL
+    ├── vm_run_BT()    loop principale di esecuzione forward
+    └── invert_op_to_line()  esecuzione inversa (UNCALL)
 ```
 
-Questo esegue `Janus.py` e salva anche `bytecode.txt`.
+Il frontend Python compila il sorgente in una stringa bytecode che viene passata direttamente alla VM tramite `ctypes` — nessun file intermedio su disco (a meno di `--dump-bytecode`).
 
-Esegui un programma `.janus`:
+---
 
-```bash
-./venv/bin/python Janus.py Jprograms/test.janus
-```
+## Il linguaggio Janus
 
-Per salvare anche il bytecode generato in `bytecode.txt`:
+### Tipi
 
-```bash
-./venv/bin/python Janus.py Jprograms/test.janus --dump-bytecode
-```
+Janus ha tre tipi primitivi:
 
-## Toolchain (pipeline)
+| Tipo | Descrizione |
+|------|-------------|
+| `int` | Intero con segno a 32 bit, inizializzato a `0` |
+| `stack` | Lista LIFO di interi, inizialmente vuota (`nil`) |
+| `channel` | Canale sincrono per comunicazione tra thread, inizialmente vuoto (`empty`) |
 
-1. `Jlexer.py` tokenizza il sorgente.
-2. `Jparser.py` produce AST.
-3. `JBytecode.py` converte AST in bytecode lineare.
-4. `Janus.py` passa il bytecode a `libvm.so` via `ctypes`.
-5. `Janus.c` esegue il bytecode nella VM.
+---
 
-## Sintassi del linguaggio (quick reference)
+### Dichiarazioni globali
 
-### Procedure
+Le variabili dichiarate nel corpo di `main` senza `local` sono variabili globali del frame. Vengono allocate nella prima passata della VM.
 
 ```janus
 procedure main()
-    int x
+    int x          // dichiara x, vale 0
+    channel ch     // dichiara ch
+    x += 5
 ```
 
-Con parametri:
+> **Nota:** fuori da `main`, le variabili si dichiarano obbligatoriamente con `local/delocal`.
+
+---
+
+### Variabili locali — local/delocal
+
+`local` alloca una variabile con un valore iniziale. `delocal` la dealloca verificando che il valore finale corrisponda al valore atteso. Questa coppia garantisce la reversibilità: la VM può ricostruire esattamente lo stato precedente.
 
 ```janus
-procedure sum(int a, int b)
+local int x = 0        // alloca x, inizializza a 0
+local int y = x        // alloca y, copia il valore corrente di x
+local stack s = nil    // stack vuoto
+local channel ch = empty
+
+// ... uso di x, y, s, ch ...
+
+delocal channel ch = empty
+delocal stack s = nil  // verifica che s sia vuoto
+delocal int y = x      // verifica che y == valore corrente di x
+delocal int x = 0      // verifica che x == 0 prima di deallocare
+
+
 ```
 
-Tipi supportati: `int`, `stack`, `channel`.
+**Regole:**
+- La `delocal` deve specificare il valore che la variabile ha in quel punto — se il valore non corrisponde, la VM termina con errore.
+- `local` e `delocal` devono essere in ordine LIFO: l'ultima variabile dichiarata con `local` deve essere la prima a essere chiusa con `delocal`.
+- All'interno di una procedura (non `main`) si usano solo `local/delocal`, mai dichiarazioni globali.
 
-### Dichiarazioni e assegnamenti
+---
 
-Dichiarazione:
+### Operatori reversibili
+
+Janus ammette solo operatori che sono invertibili per costruzione:
+
+| Operatore | Sintassi | Inverso |
+|-----------|----------|---------|
+| Incremento | `x += expr` | `x -= expr` |
+| Decremento | `x -= expr` | `x += expr` |
+| XOR | `x ^= expr` | `x ^= expr` (è il proprio inverso) |
+| Swap | `x <=> y` | `x <=> y` (è il proprio inverso) |
 
 ```janus
-int x
-stack s
-channel ch
+x += 5        // x = x + 5
+x -= y        // x = x - y
+x ^= 42       // x = x XOR 42
+x <=> y       // scambia x e y
 ```
 
-Assegnamenti composti:
+> **Vincolo fondamentale:** la variabile a sinistra **non deve comparire** nell'espressione a destra. `x += x` non è reversibile.
 
-- `+=`
-- `-=`
-- `*=`
-- `/=`
-- `%=`
-- `^=`
-- `<=>` (swap)
+---
 
-Esempio:
+### Espressioni
+
+Le espressioni supportano addizione, sottrazione e parentesi:
 
 ```janus
-x += 1
-y <=> x
+x += (y + 1)
+x -= (a + b)
+x += ((a + b) - c)
 ```
 
-### Local / Delocal
+I letterali numerici sono interi. Non sono supportate moltiplicazione o divisione come operatori di espressione.
+
+---
+
+### Procedure e parametri
 
 ```janus
-local int k = key
-...
-delocal int k = 0
+procedure nome(tipo param1, tipo param2)
+    // corpo
 ```
 
-Nota: `delocal` verifica il valore finale atteso.
-
-`delocal` supporta anche forma senza valore:
+I parametri sono passati **per riferimento**: le modifiche ai parametri all'interno della procedura si riflettono sulle variabili del chiamante.
 
 ```janus
-delocal int x
+procedure increment(int x)
+    x += 5
+
+procedure main()
+    local int a = 3
+    call increment(a)   // a diventa 8
+    delocal int a = 8
 ```
 
-### Call / Uncall
+Ogni programma Janus deve avere una procedura `main()` senza parametri. L'esecuzione parte da `main`.
+
+---
+
+### call e uncall
+
+`call` esegue una procedura normalmente. `uncall` esegue la procedura **al contrario**: le istruzioni vengono eseguite in ordine inverso e ogni operazione viene sostituita dalla sua inversa (`+=` diventa `-=`, `push` diventa `pop`, ecc.).
 
 ```janus
-call encrypt(item, key)
-uncall encrypt(item, key)
+procedure increment(int x)
+    x += 5
+
+procedure main()
+    local int a = 0
+    call increment(a)    // a = 5
+    show(a)              // stampa 5
+    uncall increment(a)  // a torna 0
+    show(a)              // stampa 0
+    delocal int a = 0
 ```
 
-### Chiamate dirette (built-in e procedure)
+`uncall` è la primitiva chiave della reversibilità: permette di "annullare" qualunque computazione senza doverla riscrivere manualmente.
 
-Il parser supporta anche forma diretta `ID(...)`, oltre a `call ID(...)`.
-Esempi:
+---
 
-```janus
-show(x)
-push(x, s)
-pop(x, s)
-ssend(x, ch)
-srecv(x, ch)
-increment(a)
-```
+### Blocco if-fi
 
-### If reversibile
-
-Forma supportata:
+Il blocco condizionale in Janus richiede una **condizione di entrata** e una **condizione di uscita**:
 
 ```janus
-if a = b then
-    ...
+if <condizione_entrata> then
+    // ramo then
 else
-    ...
-fi c = d
+    // ramo else (opzionale)
+fi <condizione_uscita>
 ```
 
-Anche senza `else`:
+La condizione di uscita viene valutata **dopo** il corpo ed è ciò che rende il blocco reversibile: l'inverso sa quale ramo è stato eseguito leggendo la condizione di uscita.
 
 ```janus
-if a = b then
-    ...
-fi c = d
+procedure check_boolean(int flag)
+    if flag == 1 then
+        show(flag)
+    else
+        show(flag)
+    fi flag == 1
 ```
 
-### Loop reversibile
+**Regola di reversibilità:** la variabile usata nella condizione **non deve essere modificata** all'interno del blocco `if-fi`. Il checker statico segnala questa violazione come warning.
+
+---
+
+### Ciclo from-loop-until
 
 ```janus
-from i = 0 loop
-    ...
-until i = n
+from <condizione_entrata> loop
+    // corpo
+until <condizione_uscita>
 ```
 
-### Parallelismo
+- `from`: la condizione deve essere vera all'ingresso del ciclo (prima iterazione) e falsa per tutte le iterazioni successive.
+- `until`: la condizione deve essere falsa durante il ciclo e vera quando il ciclo termina.
+
+```janus
+// Esempio: somma da 1 a n
+local int i = 0
+from i == 0 loop
+    i += 1
+until i == n
+delocal int i = n
+```
+
+Il ciclo è reversibile: eseguito al contrario, la condizione `until` diventa la condizione di entrata e `from` quella di uscita, e il corpo viene eseguito all'indietro.
+
+---
+
+### Stack — push e pop
+
+```janus
+push(var, stack)    // sposta il valore di var in cima allo stack, azzera var
+pop(var, stack)     // preleva dalla cima dello stack e lo aggiunge a var
+```
+
+`push` azzera la variabile sorgente dopo aver copiato il valore (per preservare la biettività). `pop` **aggiunge** il valore prelevato alla variabile destinazione (non sovrascrive).
+
+```janus
+local stack s = nil
+local int x = 5
+push(x, s)          // s = [5], x = 0
+local int y = 0
+pop(y, s)           // s = [], y = 5
+delocal int y = 5
+delocal int x = 0
+delocal stack s = nil
+```
+
+L'inverso di `push` è `pop` e viceversa.
+
+---
+
+### Canali — ssend e srecv
+
+I canali sono code sincrone (rendezvous): `ssend` blocca finché un `srecv` non è pronto a ricevere, e viceversa.
+
+```janus
+ssend(var, ch)      // invia var sul canale ch, azzera var
+srecv(var, ch)      // riceve dal canale ch e aggiunge il valore a var
+```
+
+Come `push/pop`, `ssend` azzera la sorgente dopo l'invio e `srecv` somma (non sovrascrive) alla destinazione. L'inverso di `ssend` è `srecv` e viceversa.
+
+I canali sono pensati per essere usati esclusivamente all'interno di blocchi `par/rap`.
+
+---
+
+### Parallelismo — par/and/rap
 
 ```janus
 par
-    call producer(ch, n)
+    // thread 0
 and
-    call consumer(ch, result, n)
+    // thread 1
+and
+    // thread 2
 rap
 ```
 
-`par` può avere più branch separati da `and`.
+`par/rap` avvia i thread elencati in parallelo. I thread condividono tutte le variabili del frame corrente. La sincronizzazione tra thread avviene esclusivamente tramite canali.
 
-## Pattern usati nei programmi di esempio (`Jprograms/`)
+I blocchi `par` possono essere annidati:
 
-Dai file di esempio presenti nel repository, questi pattern sono tutti validi:
-
-- dichiarazioni semplici in body (`int x`, `stack s`, `channel c`)
-- inizializzazione locale reversibile (`local int x = 0`, `local stack s = nil`, `local channel ch = empty`)
-- produttore/consumatore sia sequenziale (`stack`) sia parallelo (`channel`)
-- ricorsione (`fib_ricorsivo`, `encrypt` ricorsiva)
-- `call` e `uncall` sulla stessa procedura
-- blocchi paralleli annidati (`par` dentro `par`)
-
-## Lessico
-
-- Identificatori: `[a-zA-Z_][a-zA-Z0-9_]*`
-- Numeri: interi non negativi (`\d+`)
-- Commenti: `// commento`
-
-## File utili nel repository
-
-- `Janus.c`: runtime VM
-- `Janus.py`: runner Python che invoca la VM
-- `Jlexer.py`: lexer PLY
-- `Jparser.py`: parser PLY
-- `JBytecode.py`: compilatore AST -> bytecode
-- `Jprograms/`: esempi di programmi Janus
-
-## Debug rapido
-
-- Verifica bytecode:
-
-```bash
-./venv/bin/python Janus.py Jprograms/test.janus --dump-bytecode
+```janus
+par
+    ssend(x, c)
+and
+    par
+        ssend(y, c)
+    and
+        srecv(a, c)
+        srecv(b, c)
+    rap
+rap
 ```
 
-- Ricompila sempre `libvm.so` dopo modifiche a `Janus.c`.
+**Inversione di par:** `uncall` su una procedura contenente `par` inverte l'ordine dei thread e scambia `ssend↔srecv` e `call↔uncall` all'interno di ogni thread.
 
-## Comandi make utili
+---
 
-- `make` -> compila `libvm.so`
-- `make run FILE=...` -> esegue un `.janus`
-- `make build_app` -> build standalone con PyInstaller
-- `make clean` -> pulizia artefatti
+### show
+
+`show(var)` stampa il valore corrente di una variabile su stdout. Non è reversibile — nell'inversione viene semplicemente saltata.
+
+```janus
+show(x)        // stampa: x: 42
+show(result)   // stampa: result: [1, 2, 3, 4, 5]
+```
+
+---
+
+### Commenti
+
+```janus
+// questo è un commento su riga singola
+```
+
+I commenti si estendono fino alla fine della riga. Non esistono commenti multiriga.
+
+---
+
+## Reversibilità — regole e vincoli
+
+Janus garantisce la reversibilità a patto che il programma rispetti alcune regole. Il compilatore effettua un'analisi statica e segnala le violazioni prima dell'esecuzione.
+
+### 1. Assegnamento: niente autoriflessività
+
+```janus
+x += x    // ERRORE: x compare su entrambi i lati
+x += y    // OK
+```
+
+### 2. if-fi: la variabile di controllo non deve cambiare nel corpo
+
+```janus
+if x == 0 then
+    x += 1    // WARNING: x è la variabile di controllo
+fi x == 0
+```
+
+### 3. local/delocal: la sorgente non deve essere modificata tra local e delocal
+
+```janus
+local int y = x     // y inizializzata con x
+x += 1              // WARNING: x viene modificata prima del delocal di y
+delocal int y = x   // y non può essere ricostruita in UNCALL
+```
+
+### 4. DELOCAL verifica il valore a runtime
+
+Se il valore finale della variabile non corrisponde a quello dichiarato nella `delocal`, la VM termina:
+
+```
+[VM] DELOCAL: valore finale errato! (var=x, atteso=0, trovato=3)
+```
+
+### 5. Stack e channel devono essere vuoti alla delocal
+
+```janus
+delocal stack s = nil     // s deve essere vuoto
+delocal channel ch = empty // ch deve essere vuoto
+```
+
+---
+
+## Il bytecode Janus
+
+Il compilatore produce un bytecode testuale che la VM interpreta. Ogni riga ha il formato:
+
+```
+NNNN  ISTRUZIONE [argomenti...]
+```
+
+Le istruzioni principali:
+
+| Istruzione | Descrizione |
+|-----------|-------------|
+| `START` | Inizio programma |
+| `HALT` | Fine programma |
+| `PROC name` | Inizio procedura |
+| `END_PROC name` | Fine procedura |
+| `PARAM type name` | Dichiarazione parametro |
+| `DECL type name` | Dichiarazione variabile globale |
+| `LOCAL type name val` | Alloca variabile locale |
+| `DELOCAL type name val` | Dealloca e verifica variabile locale |
+| `PUSHEQ var expr` | `var += expr` |
+| `MINEQ var expr` | `var -= expr` |
+| `XOREQ var expr` | `var ^= expr` |
+| `SWAP var1 var2` | Scambia var1 e var2 |
+| `PUSH var stack` | Sposta var in cima allo stack |
+| `POP var stack` | Preleva dalla cima e aggiunge a var |
+| `SSEND var ch` | Invia var sul canale (alias di PUSH su channel) |
+| `SRECV var ch` | Riceve dal canale e aggiunge a var |
+| `EVAL lhs op rhs` | Valuta condizione, risultato in flag interno |
+| `ASSERT lhs op rhs` | Verifica condizione, termina se falsa |
+| `JMPF label` | Salta a label se EVAL è falso |
+| `JMP label` | Salta incondizionato |
+| `LABEL name` | Definisce un'etichetta |
+| `CALL proc args...` | Chiama procedura |
+| `UNCALL proc args...` | Chiama procedura in inverso |
+| `SHOW var` | Stampa variabile |
+| `PAR_START` | Inizio blocco parallelo |
+| `THREAD_N` | Inizio thread N |
+| `PAR_END` | Fine blocco parallelo |
+
+Per vedere il bytecode generato da un programma:
+
+```bash
+make run FILE=examples/fib.janus
+# oppure
+./venv/bin/python -m src.janus examples/fib.janus --dump-bytecode
+# il bytecode viene scritto in bytecode.txt
+```
+
+---
+
+## Errori comuni
+
+### `DELOCAL: valore finale errato`
+
+```
+[VM] DELOCAL: valore finale errato! (var=x, atteso=0, trovato=3)
+```
+
+La variabile non ha il valore atteso al momento della `delocal`. Controlla che il corpo tra `local` e `delocal` riporti la variabile al valore iniziale.
+
+### `DELOCAL: ordine errato`
+
+```
+[VM] DELOCAL: ordine errato! atteso 'x', trovato 'y'
+```
+
+Le `delocal` non sono in ordine LIFO rispetto alle `local`. L'ultima variabile dichiarata con `local` deve essere la prima a essere chiusa.
+
+### `DELOCAL: stack/channel non è nil/empty`
+
+```
+[VM] DELOCAL: result non è nil/empty!
+```
+
+Lo stack o il canale non è vuoto al momento della `delocal`. Nel caso di `uncall`, significa che la procedura inversa non ha svuotato completamente la struttura.
+
+### `cannot open shared object file: libvm.so`
+
+```
+OSError: .../libvm.so: cannot open shared object file
+```
+
+La VM non è stata compilata. Esegui `make build-release` prima di `make test`.
+
+### `[PARSER] token non atteso`
+
+Errore sintattico nel sorgente. La riga indicata contiene un token non riconosciuto dalla grammatica.
+
+### Warning di reversibilità
+
+```
+[WARNING] La procedura "f" dentro un blocco if-fi ha la variabile di controllo
+          'x' modificata da istruzione: PUSHEQ (riga 5)
+```
+
+Il checker statico ha trovato una potenziale violazione. Il programma continua a essere eseguito ma potrebbe non essere correttamente invertibile.

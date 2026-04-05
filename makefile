@@ -7,10 +7,10 @@ PYTHON      := ./venv/bin/python
 PYINSTALLER := $(abspath ./venv/bin/pyinstaller)
 
 SRC_DIR     := src
-VM_DIR      := $(SRC_DIR)/VM
-LIBVM       := $(VM_DIR)/libvm.so
-DIST_DIR    := $(SRC_DIR)/dist
-JPROGRAMS   := Jprograms
+VM_DIR      := $(SRC_DIR)/vm
+LIBVM       := build/libvm.so
+DIST_DIR    := build/dist
+JPROGRAMS   := tests
 
 # Flags di compilazione
 CC          := gcc
@@ -60,7 +60,7 @@ ifndef FILE
 	$(error Specifica il file: make run FILE=Jprograms/test.janus)
 endif
 	@echo "$(CYAN)Esecuzione: $(FILE)$(RESET)"
-	$(PYTHON) -m src.Janus $(FILE) --dump-bytecode
+	$(PYTHON) -m src.janus $(FILE) --dump-bytecode
 
 # ============================================================
 #  test — esegue tutti i .janus in Jprograms/
@@ -73,7 +73,7 @@ test: build-release
 	@passed=0; failed=0; errors=""; \
 	for f in $(JANUS_FILES); do \
 		name=$$(basename $$f); \
-		output=$$($(PYTHON) -m src.Janus $$f --dump-bytecode 2>&1); \
+		output=$$($(PYTHON) -m src.janus $$f --dump-bytecode 2>&1); \
 		if echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow|assertion"; then \
 			echo "  $(RED)FAIL$(RESET)  $$name"; \
 			errors="$$errors\n--- $$name ---\n$$output\n"; \
@@ -101,7 +101,7 @@ ifndef FILE
 	$(error Specifica il file: make test-one FILE=Jprograms/fib.janus)
 endif
 	@echo "$(CYAN)=== Test: $(FILE) ===$(RESET)"
-	@output=$$($(PYTHON) -m src.Janus $(FILE) --dump-bytecode 2>&1); \
+	@output=$$($(PYTHON) -m src.janus $(FILE) --dump-bytecode 2>&1); \
 	echo "$$output"; \
 	echo ""; \
 	if echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow"; then \

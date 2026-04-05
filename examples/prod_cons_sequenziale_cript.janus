@@ -1,0 +1,42 @@
+procedure encrypt(int m, int k)
+    m^=k
+
+procedure producer(stack buffer, int n)
+    local int pub_key = 17
+    local int i = 0
+    from i == 0 loop
+        i += 1
+        local int item = 0
+            item += i
+            call encrypt(item, pub_key)
+            push(item, buffer)
+        delocal int item = 0
+    until i == n
+    delocal int i = n
+    delocal int pub_key = 17
+
+procedure consumer(stack buffer, stack result, int n)
+    local int priv_key = 17
+    local int i = 0
+    from i == 0 loop
+        local int item = 0
+            pop(item, buffer)
+            uncall encrypt(item, priv_key)
+            push(item, result)
+        delocal int item = 0
+        i += 1
+    until i == n
+    delocal int i = n
+    delocal int priv_key = 17
+
+procedure main()
+    stack result
+    stack buffer
+    local int n = 5
+    call producer(buffer, n)
+    call consumer(buffer, result, n)
+    show(result)
+    uncall consumer(buffer, result, n)
+    uncall producer(buffer, n)
+    show(result)
+    delocal int n = 5
