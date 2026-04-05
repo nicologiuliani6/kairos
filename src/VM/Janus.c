@@ -9,8 +9,8 @@
 #include "vm_channel.h"
 #include "vm_frames.h"
 #include "vm_ops.h"
-#include "vm_invert.h"   /* include anche exec_branch_inverse */
-#include "vm_par.h"      /* include thread_entry; usa vm_run_BT via forward decl */
+#include "vm_par.h"      /* deve venire prima: definisce ParBlock, scan_par_block, exec_par_threads */
+#include "vm_invert.h"   /* usa ParBlock e exec_par_threads definiti sopra */
 #include "check_if_reversibility.h"
 
 /* ── thread-local state (dichiarate extern in vm_types.h) ── */
@@ -135,6 +135,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[curi].vars[src];
             }
             if (ii != pc) { fprintf(stderr, "ERROR: params mismatch UNCALL '%s'\n", pn); exit(EXIT_FAILURE); }
+            //fprintf(stderr, "[UNCALL_MAIN] chiamando invert_op_to_line per '%s'\n", pn);
             invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             *nl = '\n'; ptr = nl + 1; continue;
@@ -142,7 +143,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "PAR_START")) {
             *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
-            exec_par_threads(vm, orig, fname, &pb, 1);
+            exec_par_threads(vm, orig, fname, &pb, 1, 0);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             continue;
         }

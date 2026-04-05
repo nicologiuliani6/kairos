@@ -81,6 +81,7 @@ struct ThreadArgs {
     char       frame_name[VAR_NAME_LENGTH];
     char      *start_ptr;
     int        finished, blocked, turn_done;
+    int        is_inverse; 
     pthread_t  tid;
     pthread_mutex_t *done_mtx;
     pthread_cond_t  *done_cond;

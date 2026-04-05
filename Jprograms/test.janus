@@ -1,12 +1,14 @@
-procedure test()
-    local int i = 0
-    show(i)
-    from i == 0 loop
-        i += 1
-        show(i)
-    until i == 1
-    show(i)
-    delocal int i = 1
+procedure run(channel ch, int n1, int n2)
+    par
+        ssend(n1, ch)
+    and
+        srecv(n2, ch)
+    rap
+
 procedure main()
-    call test()
-    uncall test()
+    channel ch
+    int n1
+    n1+=5
+    int n2
+    call run(ch, n1, n2)
+    uncall run(ch, n1, n2)

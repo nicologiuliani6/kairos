@@ -56,7 +56,7 @@ static inline ParBlock scan_par_block(char *par_ptr)
 }
 
 static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name,
-                                    ParBlock *pb, int dup_buffer)
+                                    ParBlock *pb, int dup_buffer, int is_inverse)
 {
     pthread_mutex_t done_mtx  = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t  done_cond = PTHREAD_COND_INITIALIZER;
@@ -69,6 +69,8 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t]->start_ptr = pb->starts[t];
         args[t]->done_mtx  = &done_mtx;
         args[t]->done_cond = &done_cond;
+        args[t]->is_inverse = is_inverse;
+        //fprintf(stderr, "[EXEC_PAR] t=%d is_inverse=%d ptr=%p\n", t, args[t]->is_inverse, (void*)args[t]);
         strncpy(args[t]->frame_name, frame_name, VAR_NAME_LENGTH - 1);
     }
 
@@ -105,11 +107,13 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
 static void *thread_entry(void *arg)
 {
     ThreadArgs *args = (ThreadArgs *)arg;
+    //fprintf(stderr, "[THREAD_ENTRY] ptr=%p is_inverse=%d\n", (void*)args, args->is_inverse);
     VM         *vm   = args->vm;
     char        fname[VAR_NAME_LENGTH];
     strncpy(fname, args->frame_name, VAR_NAME_LENGTH - 1);
     fname[VAR_NAME_LENGTH - 1] = '\0';
     current_thread_args = args;
+    //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
 
     char *ptr = args->start_ptr;
 
@@ -123,17 +127,19 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "PAR_START")) {
             *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
-            exec_par_threads(vm, args->buffer, fname, &pb, 0);
+            exec_par_threads(vm, args->buffer, fname, &pb, 0, args->is_inverse);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             continue;
         }
         else if (!strcmp(fw, "SHOW"))   op_show   (vm, fname);
         else if (!strcmp(fw, "PUSHEQ")) op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))  op_mineq  (vm, fname);
-        else if (!strcmp(fw, "XOREQ"))  op_xoreq  (vm, fname);  /* ← XOR */
+        else if (!strcmp(fw, "XOREQ"))  op_xoreq  (vm, fname);
         else if (!strcmp(fw, "SWAP"))   op_swap   (vm, fname);
-        else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND")) op_push(vm, fname);
-        else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV")) op_pop (vm, fname);
+        else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND"))
+            { if (args->is_inverse) op_pop(vm, fname); else op_push(vm, fname); }
+        else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV"))
+            { if (args->is_inverse) op_push(vm, fname); else op_pop(vm, fname); }
         else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
         else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
@@ -149,7 +155,13 @@ static void *thread_entry(void *arg)
             ptr = op_jmp(vm, fname, args->buffer);
             continue;
         }
-        else if (!strcmp(fw, "CALL")) {
+        else if (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) {
+            /* Quando is_inverse=1, CALL e UNCALL si scambiano di ruolo:
+               CALL  → esegue invert_op_to_line  (come UNCALL)
+               UNCALL→ esegue vm_run_BT           (come CALL)
+               Quando is_inverse=0 il comportamento è quello canonico. */
+            int do_invert = ((!strcmp(fw, "CALL")   &&  args->is_inverse) ||
+                             (!strcmp(fw, "UNCALL")  && !args->is_inverse));
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
             pthread_mutex_lock(&var_indexer_mtx);
@@ -164,27 +176,11 @@ static void *thread_entry(void *arg)
                 int si = char_id_map_get(&vm->frames[cfi_cur].VarIndexer, p);
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[cfi_cur].vars[si];
             }
-            vm_run_BT(vm, args->buffer, thread_key);
-            for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
-            vm->frames[cfi].LocalVariables = slv;
-        }
-        else if (!strcmp(fw, "UNCALL")) {
-            char *pn      = strtok(NULL, " \t");
-            uint  cfi_cur = get_findex(fname);
-            pthread_mutex_lock(&var_indexer_mtx);
-            uint cfi = clone_frame_for_thread(vm, pn);
-            pthread_mutex_unlock(&var_indexer_mtx);
-            int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
-            Stack slv = vm->frames[cfi].LocalVariables; stack_init(&vm->frames[cfi].LocalVariables);
-            char thread_key[VAR_NAME_LENGTH]; make_thread_frame_key(pn, thread_key, sizeof(thread_key));
-            char *p = NULL; int ii = 0;
-            while ((p = strtok(NULL, " \t")) && ii < pc) {
-                int si = char_id_map_get(&vm->frames[cfi_cur].VarIndexer, p);
-                vm->frames[cfi].vars[pi[ii++]] = vm->frames[cfi_cur].vars[si];
-            }
-            invert_op_to_line(vm, thread_key, args->buffer,
-                              vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            if (do_invert)
+                invert_op_to_line(vm, thread_key, args->buffer,
+                                  vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            else
+                vm_run_BT(vm, args->buffer, thread_key);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             vm->frames[cfi].LocalVariables = slv;
         }

@@ -67,8 +67,12 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
 
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
-            char *a = strtok(NULL, " \t"), *b = strtok(NULL, " \t");
-            strncpy(pid, a ? a : "", 63); strncpy(pval, b ? b : "", 63);
+            char *a = strtok(NULL, " \t");
+            char *b = strtok(NULL, " \t");
+            char *c = strtok(NULL, " \t");
+            (void)b;
+            strncpy(pid,  a ? a : "", 63);
+            strncpy(pval, c ? c : "", 63);
         } else if (!strcmp(fw, "JMPF") && !in_loop) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "FROM_ERR", 8)) {
@@ -115,8 +119,12 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
 
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
-            char *a = strtok(NULL, " \t"), *b = strtok(NULL, " \t");
-            strncpy(pid, a ? a : "", 63); strncpy(pval, b ? b : "", 63);
+            char *a = strtok(NULL, " \t");
+            char *b = strtok(NULL, " \t");
+            char *c = strtok(NULL, " \t");
+            (void)b;
+            strncpy(pid,  a ? a : "", 63);
+            strncpy(pval, c ? c : "", 63);
         } else if (!strcmp(fw, "JMPF") && !in_if) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
@@ -192,6 +200,69 @@ static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
 }
 
 /* ======================================================================
+ *  ParRange — intervallo [par_start_line .. par_end_line]
+ *
+ *  Raccogliamo tutti i blocchi PAR_START/PAR_END della procedura prima
+ *  di entrare nel loop inverso, in modo da poter skippare le istruzioni
+ *  che si trovano *dentro* un blocco PAR. Quelle istruzioni vengono
+ *  gestite da exec_par_threads(is_inverse=1) quando il loop incontra
+ *  PAR_START, e non devono essere eseguite una seconda volta dal loop.
+ * ====================================================================== */
+
+typedef struct { uint start_line, end_line; } ParRange;
+
+static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
+                                     ParRange *out, int max)
+{
+    int   n   = 0;
+    char *ptr = go_to_line(buf, proc_start);
+    while (ptr && *ptr && n < max) {
+        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        uint cur = (uint)atoi(ptr);
+        if (cur >= proc_end) { *nl = '\n'; break; }
+        char tmp[512]; strncpy(tmp, ptr, sizeof(tmp) - 1);
+        char *fw = strtok(skip_lineno(tmp), " \t");
+        if (fw && !strcmp(fw, "PAR_START")) {
+            out[n].start_line = cur;
+            int   depth = 1;
+            char *scan  = nl + 1;
+            *nl = '\n';
+            while (scan && *scan && depth > 0) {
+                char *nl2 = strchr(scan, '\n'); if (!nl2) break; *nl2 = '\0';
+                char tmp2[512]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
+                char *fw2  = strtok(skip_lineno(tmp2), " \t");
+                uint  cur2 = (uint)atoi(scan);
+                if (fw2) {
+                    if      (!strcmp(fw2, "PAR_START")) depth++;
+                    else if (!strcmp(fw2, "PAR_END")) {
+                        depth--;
+                        if (depth == 0) {
+                            out[n].end_line = cur2;
+                            n++;
+                            *nl2 = '\n';
+                            ptr = nl2 + 1;
+                            goto next;
+                        }
+                    }
+                }
+                *nl2 = '\n'; scan = nl2 + 1;
+            }
+            break; /* PAR_END non trovato */
+        }
+        *nl = '\n'; ptr = nl + 1;
+        next:;
+    }
+    return n;
+}
+
+static inline int line_is_inside_par(uint line, ParRange *pars, int npars)
+{
+    for (int i = 0; i < npars; i++)
+        if (line > pars[i].start_line && line < pars[i].end_line) return 1;
+    return 0;
+}
+
+/* ======================================================================
  *  exec_branch_inverse — forward declaration (mutua ricorsione con
  *  invert_op_to_line)
  * ====================================================================== */
@@ -201,6 +272,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                                 uint from_line, uint to_line,
                                 uint caller_fi);
 
+
 /* ======================================================================
  *  invert_op_to_line
  * ====================================================================== */
@@ -208,6 +280,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop)
 {
+    //fprintf(stderr, "[INVERT] frame='%s'\n", frame_name);
     (void)start; (void)stop;
     char *orig = strdup(buffer);
     if (!orig) { fprintf(stderr, "[UNCALL] strdup fallita\n"); exit(EXIT_FAILURE); }
@@ -220,6 +293,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 #define MAX_LOOPS 32
 #define MAX_IFS   32
 #define MAX_LINES 1024
+#define MAX_PARS  32
 
     LoopDescriptor loops[MAX_LOOPS]; int nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
     IfDescriptor   ifs  [MAX_IFS];   int nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
@@ -227,6 +301,11 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     char cur_frame[VAR_NAME_LENGTH]; strncpy(cur_frame, frame_name, VAR_NAME_LENGTH - 1);
     uint fi       = char_id_map_get(&FrameIndexer, cur_frame);
     uint start_ln = vm->frames[fi_reset].addr + 1;
+
+    /* Raccoglie i range PAR della procedura per skippare le istruzioni
+       interne durante il loop inverso (vengono gestite da exec_par_threads). */
+    ParRange pars[MAX_PARS];
+    int npars = collect_par_ranges(orig, start_ln, vm->frames[fi_reset].end_addr, pars, MAX_PARS);
 
     char *lp[MAX_LINES]; uint ln[MAX_LINES]; int nl = 0;
     char *ptr = go_to_line(orig, start_ln);
@@ -247,7 +326,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         char *clean = skip_lineno(ob);
         char *fw    = strtok(clean, " \t");
         if (!fw) { i--; continue; }
-
+        //fprintf(stderr, "[INV_LOOP] cur=%u fw='%s'\n", cur, fw);
         int li = -1; LoopZone lz = line_loop_zone(cur, loops, nloops, &li);
         if (lz == LOOP_ZONE_EVAL_ENTRY || lz == LOOP_ZONE_EVAL_EXIT  ||
             lz == LOOP_ZONE_START_LABEL|| lz == LOOP_ZONE_END_LABEL  ||
@@ -299,6 +378,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if (line_is_inside_if(cur, ifs, nifs)) { i--; continue; }
 
+        /* ── FIX: le istruzioni dentro un blocco PAR vengono gestite da
+           exec_par_threads(is_inverse=1) quando il loop incontra PAR_START.
+           Skipparle qui evita che vengano eseguite due volte. ── */
+        if (line_is_inside_par(cur, pars, npars)) { i--; continue; }
+        if (!strcmp(fw, "PAR_END")) { i--; continue; }
+
         if (!strcmp(fw, "CALL")) {
             char *pn = strtok(NULL, " \t");
             uint cfi  = char_id_map_get(&FrameIndexer, pn);
@@ -331,18 +416,34 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             i--; continue;
         }
 
+        /* PAR_START nell'inversione: rilancia i thread con is_inverse=1,
+           in modo che SSEND e SRECV vengano scambiati dentro thread_entry.
+           Le istruzioni interne sono già skippate da line_is_inside_par. */
+        if (!strcmp(fw, "PAR_START")) {
+            /* cur è il numero-riga stampato nel bytecode (es. 5 per "0005  PAR_START").
+               go_to_line conta i \n fisici: riga fisica N = numero-bytecode N+1.
+               Vogliamo la riga DOPO PAR_START, cioè fisica cur+2. */
+            char *par_ptr = go_to_line(orig, cur + 2);
+            if (par_ptr) {
+                ParBlock pb = scan_par_block(par_ptr);
+                exec_par_threads(vm, orig, cur_frame, &pb, 1, 1);
+            }
+            i--; continue;
+        }
+
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, cur_frame);
         else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, cur_frame);
-        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, cur_frame);  /* ← XOR inverso */
+        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, cur_frame);
         else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, cur_frame);
-        else if (!strcmp(fw, "PUSH"))   op_pop       (vm, cur_frame);
-        else if (!strcmp(fw, "POP"))    op_push      (vm, cur_frame);
+        else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND")) op_pop (vm, cur_frame);
+        else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV")) op_push(vm, cur_frame);
         else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, cur_frame);
         else if (!strcmp(fw, "DELOCAL"))op_local     (vm, cur_frame);
         else if (!strcmp(fw, "SHOW"))   op_show      (vm, cur_frame);
-        else if (!strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") || !strcmp(fw, "EVAL")  ||
-                 !strcmp(fw, "JMPF")  || !strcmp(fw, "JMP")   || !strcmp(fw, "ASSERT")||
-                 !strcmp(fw, "DECL")  || !strcmp(fw, "HALT"))  { /* skip */ }
+        else if (!strcmp(fw, "PARAM")   || !strcmp(fw, "LABEL")   || !strcmp(fw, "EVAL")   ||
+                 !strcmp(fw, "JMPF")    || !strcmp(fw, "JMP")     || !strcmp(fw, "ASSERT") ||
+                 !strcmp(fw, "DECL")    || !strcmp(fw, "HALT")    ||
+                 strncmp(fw, "THREAD_", 7) == 0) { /* skip */ }
         else { fprintf(stderr, "[UNCALL] op sconosciuta: '%s'\n", fw); exit(EXIT_FAILURE); }
         i--;
     }
@@ -352,6 +453,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 #undef MAX_LOOPS
 #undef MAX_IFS
 #undef MAX_LINES
+#undef MAX_PARS
 }
 
 /* ======================================================================
@@ -404,7 +506,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         if (!fw || !strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) continue;
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
         else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
-        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);  /* ← XOR inverso */
+        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
         else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
         else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
         else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);

@@ -1,7 +1,7 @@
 procedure encrypt(int m, int k)
     m^=k
 
-procedure producer(channel ch, int n)
+procedure producer(stack buffer, int n)
     local int pub_key = 17
     local int i = 0
     from i == 0 loop
@@ -15,12 +15,12 @@ procedure producer(channel ch, int n)
     delocal int i = n
     delocal int pub_key = 17
 
-procedure consumer(channel ch, stack result, int n)
+procedure consumer(stack buffer, stack result, int n)
     local int priv_key = 17
     local int i = 0
     from i == 0 loop
         local int item = 0
-            srecv(item, ch) 
+            pop(item, buffer)
             uncall encrypt(item, priv_key)
             push(item, result)
         delocal int item = 0

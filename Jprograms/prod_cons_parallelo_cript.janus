@@ -29,14 +29,21 @@ procedure consumer(channel ch, stack result, int n)
     delocal int i = n
     delocal int priv_key = 17
 
-procedure main()
-    local channel ch = empty
-    stack result
-    local int n = 5
+procedure PC(channel ch, int n, stack result)
     par
         call producer(ch, n)
     and
         call consumer(ch, result, n)
     rap
+
+procedure main()
+    local channel ch = empty
+    local stack result = nil
+    local int n = 5
+    call PC(ch, n, result)
+    show(result)
+    uncall PC(ch, n, result)
+    show(result)
     delocal int n = 5
+    delocal stack result = nil
     delocal channel ch = empty

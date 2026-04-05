@@ -62,6 +62,7 @@ static inline void op_push(VM *vm, const char *frame_name)
     sv->value[sv->stack_len++] = val;
 
     if (sv->T == TYPE_CHANNEL) {
+        //fprintf(stderr, "[CHANNEL] %s is_send=%d stack_len=%zu\n", sv->name, sv->T==TYPE_CHANNEL?1:0, sv->stack_len);
         int was_queued = op_wait(sv->channel, 1);
         if (was_queued)
             wait_for_turn_done(current_thread_args);
