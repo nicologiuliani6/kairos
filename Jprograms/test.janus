@@ -1,8 +1,12 @@
 procedure run(channel ch, int n1, int n2)
     par
-        ssend(n1, ch)
+        ssend(n1, ch) //n1=0
     and
-        srecv(n2, ch)
+        srecv(n2, ch) //n2=5
+    and
+        ssend(n2, ch) //n2=0
+     and
+        srecv(n1, ch) //n1=5
     rap
 
 procedure main()
