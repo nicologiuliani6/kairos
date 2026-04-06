@@ -1,0 +1,82 @@
+{
+  "name": "janus-debugger",
+  "displayName": "Janus Debugger",
+  "description": "Debugger reversibile per il linguaggio Janus",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onDebugResolve:janus",
+    "onLanguage:janus"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+     "breakpoints": [
+        { "language": "janus" }
+    ],
+    "languages": [
+      {
+        "id": "janus",
+        "extensions": [
+          ".janus"
+        ],
+        "aliases": [
+          "Janus"
+        ]
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "janus",
+        "label": "Janus Debug",
+        "program": "./out/dapAdapter.js",
+        "runtime": "node",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Percorso del file .janus da eseguire"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": true,
+                "description": "Fermati alla prima istruzione"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "janus",
+            "request": "launch",
+            "name": "Debug Janus",
+            "program": "${file}",
+            "stopOnEntry": true
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/vscode": "^1.80.0",
+    "@vscode/debugadapter": "^1.61.0",
+    "@vscode/debugprotocol": "^1.61.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "koffi": "^2.0.0"
+  }
+}

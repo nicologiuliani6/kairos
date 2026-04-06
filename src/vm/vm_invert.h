@@ -281,7 +281,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop)
 {
     //fprintf(stderr, "[INVERT] frame='%s'\n", frame_name);
-    (void)start; (void)stop;
     char *orig = strdup(buffer);
     if (!orig) { fprintf(stderr, "[UNCALL] strdup fallita\n"); exit(EXIT_FAILURE); }
 
@@ -308,16 +307,24 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     int npars = collect_par_ranges(orig, start_ln, vm->frames[fi_reset].end_addr, pars, MAX_PARS);
 
     char *lp[MAX_LINES]; uint ln[MAX_LINES]; int nl = 0;
-    char *ptr = go_to_line(orig, start_ln);
+    char *ptr = go_to_line(orig, start);
+    char *dbg_ptr = go_to_line(orig, start);
+    //fprintf(stderr, "[INVERT] go_to_line(%u) = '%s'\n", start, dbg_ptr ? dbg_ptr : "NULL");
     while (ptr && *ptr && nl < MAX_LINES) {
+        //fprintf(stderr, "[INVERT] start_ln=%u addr=%u\n", start_ln, vm->frames[fi_reset].addr);
         char *newline = strchr(ptr, '\n'); if (!newline) break;
         *newline = '\0';
+        uint cur_ln = (uint)atoi(ptr);
         char tmp[512]; strncpy(tmp, ptr, sizeof(tmp) - 1);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "END_PROC")) { *newline = '\n'; break; }
-        lp[nl] = strdup(ptr); ln[nl] = (uint)atoi(ptr); nl++;
+        /* Includi solo le righe nel range [start, stop) */
+        if (cur_ln >= start && cur_ln < stop) {
+            lp[nl] = strdup(ptr); ln[nl] = cur_ln; nl++;
+        }
         *newline = '\n'; ptr = newline + 1;
     }
+    //fprintf(stderr, "[INVERT] start=%u stop=%u righe_raccolte=%d\n", start, stop, nl);
 
     int i = nl - 1;
     while (i >= 0) {

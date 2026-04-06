@@ -20,8 +20,8 @@ if __name__ == '__main__':
     # Costruisci la stringa bytecode in memoria invece di scrivere su file
     lines = []
     while not BT_Compiler.queue.empty():
-        addr, instr = BT_Compiler.queue.get()
-        lines.append(f"{addr:04d}  {instr}")
+        src_line, instr = BT_Compiler.queue.get()
+        lines.append(f"{src_line:04d}  {instr}")
     
     bytecode_str = "\n".join(lines) + "\n"
     if "--dump-bytecode" in sys.argv:

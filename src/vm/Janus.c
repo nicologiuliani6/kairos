@@ -11,6 +11,7 @@
 #include "vm_ops.h"
 #include "vm_par.h"      /* deve venire prima: definisce ParBlock, scan_par_block, exec_par_threads */
 #include "vm_invert.h"   /* usa ParBlock e exec_par_threads definiti sopra */
+#include "vm_debug.h"    /* debug hook, dump JSON, breakpoint management  */
 #include "check_if_reversibility.h"
 
 /* ── thread-local state (dichiarate extern in vm_types.h) ── */
@@ -20,6 +21,38 @@ __thread uint        thread_val_IF       = 0;
 
 pthread_mutex_t var_indexer_mtx = PTHREAD_MUTEX_INITIALIZER;
 CharIdMap       FrameIndexer;
+
+/* ======================================================================
+ *  Macro DEBUG_HOOK — inserita prima di ogni istruzione in vm_run_BT.
+ *
+ *  Estrae il numero di riga dalla stringa corrente (i primi 4 caratteri
+ *  del formato "NNNN  OP ...") e chiama dbg_hook se il debugger è attivo.
+ *
+ *  ptr punta all'inizio della riga (prima che venga modificata con \0).
+ *  instr_text è lb (la copia della riga già disponibile).
+ * ====================================================================== */
+
+static inline int extract_lineno(const char *raw_line)
+{
+    /* Il formato bytecode è "NNNN  OP ..." con 4 cifre + 2 spazi */
+    char tmp[8] = {0};
+    int  i;
+    for (i = 0; i < 4 && raw_line[i] >= '0' && raw_line[i] <= '9'; i++)
+        tmp[i] = raw_line[i];
+    return atoi(tmp);
+}
+
+#define DEBUG_HOOK(raw_ptr, instr_text)                                  \
+    do {                                                                 \
+        if (vm->dbg && vm->dbg->initialized) {                          \
+            int _ln = extract_lineno(raw_ptr);                          \
+            dbg_hook(vm->dbg, _ln, fname, instr_text);                  \
+            /* Se dopo la pausa il mode è STEP_BACK, saltiamo fuori     \
+               dal loop: vm_run_BT non gestisce l'inversione diretta,   \
+               lo farà l'API esterna. */                                 \
+            if (vm->dbg->mode == VM_MODE_DONE) { *nl='\n'; goto done; } \
+        }                                                                \
+    } while(0)
 
 /* ======================================================================
  *  vm_run_BT — loop principale di esecuzione
@@ -49,9 +82,17 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         char lb[512]; strncpy(lb, ptr, sizeof(lb) - 1);
+        lb[sizeof(lb)-1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
 
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
+
+        /* ── DEBUG HOOK ── chiamato prima di ogni istruzione reale ── */
+        if (strcmp(fw, "PROC")  != 0 && strcmp(fw, "PARAM") != 0 &&
+            strcmp(fw, "LABEL") != 0 && strcmp(fw, "DECL")  != 0 &&
+            strcmp(fw, "HALT")  != 0) {
+            DEBUG_HOOK(ptr, lb);
+        }
 
         if (!strcmp(fw, "END_PROC")) {
             uint fi = get_findex(fname);
@@ -135,7 +176,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[curi].vars[src];
             }
             if (ii != pc) { fprintf(stderr, "ERROR: params mismatch UNCALL '%s'\n", pn); exit(EXIT_FAILURE); }
-            //fprintf(stderr, "[UNCALL_MAIN] chiamando invert_op_to_line per '%s'\n", pn);
             invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             *nl = '\n'; ptr = nl + 1; continue;
@@ -152,7 +192,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "SHOW"))    op_show   (vm, fname);
         else if (!strcmp(fw, "PUSHEQ"))  op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
-        else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);  /* ← XOR */
+        else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
         else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
         else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND")) op_push(vm, fname);
         else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV")) op_pop (vm, fname);
@@ -172,6 +212,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
         *nl = '\n'; ptr = nl + 1;
     }
+
+done:
     free(orig);
 }
 
@@ -242,7 +284,6 @@ void vm_exec(VM *vm, char *buffer)
 
             } else if (!strcmp(fw, "HALT")) { /* nop */
             }
-            /* tutte le istruzioni runtime sono ignorate in questa fase */
         }
         *nl = '\n'; ptr = nl + 1; line++;
     }
@@ -278,8 +319,9 @@ void vm_dump(VM *vm)
 }
 
 /* ======================================================================
- *  Entry point
+ *  Entry point — esecuzione normale (invariato)
  * ====================================================================== */
+
 #define AST_BUFFER (1024 * 10)
 
 void vm_run_from_string(const char *bytecode)
@@ -292,6 +334,286 @@ void vm_run_from_string(const char *bytecode)
         fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
 
     VM vm; memset(&vm, 0, sizeof(VM));
+    vm.dbg = NULL;   /* modalità normale: nessun debugger */
     vm_exec(&vm, ast);
     vm_dump(&vm);
+}
+
+/* ======================================================================
+ *  API di debug pubblica
+ *
+ *  Struttura di utilizzo dal DAP adapter (Node.js via ffi-napi):
+ *
+ *    VMDebugState *dbg = vm_debug_new();
+ *    vm_debug_set_breakpoint(dbg, 12);
+ *    vm_debug_set_breakpoint(dbg, 25);
+ *    dbg->on_pause = my_callback;
+ *    dbg->userdata = &my_context;
+ *    vm_debug_start(bytecode, dbg);   // avvia in un thread separato
+ *    // ... nel thread principale:
+ *    vm_debug_step(dbg);
+ *    vm_debug_continue(dbg);
+ *    char buf[65536]; vm_debug_dump_json_ext(dbg, buf, sizeof(buf));
+ *    vm_debug_free(dbg);
+ * ====================================================================== */
+
+/* Stato globale del debugger (usato dall'API esterna).
+   In un processo normale ci sarà una sola sessione di debug alla volta. */
+static VM            *g_debug_vm  = NULL;
+static VMDebugState  *g_debug_dbg = NULL;
+static char          *g_debug_buf = NULL;   /* copia del bytecode */
+static char          *g_debug_buf_orig = NULL;   
+static pthread_t      g_debug_tid;
+
+/* Thread che esegue vm_exec (e quindi vm_run_BT) in background */
+static void *debug_exec_thread(void *arg)
+{
+    (void)arg;
+    vm_exec(g_debug_vm, g_debug_buf);
+    vm_dump(g_debug_vm);
+    if (g_debug_dbg) {
+        /* Segnala terminazione anche se eravamo in pausa */
+        pthread_mutex_lock(&g_debug_dbg->pause_mtx);
+        g_debug_dbg->mode = VM_MODE_DONE;
+        pthread_cond_broadcast(&g_debug_dbg->pause_cond);
+        pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
+        if (g_debug_dbg->on_pause)
+            g_debug_dbg->on_pause(-1, "done", g_debug_dbg->userdata);
+    }
+    return NULL;
+}
+
+/* Alloca e inizializza uno stato di debug */
+VMDebugState *vm_debug_new(void)
+{
+    VMDebugState *dbg = calloc(1, sizeof(VMDebugState));
+    dbg_init(dbg);
+    return dbg;
+}
+
+/* Libera le risorse */
+void vm_debug_free(VMDebugState *dbg)
+{
+    if (!dbg) return;
+    dbg_destroy(dbg);
+    free(dbg);
+}
+
+/*
+ * vm_debug_start — avvia l'esecuzione in modalità debug in un thread
+ *                  separato. La VM si fermerà subito alla prima istruzione
+ *                  (mode = VM_MODE_STEP all'avvio) oppure al primo
+ *                  breakpoint se mode = VM_MODE_CONTINUE.
+ */
+void vm_debug_start(const char *bytecode, VMDebugState *dbg)
+{
+    /* Cleanup eventuale sessione precedente */
+    if (g_debug_vm) {
+        if (g_debug_dbg) dbg_resume(g_debug_dbg, VM_MODE_DONE);
+        pthread_join(g_debug_tid, NULL);
+        free(g_debug_buf);
+        free(g_debug_vm);
+        g_debug_vm  = NULL;
+        g_debug_buf = NULL;
+    }
+
+    g_debug_dbg = dbg;
+    g_debug_vm  = calloc(1, sizeof(VM));
+    g_debug_vm->dbg = dbg;
+
+    /* Copia del bytecode */
+    size_t blen = strlen(bytecode) + 1;
+    g_debug_buf = malloc(blen);
+    memcpy(g_debug_buf, bytecode, blen);
+    g_debug_buf_orig = malloc(blen);
+    memcpy(g_debug_buf_orig, bytecode, blen);
+
+    /* Verifica reversibilità (non bloccante, solo warning) */
+    if (vm_check_if_reversibility(g_debug_buf) > 0)
+        fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
+
+    /* Di default parte in modalità STEP: si ferma alla prima istruzione */
+    if (dbg->mode == VM_MODE_RUN)
+        dbg->mode = VM_MODE_STEP;
+
+    pthread_create(&g_debug_tid, NULL, debug_exec_thread, NULL);
+        /* Aspetta che la VM raggiunga la prima PAUSE (o termini) */
+    pthread_mutex_lock(&dbg->pause_mtx);
+    while (!dbg->first_pause_reached && dbg->mode != VM_MODE_DONE)
+        pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+    pthread_mutex_unlock(&dbg->pause_mtx);
+
+}
+
+/*
+ * vm_debug_step — avanza di una istruzione poi si ferma.
+ * Ritorna il numero di riga corrente dopo lo step, -1 se terminato.
+ */
+int vm_debug_step(VMDebugState *dbg)
+{
+    if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
+
+    pthread_mutex_lock(&dbg->pause_mtx);
+    dbg->mode = VM_MODE_STEP;
+    pthread_cond_signal(&dbg->pause_cond);
+    while (dbg->mode == VM_MODE_STEP)
+        pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+    pthread_mutex_unlock(&dbg->pause_mtx);
+
+    return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
+}
+
+/*
+ * vm_debug_step_back — inverte l'ultima istruzione eseguita.
+ *
+ * Grazie alla reversibilità di Janus possiamo re-eseguire all'indietro
+ * usando invert_op_to_line sul record in cima alla history.
+ * Per ora: segnala STEP_BACK alla VM e riprende; la VM esegue
+ * l'inversione e torna in PAUSE.
+ *
+ * NOTA: l'inversione vera di singola istruzione richiede che vm_run_BT
+ * riconosca VM_MODE_STEP_BACK e chiami il codice di inversione.
+ * Questa è la base su cui costruire — l'implementazione completa
+ * dipende dal fatto che non tutte le istruzioni hanno un inverso
+ * semplice (CALL→UNCALL, PUSHEQ→MINEQ, ecc.). Vedere vm_invert.h.
+ */
+int vm_debug_step_back(VMDebugState *dbg)
+{
+    if (!dbg || dbg->history_top < 0) return -1;
+    
+    /* Pop del record corrente (la riga su cui siamo fermi) */
+    ExecRecord *rec = dbg_pop_history(dbg);
+    if (!rec) return -1;
+    //fprintf(stderr, "[STEP_BACK] invertendo riga %d: '%s'\n", rec->line, rec->instr);
+    /* Esegui l'inversione della riga che abbiamo appena lasciato */
+    if (g_debug_vm) {
+        uint fi = char_id_map_get(&FrameIndexer, rec->frame);
+        invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig,
+                  rec->line, rec->line + 1);
+    }
+
+    /* Aggiorna posizione al record precedente */
+    int prev_line = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].line : 0;
+    dbg->current_line = prev_line;
+    if (dbg->history_top >= 0)
+        strncpy(dbg->current_frame, dbg->history[dbg->history_top].frame, VAR_NAME_LENGTH - 1);
+
+    if (dbg->on_pause)
+        dbg->on_pause(prev_line, dbg->current_frame, dbg->userdata);
+    return prev_line;
+}
+
+/*
+ * vm_debug_continue — riprendi fino al prossimo breakpoint (o fine).
+ * Ritorna la riga del breakpoint raggiunto, -1 se terminato.
+ */
+int vm_debug_continue(VMDebugState *dbg)
+{
+    fprintf(stderr, "[vm_debug_continue] mode=%d\n", dbg ? dbg->mode : -99);
+    if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
+
+    pthread_mutex_lock(&dbg->pause_mtx);
+    dbg->mode = VM_MODE_CONTINUE;
+    pthread_cond_signal(&dbg->pause_cond);
+    /* Ora aspettiamo mentre teniamo il mutex — il thread VM
+       lo rilascerà dentro pthread_cond_wait e lo riprenderà
+       solo quando segnala PAUSE o DONE, garantendo che non
+       perdiamo nessun evento. */
+    while (dbg->mode == VM_MODE_CONTINUE)
+        pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+    pthread_mutex_unlock(&dbg->pause_mtx);
+
+    return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
+}
+
+/*
+ * vm_debug_continue_inverse — continua all'indietro fino al prossimo
+ * breakpoint. Utilizza invert_op_to_line iterativamente sulla history.
+ */
+int vm_debug_continue_inverse(VMDebugState *dbg)
+{
+    if (!dbg || dbg->history_top < 0) return -1;
+    while (dbg->history_top >= 0) {
+        ExecRecord *rec = &dbg->history[dbg->history_top];
+        if (dbg_is_breakpoint(dbg, rec->line)) {
+            dbg->current_line = rec->line;
+            strncpy(dbg->current_frame, rec->frame, VAR_NAME_LENGTH - 1);
+            dbg->history_top--;
+            if (dbg->on_pause)
+                dbg->on_pause(rec->line, rec->frame, dbg->userdata);
+            return rec->line;
+        }
+        dbg->history_top--;
+    }
+    /* Arrivati all'inizio della history */
+    if (dbg->on_pause)
+        dbg->on_pause(0, "start", dbg->userdata);
+    return 0;
+}
+
+/*
+ * vm_debug_goto_line — continua fino a una riga specifica.
+ * Equivalente a mettere un breakpoint temporaneo su quella riga
+ * e chiamare continue, poi rimuoverlo.
+ */
+int vm_debug_goto_line(VMDebugState *dbg, int target_line)
+{
+    if (!dbg) return -1;
+    _vm_debug_set_breakpoint(dbg, target_line);      // ← underscore
+    int result = vm_debug_continue(dbg);
+    _vm_debug_clear_breakpoint(dbg, target_line);    // ← underscore
+    return result;
+}
+
+/*
+ * vm_debug_dump_json_ext — serializza lo stato completo della VM in JSON.
+ * Il buffer deve essere pre-allocato dal chiamante.
+ * Ritorna il numero di byte scritti.
+ */
+int vm_debug_dump_json_ext(VMDebugState *dbg, char *out, int outsz)
+{
+    if (!g_debug_vm || !out) return 0;
+    (void)dbg;
+    return vm_debug_dump_json(g_debug_vm, out, outsz);
+}
+
+/*
+ * vm_debug_vars_json_ext — solo le variabili del frame corrente.
+ */
+int vm_debug_vars_json_ext(VMDebugState *dbg, char *out, int outsz)
+{
+    if (!g_debug_vm || !out || !dbg) return 0;
+    return vm_debug_vars_json(g_debug_vm, dbg->current_frame, out, outsz);
+}
+
+/*
+ * vm_debug_stop — termina la sessione di debug forzatamente.
+ */
+void vm_debug_stop(VMDebugState *dbg)
+{
+    if (!dbg) return;
+    dbg_resume(dbg, VM_MODE_DONE);
+    pthread_join(g_debug_tid, NULL);
+    free(g_debug_buf); 
+    g_debug_buf = NULL;
+    free(g_debug_buf_orig);
+    g_debug_buf_orig = NULL;  
+    free(g_debug_vm);  
+    g_debug_vm  = NULL;
+    g_debug_dbg = NULL;
+}
+
+void vm_debug_set_breakpoint(VMDebugState *dbg, int line)
+{
+    _vm_debug_set_breakpoint(dbg, line);
+}
+
+void vm_debug_clear_breakpoint(VMDebugState *dbg, int line)
+{
+    _vm_debug_clear_breakpoint(dbg, line);
+}
+
+void vm_debug_clear_all_breakpoints(VMDebugState *dbg)
+{
+    if (dbg) dbg->bp_count = 0;
 }

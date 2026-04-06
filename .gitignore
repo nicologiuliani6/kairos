@@ -19,3 +19,7 @@ venv/
 
 # Temp
 bytecode.txt
+
+node_modules/
+out/
+test_debug
