@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "janus",
+            "request": "launch",
+            "name": "Debug Janus",
+            "program": "${file}",
+            "stopOnEntry": true
+        }
+    ]
+}

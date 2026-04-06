@@ -32,10 +32,10 @@ def p_procedure(p):
     '''procedure : PROCEDURE ID LPAREN RPAREN opt_body
                  | PROCEDURE ID LPAREN param_list RPAREN opt_body'''
     if len(p) == 6:
-        p[0] = ('procedure', p[2], [], p[5])
+        p[0] = ('procedure', p[2], [], p[5], p.lineno(1))
         if VERBOSE: print(f"procedure: {p[2]}()")
     else:
-        p[0] = ('procedure', p[2], p[4], p[6])
+        p[0] = ('procedure', p[2], p[4], p[6], p.lineno(1))
         if VERBOSE: print(f"procedure: {p[2]}({p[4]})")
 
 # ── Body ────────────────────────────────────────────────────────────────────
@@ -78,9 +78,6 @@ def p_value(p):
     p[0] = p[1]
 
 # ── Operatori di confronto ──────────────────────────────────────────────────
-# Tutti i 6 operatori. La condizione è un nodo ('cond', op, left, right)
-# così il bytecode compiler può emettere l'operatore corretto.
-
 def p_condition(p):
     '''condition : expr EQEQ expr
                  | expr NEQ  expr
@@ -93,32 +90,31 @@ def p_condition(p):
 # ── Dichiarazioni di tipo ───────────────────────────────────────────────────
 def p_type_decl(p):
     '''statement : type ID'''
-    p[0] = ('decl', p[1], p[2])
+    p[0] = ('decl', p[1], p[2], p.lineno(1))
     if VERBOSE: print(f"dichiarazione: {p[2]} ({p[1]})")
 
 # ── Assegnamenti reversibili ────────────────────────────────────────────────
-# in p_assign, aggiungi il caso XOR:
 def p_assign(p):
     '''statement : ID PLUSEQUALS expr
                  | ID MINUSEQUALS expr
                  | ID XOREQUALS expr
                  | ID SWAP expr'''
-    p[0] = ('assign', p[1], p[2], p[3])
+    p[0] = ('assign', p[1], p[2], p[3], p.lineno(1))
 
 # ── Local / Delocal ─────────────────────────────────────────────────────────
 def p_local(p):
     '''statement : LOCAL type ID EQUALS value'''
-    p[0] = ('local', p[2], p[3], p[5])
+    p[0] = ('local', p[2], p[3], p[5], p.lineno(1))
     if VERBOSE: print(f"local: {p[3]} ({p[2]}) = {p[5]}")
 
 def p_delocal(p):
     '''statement : DELOCAL type ID EQUALS value
                  | DELOCAL type ID'''
     if len(p) == 6:
-        p[0] = ('delocal', p[2], p[3], p[5])
+        p[0] = ('delocal', p[2], p[3], p[5], p.lineno(1))
         if VERBOSE: print(f"delocal: {p[3]} ({p[2]}) = {p[5]}")
     else:
-        p[0] = ('delocal', p[2], p[3], None)
+        p[0] = ('delocal', p[2], p[3], None, p.lineno(1))
         if VERBOSE: print(f"delocal: {p[3]} ({p[2]})")
 
 # ── Liste argomenti ─────────────────────────────────────────────────────────
@@ -132,36 +128,36 @@ def p_call(p):
     '''statement : CALL ID LPAREN RPAREN
                  | CALL ID LPAREN arg_list RPAREN'''
     if len(p) == 5:
-        p[0] = ('call', p[2], [])
+        p[0] = ('call', p[2], [], p.lineno(1))
         if VERBOSE: print(f"call: {p[2]}()")
     else:
-        p[0] = ('call', p[2], p[4])
+        p[0] = ('call', p[2], p[4], p.lineno(1))
         if VERBOSE: print(f"call: {p[2]}({p[4]})")
 
 def p_call_direct(p):
     '''statement : ID LPAREN RPAREN
                  | ID LPAREN arg_list RPAREN'''
     if len(p) == 4:
-        p[0] = ('call_direct', p[1], [])
+        p[0] = ('call_direct', p[1], [], p.lineno(1))
         if VERBOSE: print(f"call diretto: {p[1]}()")
     else:
-        p[0] = ('call_direct', p[1], p[3])
+        p[0] = ('call_direct', p[1], p[3], p.lineno(1))
         if VERBOSE: print(f"call diretto: {p[1]}({p[3]})")
 
 def p_uncall(p):
     '''statement : UNCALL ID LPAREN RPAREN
                  | UNCALL ID LPAREN arg_list RPAREN'''
     if len(p) == 5:
-        p[0] = ('uncall', p[2], [])
+        p[0] = ('uncall', p[2], [], p.lineno(1))
         if VERBOSE: print(f"uncall: {p[2]}()")
     else:
-        p[0] = ('uncall', p[2], p[4])
+        p[0] = ('uncall', p[2], p[4], p.lineno(1))
         if VERBOSE: print(f"uncall: {p[2]}({p[4]})")
 
 # ── FROM loop ───────────────────────────────────────────────────────────────
 def p_from(p):
     '''statement : FROM condition LOOP opt_body UNTIL condition'''
-    p[0] = ('from', p[2], p[4], p[6])
+    p[0] = ('from', p[2], p[4], p[6], p.lineno(1))
     if VERBOSE: print(f"from: {p[2]} until: {p[6]}")
 
 # ── IF / ELSE ───────────────────────────────────────────────────────────────
@@ -169,10 +165,10 @@ def p_if(p):
     '''statement : IF condition THEN opt_body FI condition
                  | IF condition THEN opt_body ELSE opt_body FI condition'''
     if len(p) == 7:
-        p[0] = ('if', p[2], p[4], [], p[6])
+        p[0] = ('if', p[2], p[4], [], p[6], p.lineno(1))
         if VERBOSE: print(f"if: {p[2]} fi: {p[6]}")
     else:
-        p[0] = ('if', p[2], p[4], p[6], p[8])
+        p[0] = ('if', p[2], p[4], p[6], p[8], p.lineno(1))
         if VERBOSE: print(f"if: {p[2]} else fi: {p[8]}")
 
 # ── PAR ─────────────────────────────────────────────────────────────────────
@@ -183,7 +179,7 @@ def p_par_branch_list(p):
 
 def p_par(p):
     '''statement : PAR par_branch_list RAP'''
-    p[0] = ('par', p[2])
+    p[0] = ('par', p[2], p.lineno(1))
     if VERBOSE: print(f"par: {p[2]}")
 
 # ── Errore ───────────────────────────────────────────────────────────────────
