@@ -291,10 +291,8 @@ int vm_check_if_reversibility(const char *buffer)
             const char *op = L->op;
             if (strcmp(op, "DECL") == 0) 
             {
-                printf("[ERROR] In una funzione (%s) puoi dichiarare solo variabili local!\n (riga %d)\n",
-                       proc_name,L->lineno);
                 errors++;
-                exit(EXIT_FAILURE);
+                vm_debug_panic("[ERROR] In una funzione (%s) puoi dichiarare solo variabili local!\n (riga %d)\n", proc_name,L->lineno);
             }
         }
 

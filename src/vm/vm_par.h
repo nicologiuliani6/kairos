@@ -185,7 +185,7 @@ static void *thread_entry(void *arg)
             vm->frames[cfi].LocalVariables = slv;
         }
         else if (!strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }
-        else { fprintf(stderr, "[THREAD] op sconosciuta: '%s'\n", fw); exit(EXIT_FAILURE); }
+        else { vm_debug_panic("[THREAD] op sconosciuta: '%s'\n", fw); }
 
         *nl = '\n'; ptr = nl + 1;
     }

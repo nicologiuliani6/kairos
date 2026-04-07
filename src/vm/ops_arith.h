@@ -1,4 +1,5 @@
 #pragma once
+#include "vm_panic.h"
 /* ======================================================================
  *  ops_arith.h — Operazioni aritmetiche e di confronto della VM
  * ====================================================================== */
@@ -9,7 +10,7 @@ static inline void op_pusheq(VM *vm, const char *frame_name)
     char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
     uint  Findex = get_findex(frame_name);
     Var  *v      = get_var(vm, Findex, ID, "PUSHEQ");
-    if (v->T != TYPE_INT) { fprintf(stderr, "[VM] PUSHEQ non su INT!\n"); exit(EXIT_FAILURE); }
+    if (v->T != TYPE_INT) { vm_debug_panic("[VM] PUSHEQ non su INT!\n");}
     *(v->value) += resolve_value(vm, Findex, expr);
 }
 
@@ -19,7 +20,7 @@ static inline void op_mineq(VM *vm, const char *frame_name)
     char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
     uint  Findex = get_findex(frame_name);
     Var  *v      = get_var(vm, Findex, ID, "MINEQ");
-    if (v->T != TYPE_INT) { fprintf(stderr, "[VM] MINEQ non su INT!\n"); exit(EXIT_FAILURE); }
+    if (v->T != TYPE_INT) { vm_debug_panic("[VM] MINEQ non su INT!\n"); }
     *(v->value) -= resolve_value(vm, Findex, expr);
 }
 
@@ -29,7 +30,7 @@ static inline void op_xoreq(VM *vm, const char *frame_name)
     char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
     uint  Findex = get_findex(frame_name);
     Var  *v      = get_var(vm, Findex, ID, "XOREQ");
-    if (v->T != TYPE_INT) { fprintf(stderr, "[VM] XOREQ non su INT!\n"); exit(EXIT_FAILURE); }
+    if (v->T != TYPE_INT) { vm_debug_panic("[VM] XOREQ non su INT!\n"); }
     *(v->value) ^= resolve_value(vm, Findex, expr);
 }
 

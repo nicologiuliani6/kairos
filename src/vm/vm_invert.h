@@ -282,7 +282,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 {
     //fprintf(stderr, "[INVERT] frame='%s'\n", frame_name);
     char *orig = strdup(buffer);
-    if (!orig) { fprintf(stderr, "[UNCALL] strdup fallita\n"); exit(EXIT_FAILURE); }
+    if (!orig) { vm_debug_panic("[UNCALL] strdup fallita\n"); }
 
     char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
     char *at = strchr(base, '@'); if (at) *at = '\0';
@@ -345,7 +345,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             else {
                 int t = -1;
                 for (int j = nl - 1; j >= 0; j--) if (ln[j] == loops[li].jmpf_start_line) { t = j; break; }
-                if (t < 0) { fprintf(stderr, "[UNCALL] jmpf_start\n"); exit(1); }
+                if (t < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
                 i = t - 1;
             }
             continue;
@@ -356,7 +356,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             else {
                 int t = -1;
                 for (int j = 0; j < nl; j++) if (ln[j] == loops[li].jmpf_err_line) { t = j; break; }
-                if (t < 0) { fprintf(stderr, "[UNCALL] jmpf_err\n"); exit(1); }
+                if (t < 0) { vm_debug_panic("[UNCALL] jmpf_err\n"); }
                 i = t - 1;
             }
             continue;
@@ -451,7 +451,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                  !strcmp(fw, "JMPF")    || !strcmp(fw, "JMP")     || !strcmp(fw, "ASSERT") ||
                  !strcmp(fw, "DECL")    || !strcmp(fw, "HALT")    ||
                  strncmp(fw, "THREAD_", 7) == 0) { /* skip */ }
-        else { fprintf(stderr, "[UNCALL] op sconosciuta: '%s'\n", fw); exit(EXIT_FAILURE); }
+        else { vm_debug_panic("[UNCALL] op sconosciuta: '%s'\n", fw); }
         i--;
     }
 

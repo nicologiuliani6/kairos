@@ -18,4 +18,5 @@ procedure main()
     show(a)            // torna 3
     show(b)            // torna 7
     delocal int b = 7
+    show(a)
     delocal int a = 3

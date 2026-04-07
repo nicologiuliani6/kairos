@@ -4,6 +4,8 @@
 #include <pthread.h>
 
 /* ── ordine di inclusione importante ── */
+#define DEFINE_VM_DEBUG_PANIC
+#include "vm_panic.h"   // ← deve venire prima di tutti gli altri
 #include "vm_types.h"
 #include "vm_helpers.h"
 #include "vm_channel.h"
@@ -101,7 +103,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         if (!strcmp(fw, "END_PROC")) {
             uint fi = get_findex(fname);
             if (stack_size(&vm->frames[fi].LocalVariables) > -1)
-                vm_fatal("[VM] END_PROC: variabili LOCAL non chiuse!\n");
+                vm_debug_panic("[VM] END_PROC: variabili LOCAL non chiuse!\n");
             *nl = '\n';
             if (cs_top >= 0) {
                 int cfi = cs[cs_top].callee_findex;
@@ -134,7 +136,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
                               : char_id_map_get(&FrameIndexer, pn);
-            if (cs_top + 1 >= MAX_FRAMES) vm_fatal("[VM] CALL: stack overflow!\n");
+            if (cs_top + 1 >= MAX_FRAMES) vm_debug_panic("[VM] CALL: stack overflow!\n");
             cs_top++;
             *nl = '\n';
             cs[cs_top].return_ptr         = nl + 1;
@@ -149,13 +151,15 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
                 if (!char_id_map_exists(&vm->frames[cfi_cur].VarIndexer, p))
-                    { fprintf(stderr, "[VM] CALL: '%s' non def\n", p); exit(EXIT_FAILURE); }
+                    { vm_debug_panic("[VM] CALL: '%s' non def\n", p);}
                 int src = char_id_map_get(&vm->frames[cfi_cur].VarIndexer, p);
                 if (!vm->frames[cfi_cur].vars[src])
-                    { fprintf(stderr, "[VM] CALL: '%s' NULL\n", p); exit(EXIT_FAILURE); }
+                    { vm_debug_panic("[VM] CALL: '%s' NULL\n", p);}
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[cfi_cur].vars[src];
             }
-            if (ii != pc) { fprintf(stderr, "ERROR: params mismatch '%s'\n", pn); exit(EXIT_FAILURE); }
+            if (ii != pc) { 
+                vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn); 
+            }
             if (is_rec) {
                 uint bfi = char_id_map_get(&FrameIndexer, pn);
                 vm->frames[bfi].recursion_depth = new_depth;
@@ -165,7 +169,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             else        strncpy(nfname, pn, VAR_NAME_LENGTH - 1);
             strncpy(fname, nfname, VAR_NAME_LENGTH - 1);
             ptr = go_to_line(orig, vm->frames[cfi].addr + 1);
-            if (!ptr) vm_fatal("[VM] CALL: indirizzo non trovato!\n");
+            if (!ptr) vm_debug_panic("[VM] CALL: indirizzo non trovato!\n");
             continue;
         }
         else if (!strcmp(fw, "UNCALL")) {
@@ -179,7 +183,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 int src = char_id_map_get(&vm->frames[curi].VarIndexer, p);
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[curi].vars[src];
             }
-            if (ii != pc) { fprintf(stderr, "ERROR: params mismatch UNCALL '%s'\n", pn); exit(EXIT_FAILURE); }
+            if (ii != pc) { 
+                 vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn);
+                }
             invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             *nl = '\n'; ptr = nl + 1; continue;
@@ -212,7 +218,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         }
         else if (!strcmp(fw, "PROC") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "HALT"))  { /* skip */ }
-        else { fprintf(stderr, "[VM] op sconosciuta: '%s'\n", fw); exit(EXIT_FAILURE); }
+        else { vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw); }
 
         *nl = '\n'; ptr = nl + 1;
     }
@@ -261,7 +267,7 @@ void vm_exec(VM *vm, char *buffer)
             } else if (!strcmp(fw, "DECL")) {
                 char *type = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
                 int   vi   = char_id_map_get(&vm->frames[vm->frame_top].VarIndexer, vn);
-                if (vm->frames[vm->frame_top].vars[vi]) vm_fatal("[VM] Variabile già definita!\n");
+                if (vm->frames[vm->frame_top].vars[vi]) vm_debug_panic("[VM] Variabile già definita!\n");
                 vm->frames[vm->frame_top].vars[vi] = malloc(sizeof(Var));
                 alloc_var(vm->frames[vm->frame_top].vars[vi], type, vn);
                 vm->frames[vm->frame_top].vars[vi]->is_local = 0;
@@ -271,7 +277,7 @@ void vm_exec(VM *vm, char *buffer)
             } else if (!strcmp(fw, "PARAM")) {
                 char *vtype = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
                 int   vi    = char_id_map_get(&vm->frames[vm->frame_top].VarIndexer, vn);
-                if (vm->frames[vm->frame_top].vars[vi]) vm_fatal("[VM] PARAM già definito!\n");
+                if (vm->frames[vm->frame_top].vars[vi]) vm_debug_panic("[VM] PARAM già definito!\n");
                 vm->frames[vm->frame_top].vars[vi]          = calloc(1, sizeof(Var));
                 vm->frames[vm->frame_top].vars[vi]->T        = TYPE_PARAM;
                 vm->frames[vm->frame_top].vars[vi]->is_local = 0;
@@ -386,7 +392,7 @@ void vm_run_from_string(const char *bytecode)
 /* Stato globale del debugger (usato dall'API esterna).
    In un processo normale ci sarà una sola sessione di debug alla volta. */
 static VM            *g_debug_vm  = NULL;
-static VMDebugState  *g_debug_dbg = NULL;
+VMDebugState  *g_debug_dbg = NULL;
 static char          *g_debug_buf = NULL;   /* copia del bytecode */
 static char          *g_debug_buf_orig = NULL;   
 static pthread_t      g_debug_tid;
@@ -666,5 +672,14 @@ int vm_debug_output_ext(VMDebugState *dbg, char *out, int outsz)
     memcpy(out, dbg->out_buf, n);
     out[n] = '\0';
     dbg->out_len = 0;
+    return n;
+}
+int vm_debug_error_ext(VMDebugState *dbg, char *out, int outsz)
+{
+    if (!dbg || dbg->last_error[0] == '\0') return 0;
+    int n = (int)strlen(dbg->last_error);
+    if (n >= outsz) n = outsz - 1;
+    memcpy(out, dbg->last_error, n);
+    out[n] = '\0';
     return n;
 }

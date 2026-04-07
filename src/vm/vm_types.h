@@ -113,6 +113,7 @@ typedef struct {
     /* Output buffer — usato in DAP_MODE al posto di printf */
     char        out_buf[DBG_OUTPUT_BUF_SIZE];
     int         out_len;
+    char last_error[1024]; 
 } VMDebugState;
 
 typedef struct {

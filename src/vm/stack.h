@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+void vm_debug_panic(const char *fmt, ...);
+
+
 #define STACK_MAX 100
 
 // ===== Forward declaration =====
@@ -40,8 +43,7 @@ static inline int stack_size(Stack* s) {
 // push (passi un puntatore già esistente)
 static inline void stack_push(Stack* s, Var* v) {
     if (stack_is_full(s)) {
-        printf("Stack overflow\n");
-        exit(1);
+        vm_debug_panic("Stack overflow\n");
     }
     s->data[++s->top] = v;
 }
@@ -49,8 +51,7 @@ static inline void stack_push(Stack* s, Var* v) {
 // pop (ritorna il puntatore, NON libera)
 static inline Var* stack_pop(Stack* s) {
     if (stack_is_empty(s)) {
-        printf("DELOCAL su variabile non local!\n");
-        exit(EXIT_FAILURE);
+        vm_debug_panic("DELOCAL su variabile non local!\n");
     }
     return s->data[s->top--];
 }
@@ -58,8 +59,7 @@ static inline Var* stack_pop(Stack* s) {
 // peek
 static inline Var* stack_peek(Stack* s) {
     if (stack_is_empty(s)) {
-        printf("Stack empty\n");
-        exit(1);
+        vm_debug_panic("Stack empty\n");
     }
     return s->data[s->top];
 }

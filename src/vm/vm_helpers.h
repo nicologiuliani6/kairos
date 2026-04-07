@@ -24,8 +24,7 @@ static inline void make_thread_frame_key(const char *proc, char *out, size_t sz)
 static inline uint get_findex(const char *name)
 {
     if (!char_id_map_exists(&FrameIndexer, name)) {
-        fprintf(stderr, "[VM] get_findex: frame '%s' non trovato!\n", name);
-        exit(EXIT_FAILURE);
+        vm_debug_panic("[VM] get_findex: frame '%s' non trovato!\n", name);
     }
     return char_id_map_get(&FrameIndexer, name);
 }
@@ -101,8 +100,7 @@ static inline int resolve_expr(VM *vm, uint fi, const char *tok)
 
         if (op == '+') return lval + rval;
         if (op == '-') return lval - rval;
-        fprintf(stderr, "[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
-        exit(EXIT_FAILURE);
+        vm_debug_panic("[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
     }
 
     /* Atom semplice */
@@ -131,13 +129,11 @@ static inline void read_rest_of_expr(char *out, size_t outsz)
 static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op)
 {
     if (!char_id_map_exists(&vm->frames[fi].VarIndexer, name)) {
-        fprintf(stderr, "[VM] %s: variabile '%s' non definita!\n", op, name);
-        exit(EXIT_FAILURE);
+        vm_debug_panic("[VM] %s: variabile '%s' non definita!\n", op, name);
     }
     uint idx = char_id_map_get(&vm->frames[fi].VarIndexer, name);
     if (!vm->frames[fi].vars[idx]) {
-        fprintf(stderr, "[VM] %s: variabile '%s' è NULL\n", op, name);
-        exit(EXIT_FAILURE);
+        vm_debug_panic("[VM] %s: variabile '%s' è NULL\n", op, name);
     }
     return vm->frames[fi].vars[idx];
 }
@@ -192,7 +188,7 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
         v->channel   = calloc(1, sizeof(Channel));
         pthread_mutex_init(&v->channel->mtx, NULL);
     } else {
-        vm_fatal("[VM] tipo non supportato\n");
+        vm_debug_panic("[VM] tipo non supportato\n");
     }
 }
 
