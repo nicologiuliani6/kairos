@@ -8,7 +8,6 @@
 #define DBG_OUTPUT_BUF_SIZE (1024 * 1024)  // 1 MB
 
 #define uint     unsigned int
-#define vm_fatal(msg) do { fprintf(stderr, msg); exit(EXIT_FAILURE); } while(0)
 
 typedef enum {
     TYPE_INT     = 0,

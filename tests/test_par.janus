@@ -24,5 +24,3 @@ procedure main()
             show(x22)
         rap
     rap
-    show(x21)
-    show(x22)

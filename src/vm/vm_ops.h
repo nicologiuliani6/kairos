@@ -327,8 +327,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     /* ── 3. Ordine LIFO ── */
     if (strcmp(V->name, Vname) != 0) {
-        vm_debug_panic("[VM] DELOCAL: ordine errato! atteso '%s', trovato '%s'\n",
-            Vname, V->name);
+        vm_debug_panic("[VM] DELOCAL: ordine errato! atteso '%s', trovato '%s'\n", Vname, V->name);
     }
 
     /* ── 4. Tipo ── */
@@ -348,10 +347,10 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     if (!ok) {
         if (V->T == TYPE_INT)
-            fprintf(stderr,
-                "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",Vname, Vvalue, *(V->value));
+            vm_debug_panic( "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",Vname, Vvalue, *(V->value));
         else
             vm_debug_panic("[VM] DELOCAL: %s non è nil/empty!\n", Vname);
+        
     }
 
     /* ── 6. Distruggi ── */
