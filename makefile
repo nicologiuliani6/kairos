@@ -18,7 +18,7 @@ CC          := gcc
 CFLAGS      := -shared -fPIC -Wall -Wextra -pthread
 CFLAGS_DBG  := $(CFLAGS) -g -fsanitize=address,undefined -DDEBUG
 CFLAGS_REL  := $(CFLAGS) -O2 -DNDEBUG -Wno-stringop-truncation
-CFLAGS_DAP  := $(CFLAGS) -g -DDEBUG
+CFLAGS_DAP  := $(CFLAGS) -g -DDEBUG -DDAP_MODE
 
 # Version-script con i simboli pubblici del debugger
 # Nota: --version-script non è compatibile con ASan, quindi solo in release.
@@ -85,7 +85,8 @@ $(VERSCRIPT): $(VM_DIR)/Janus.c
 	    vm_debug_clear_breakpoint \
 	    vm_debug_clear_all_breakpoints \
 	    vm_debug_dump_json_ext \
-	    vm_debug_vars_json_ext; do \
+		vm_debug_vars_json_ext \
+    	vm_debug_output_ext; do \
 	        printf '    %s;\n' $$sym >> $@; \
 	done
 	@printf '  local:\n    *;\n};\n' >> $@

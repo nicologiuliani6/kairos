@@ -166,4 +166,4 @@ if __name__ == '__main__':
             src_line, instr = compiler.queue.get()
             line = f"{src_line:04d}  {instr}\n"
             f.write(line)
-            print(line, end="")
+            #print(line, end="")

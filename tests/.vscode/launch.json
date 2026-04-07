@@ -6,7 +6,7 @@
             "request": "launch",
             "name": "Debug Janus",
             "program": "${file}",
-            "stopOnEntry": true
+            "stopOnEntry": false
         }
     ]
 }

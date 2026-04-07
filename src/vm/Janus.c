@@ -14,6 +14,9 @@
 #include "vm_debug.h"    /* debug hook, dump JSON, breakpoint management  */
 #include "check_if_reversibility.h"
 
+
+/* Puntatore alla VM corrente — usato da vm_printf in DAP_MODE */
+VM *g_current_vm = NULL;
 /* ── thread-local state (dichiarate extern in vm_types.h) ── */
 __thread ThreadArgs *current_thread_args = NULL;
 __thread char       *strtok_saveptr      = NULL;
@@ -60,6 +63,7 @@ static inline int extract_lineno(const char *raw_line)
 
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 {
+    g_current_vm = vm;
     char *orig = strdup(buffer);
     char  fname[VAR_NAME_LENGTH];
     strncpy(fname, frame_name_init, VAR_NAME_LENGTH - 1);
@@ -291,6 +295,28 @@ void vm_exec(VM *vm, char *buffer)
 }
 
 /* ======================================================================
+ *  vm_free — libera tutte le variabili allocate da vm_exec
+ * ====================================================================== */
+
+static void vm_free(VM *vm)
+{
+    if (!vm) return;
+    for (int i = 0; i <= vm->frame_top; i++) {
+        Frame *f = &vm->frames[i];
+        for (int j = 0; j < f->var_count; j++) {
+            if (f->vars[j]) {
+                /* Il campo value è allocato da alloc_var (calloc in vm_helpers.h) */
+                if (f->vars[j]->value)
+                    free(f->vars[j]->value);
+                free(f->vars[j]);
+                f->vars[j] = NULL;
+            }
+        }
+        f->var_count = 0;
+    }
+}
+
+/* ======================================================================
  *  vm_dump
  * ====================================================================== */
 
@@ -336,7 +362,7 @@ void vm_run_from_string(const char *bytecode)
     VM vm; memset(&vm, 0, sizeof(VM));
     vm.dbg = NULL;   /* modalità normale: nessun debugger */
     vm_exec(&vm, ast);
-    vm_dump(&vm);
+    vm_free(&vm);
 }
 
 /* ======================================================================
@@ -368,15 +394,26 @@ static pthread_t      g_debug_tid;
 /* Thread che esegue vm_exec (e quindi vm_run_BT) in background */
 static void *debug_exec_thread(void *arg)
 {
+    FILE *f = fopen("/tmp/janus-vm.log", "a");
+    if (f) { fprintf(f, "debug_exec_thread AVVIATO\n"); fclose(f); }
+
     (void)arg;
     vm_exec(g_debug_vm, g_debug_buf);
-    vm_dump(g_debug_vm);
+
     if (g_debug_dbg) {
-        /* Segnala terminazione anche se eravamo in pausa */
         pthread_mutex_lock(&g_debug_dbg->pause_mtx);
         g_debug_dbg->mode = VM_MODE_DONE;
         pthread_cond_broadcast(&g_debug_dbg->pause_cond);
         pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
+
+        /* Aspetta che il controllore abbia preso atto del DONE
+           prima di tornare — evita che la .so venga scaricata
+           mentre vm_debug_continue sta ancora girando */
+        pthread_mutex_lock(&g_debug_dbg->pause_mtx);
+        while (g_debug_dbg->mode == VM_MODE_DONE)
+            pthread_cond_wait(&g_debug_dbg->pause_cond, &g_debug_dbg->pause_mtx);
+        pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
+
         if (g_debug_dbg->on_pause)
             g_debug_dbg->on_pause(-1, "done", g_debug_dbg->userdata);
     }
@@ -412,6 +449,7 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
         if (g_debug_dbg) dbg_resume(g_debug_dbg, VM_MODE_DONE);
         pthread_join(g_debug_tid, NULL);
         free(g_debug_buf);
+        vm_free(g_debug_vm);
         free(g_debug_vm);
         g_debug_vm  = NULL;
         g_debug_buf = NULL;
@@ -452,11 +490,11 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
 int vm_debug_step(VMDebugState *dbg)
 {
     if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
-
     pthread_mutex_lock(&dbg->pause_mtx);
     dbg->mode = VM_MODE_STEP;
-    pthread_cond_signal(&dbg->pause_cond);
-    while (dbg->mode == VM_MODE_STEP)
+    pthread_cond_broadcast(&dbg->pause_cond);
+
+    while (dbg->mode != VM_MODE_PAUSE && dbg->mode != VM_MODE_DONE)
         pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
     pthread_mutex_unlock(&dbg->pause_mtx);
 
@@ -509,23 +547,26 @@ int vm_debug_step_back(VMDebugState *dbg)
  */
 int vm_debug_continue(VMDebugState *dbg)
 {
-    fprintf(stderr, "[vm_debug_continue] mode=%d\n", dbg ? dbg->mode : -99);
     if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
-
     pthread_mutex_lock(&dbg->pause_mtx);
     dbg->mode = VM_MODE_CONTINUE;
-    pthread_cond_signal(&dbg->pause_cond);
-    /* Ora aspettiamo mentre teniamo il mutex — il thread VM
-       lo rilascerà dentro pthread_cond_wait e lo riprenderà
-       solo quando segnala PAUSE o DONE, garantendo che non
-       perdiamo nessun evento. */
-    while (dbg->mode == VM_MODE_CONTINUE)
+    pthread_cond_broadcast(&dbg->pause_cond);
+
+    while (dbg->mode != VM_MODE_PAUSE && dbg->mode != VM_MODE_DONE)
         pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+
+    int result = (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
+
+    /* Segnala al thread VM che abbiamo ricevuto il DONE
+       così può uscire da debug_exec_thread in modo pulito */
+    if (dbg->mode == VM_MODE_DONE) {
+        dbg->mode = VM_MODE_IDLE;   // qualsiasi mode != DONE va bene
+        pthread_cond_broadcast(&dbg->pause_cond);
+    }
+
     pthread_mutex_unlock(&dbg->pause_mtx);
-
-    return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
+    return result;
 }
-
 /*
  * vm_debug_continue_inverse — continua all'indietro fino al prossimo
  * breakpoint. Utilizza invert_op_to_line iterativamente sulla history.
@@ -598,6 +639,7 @@ void vm_debug_stop(VMDebugState *dbg)
     g_debug_buf = NULL;
     free(g_debug_buf_orig);
     g_debug_buf_orig = NULL;  
+    vm_free(g_debug_vm);
     free(g_debug_vm);  
     g_debug_vm  = NULL;
     g_debug_dbg = NULL;
@@ -616,4 +658,13 @@ void vm_debug_clear_breakpoint(VMDebugState *dbg, int line)
 void vm_debug_clear_all_breakpoints(VMDebugState *dbg)
 {
     if (dbg) dbg->bp_count = 0;
+}
+int vm_debug_output_ext(VMDebugState *dbg, char *out, int outsz)
+{
+    if (!dbg || dbg->out_len == 0) return 0;
+    int n = dbg->out_len < outsz - 1 ? dbg->out_len : outsz - 1;
+    memcpy(out, dbg->out_buf, n);
+    out[n] = '\0';
+    dbg->out_len = 0;
+    return n;
 }

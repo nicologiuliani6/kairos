@@ -130,7 +130,10 @@ static inline void dbg_hook(VMDebugState *dbg,
     else if ((dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) &&
              dbg_is_breakpoint(dbg, line))
         should_pause = 1;
-
+    {
+    FILE *f = fopen("/tmp/janus-vm.log", "a");
+    if (f) { fprintf(f, "dbg_hook line=%d mode=%d should_pause=%d\n", line, dbg->mode, should_pause); fclose(f); }
+    }
     if (!should_pause) return;
 
     /* ── FIX: prendi il mutex PRIMA di segnalare first_pause_reached ── */

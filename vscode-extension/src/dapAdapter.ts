@@ -6,26 +6,25 @@ import {
     StackFrame,
     Scope,
     Source,
-    Thread
+    Thread,
+    OutputEvent
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import * as path from 'path';
 import * as koffi from 'koffi';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import * as fs from 'fs';
-// Cattura stderr nel log file (il fprintf del C va qui)
-const { createWriteStream } = require('fs');
-const stderrLog = createWriteStream('/tmp/janus-dap-stderr.log', { flags: 'a' });
-process.stderr.write = stderrLog.write.bind(stderrLog) as any;
+
 /* ======================================================================
- *  Logging
+ *  IMPORTANTE: stdout è il canale DAP — NON scriverci mai direttamente.
+ *  Tutto l'output (log, VM output) va su file o come DAP OutputEvent.
  * ====================================================================== */
 
 const logFile = '/tmp/janus-dap.log';
 
 function log(msg: string) {
     fs.appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
-    console.log(msg);
+    // NON usare console.log (→ stdout → corrompe DAP)
 }
 
 log('DAP adapter avviato');
@@ -49,6 +48,10 @@ let vm_debug_clear_breakpoint: (dbg: any, line: number) => void;
 let vm_debug_clear_all_breakpoints: (dbg: any) => void;
 let vm_debug_vars_json_ext: (dbg: any, out: Buffer, outsz: number) => number;
 let vm_debug_dump_json_ext: (dbg: any, out: Buffer, outsz: number) => number;
+// Funzione C che restituisce l'output della VM (stdout della VM) accumulato
+// Firma attesa: int vm_debug_output_ext(void* dbg, void* out, int outsz)
+// Se non esiste nella libreria, verrà usato il fallback file-based (vedi sotto).
+let vm_debug_output_ext: ((dbg: any, out: Buffer, outsz: number) => number) | null = null;
 
 function loadLib() {
     log('Carico libvm_dap.so da: ' + LIB_PATH);
@@ -69,44 +72,109 @@ function loadLib() {
         vm_debug_continue         = lib.func('int  vm_debug_continue(void*)');
         vm_debug_set_breakpoint   = lib.func('void vm_debug_set_breakpoint(void*, int)');
         vm_debug_clear_breakpoint = lib.func('void vm_debug_clear_breakpoint(void*, int)');
-        // FIX 3: bind the clear-all function so setBreakpoints can replace atomically
         vm_debug_clear_all_breakpoints = lib.func('void vm_debug_clear_all_breakpoints(void*)');
         vm_debug_vars_json_ext    = lib.func('int  vm_debug_vars_json_ext(void*, void*, int)');
         vm_debug_dump_json_ext    = lib.func('int  vm_debug_dump_json_ext(void*, void*, int)');
-        log('Tutte le funzioni caricate OK');
+        log('Funzioni principali caricate OK');
     } catch (e: any) {
         log('ERRORE func binding: ' + e.message);
         throw e;
+    }
+
+    // Prova a caricare vm_debug_output_ext (opzionale — non tutte le versioni
+    // della libreria la espongono)
+    try {
+        vm_debug_output_ext = lib.func('int vm_debug_output_ext(void*, void*, int)');
+        log('vm_debug_output_ext caricata OK');
+    } catch {
+        log('vm_debug_output_ext non disponibile — uso fallback file-based');
+        vm_debug_output_ext = null;
     }
 }
 
 /* ======================================================================
  *  Compilazione .janus → bytecode tramite janus.py
+ *
+ *  USA spawnSync invece di execSync così stderr della VM non va a finire
+ *  nel file di log ma viene catturato e poi inviato come OutputEvent DAP.
  * ====================================================================== */
 
-function compileBytecode(janusFile: string): string {
+const VM_OUTPUT_FILE = '/tmp/janus-vm-output.txt';
+
+function compileBytecode(janusFile: string): { bytecode: string; compileOutput: string } {
     const root   = path.join(__dirname, '../../');
     const venv   = path.join(root, 'venv/bin/python');
     const btFile = path.join(root, 'bytecode.txt');
 
-    // FIX 4: remove the old bytecode file first so we never read a stale one
     if (fs.existsSync(btFile)) fs.unlinkSync(btFile);
 
-    const cmd = `LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so ` +
-                `${venv} -m src.janus "${janusFile}" --dump-bytecode 2>/dev/null`;
+    // spawnSync cattura stdout+stderr invece di lasciarli passare al processo
+    const result = spawnSync(
+        'env',
+        [
+            `LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so`,
+            venv,
+            '-m', 'src.frontend.bytecode',   // ← usa il __main__ già in bytecode.py
+            janusFile,
+        ],
+        { cwd: root, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+    );
 
-    try {
-        execSync(cmd, { cwd: root });
-    } catch (e: any) {
-        // ASan may give non-zero exit codes even on success; only re-throw
-        // if bytecode.txt was not produced at all.
-        if (!fs.existsSync(btFile)) {
-            throw new Error(`Compilazione fallita (nessun bytecode.txt): ${e.message}`);
-        }
-        log(`WARN execSync exit non-zero (ignorato, bytecode.txt presente): ${e.message}`);
+    const compileOutput = [result.stdout || '', result.stderr || '']
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+
+    if (!fs.existsSync(btFile)) {
+        throw new Error(
+            `Compilazione fallita (nessun bytecode.txt):\n${compileOutput}`
+        );
     }
 
-    return fs.readFileSync(btFile, 'utf-8');
+    if (result.status !== 0) {
+        log(`WARN compilazione exit ${result.status} (ignorato, bytecode.txt presente)`);
+    }
+
+    return { bytecode: fs.readFileSync(btFile, 'utf-8'), compileOutput };
+}
+
+/* ======================================================================
+ *  Lettura output VM
+ *
+ *  Strategia 1 (preferita): vm_debug_output_ext() nella libreria C —
+ *    la VM accumula il suo stdout in un buffer interno e lo espone qui.
+ *
+ *  Strategia 2 (fallback): la VM scrive su VM_OUTPUT_FILE; lo leggiamo
+ *    dopo ogni step/continue e lo svuotiamo (truncate).
+ *
+ *  In entrambi i casi il risultato viene inviato come DAP OutputEvent
+ *  ("stdout" category) così appare nel pannello DEBUG CONSOLE di VS Code.
+ * ====================================================================== */
+
+function readVmOutput(dbg: any): string {
+    // Strategia 1
+    if (vm_debug_output_ext && dbg) {
+        try {
+            const buf = Buffer.alloc(1024 * 1024); // 1 MB
+            const n = vm_debug_output_ext(dbg, buf, buf.length);
+            if (n > 0) return buf.toString('utf-8', 0, n);
+            return '';
+        } catch (e: any) {
+            log('WARN vm_debug_output_ext fallito: ' + e.message);
+        }
+    }
+
+    // Strategia 2 — file-based
+    try {
+        if (!fs.existsSync(VM_OUTPUT_FILE)) return '';
+        const content = fs.readFileSync(VM_OUTPUT_FILE, 'utf-8');
+        if (!content) return '';
+        // Svuota il file dopo la lettura
+        fs.writeFileSync(VM_OUTPUT_FILE, '');
+        return content;
+    } catch {
+        return '';
+    }
 }
 
 /* ======================================================================
@@ -129,6 +197,21 @@ class JanusDebugSession extends LoggingDebugSession {
         loadLib();
     }
 
+    /* ── Helper: invia testo come OutputEvent nella Debug Console ── */
+    private sendOutput(text: string, category: 'stdout' | 'stderr' | 'console' = 'stdout') {
+        if (!text) return;
+        // Assicura newline finale
+        const body = text.endsWith('\n') ? text : text + '\n';
+        this.sendEvent(new OutputEvent(body, category));
+    }
+
+    /* ── Helper: legge output VM e lo invia come OutputEvent ── */
+    private flushVmOutput() {
+        const out = readVmOutput(this.dbg);
+        log('flushVmOutput: ' + JSON.stringify(out));  // ← aggiungi
+        if (out) this.sendOutput(out, 'console');
+    }
+
     /* ── Initialize ── */
     protected initializeRequest(
         response: DebugProtocol.InitializeResponse,
@@ -149,46 +232,47 @@ class JanusDebugSession extends LoggingDebugSession {
         this.sourceFile = args.program;
 
         let bytecode: string;
+        let compileOutput: string;
         try {
-            bytecode = compileBytecode(this.sourceFile);
+            ({ bytecode, compileOutput } = compileBytecode(this.sourceFile));
         } catch (e: any) {
+            this.sendOutput(`Errore di compilazione:\n${e.message}`, 'stderr');
             this.sendErrorResponse(response, 1, `Compilazione fallita: ${e.message}`);
             return;
         }
 
-        this.dbg = vm_debug_new();
+        // Mostra l'output del compilatore nella Debug Console (es. warning)
+        if (compileOutput) {
+            this.sendOutput(`[compilatore]\n${compileOutput}\n`, 'console');
+        }
 
-        // FIX 1 & 5: pass stopOnEntry intent to the C layer via the mode
-        // before calling vm_debug_start, so the VM thread pauses immediately
-        // on the first instruction when stopOnEntry is true, and runs freely
-        // otherwise. vm_debug_start must not return until the VM thread has
-        // reached its first pause (i.e. first_pause_reached == 1).
+        this.dbg = vm_debug_new();
         vm_debug_start(bytecode, this.dbg);
-        // DEBUG TEMPORANEO
-        const stateBuf = Buffer.alloc(65536);
-        vm_debug_dump_json_ext(this.dbg, stateBuf, stateBuf.length);
-        log('Stato VM dopo start: ' + stateBuf.toString('utf-8').replace(/\0.*$/, ''));
+
+        // Eventuale output prodotto durante l'avvio (es. print all'inizio del programma)
+        this.flushVmOutput();
+
         this.sendResponse(response);
 
-        if (args.stopOnEntry !== false) {
+        if (args.stopOnEntry !== true) {
             this.sendEvent(new StoppedEvent('entry', 1));
         } else {
-            // VM is paused at entry; immediately resume it in RUN/CONTINUE mode
-            // so it runs until the first breakpoint or end of program.
             const line = vm_debug_continue(this.dbg);
+            this.flushVmOutput();
             log(`launchRequest: auto-continue ritorna linea: ${line}`);
             if (line < 0) {
+                log('Terminazione VM');
+                this.flushVmOutput();          // flush esplicito prima di terminare
                 this.sendEvent(new TerminatedEvent());
+            } else {
+                this.sendEvent(new StoppedEvent('breakpoint', 1));
             }
-            // If line >= 0 we stopped at a breakpoint — but the DAP client
-            // hasn't finished its configuration yet, so do nothing here;
-            // configurationDoneRequest will fire shortly and the user will
-            // see the breakpoint hit.
         }
     }
 
     /* ── Threads ── */
-    protected threadsRequest(response: DebugProtocol.ThreadsResponse) {
+   protected threadsRequest(response: DebugProtocol.ThreadsResponse) {
+        log('threadsRequest chiamato');
         response.body = { threads: [new Thread(1, 'main')] };
         this.sendResponse(response);
     }
@@ -235,19 +319,23 @@ class JanusDebugSession extends LoggingDebugSession {
         response: DebugProtocol.ContinueResponse,
         _args: DebugProtocol.ContinueArguments
     ) {
+        log('continueRequest CHIAMATO');   // ← primissima riga
         this.sendResponse(response);
-        // DEBUG TEMPORANEO
-        const stateBuf = Buffer.alloc(65536);
-        vm_debug_dump_json_ext(this.dbg, stateBuf, stateBuf.length);
-        log('Stato VM prima di continue: ' + stateBuf.toString('utf-8').replace(/\0.*$/, ''));
+        log('prima di vm_debug_continue');   // ← aggiungi
         let line: number;
         try {
             line = vm_debug_continue(this.dbg);
-            log(`vm_debug_continue ritorna linea: ${line}`);
+             log(`dopo vm_debug_continue, line=${line}`);   
         } catch (e: any) {
             log('CRASH in vm_debug_continue: ' + e.message);
+            this.sendOutput(`CRASH vm_debug_continue: ${e.message}`, 'stderr');
             throw e;
         }
+
+        // ← aggiungi questo
+        const raw = readVmOutput(this.dbg);
+        log(`continueRequest: raw output = ${JSON.stringify(raw)}, len = ${raw.length}`);
+        if (raw) this.sendOutput(raw, 'console');
 
         if (line < 0) {
             log('Terminazione VM');
@@ -270,8 +358,10 @@ class JanusDebugSession extends LoggingDebugSession {
             log(`vm_debug_step ritorna linea: ${line}`);
         } catch (e: any) {
             log('CRASH in vm_debug_step: ' + e.message);
+            this.sendOutput(`CRASH vm_debug_step: ${e.message}`, 'stderr');
             throw e;
         }
+        this.flushVmOutput();
 
         if (line < 0) {
             log('Terminazione VM');
@@ -282,9 +372,6 @@ class JanusDebugSession extends LoggingDebugSession {
     }
 
     /* ── StepBack ── */
-    // FIX 2: was sending StoppedEvent('step') in both branches; line < 0
-    // means the history is exhausted (already at the beginning), which is
-    // not a termination but should still stop and let the user know.
     protected stepBackRequest(
         response: DebugProtocol.StepBackResponse,
         _args: DebugProtocol.StepBackArguments
@@ -297,17 +384,14 @@ class JanusDebugSession extends LoggingDebugSession {
             log(`vm_debug_step_back ritorna linea: ${line}`);
         } catch (e: any) {
             log('CRASH in vm_debug_step_back: ' + e.message);
+            this.sendOutput(`CRASH vm_debug_step_back: ${e.message}`, 'stderr');
             throw e;
         }
-
-        // line < 0 means history exhausted — stay stopped at the oldest
-        // known position (the VM is still paused, not terminated).
+        // line < 0 = history esaurita, non è terminazione
         this.sendEvent(new StoppedEvent('step', 1));
     }
 
     /* ── SetBreakpoints ── */
-    // FIX 3: VS Code sends the FULL desired set every time; clear first,
-    // then add, so removed breakpoints don't linger in the VM.
     protected setBreakPointsRequest(
         response: DebugProtocol.SetBreakpointsResponse,
         args: DebugProtocol.SetBreakpointsArguments
@@ -332,6 +416,7 @@ class JanusDebugSession extends LoggingDebugSession {
         _args: DebugProtocol.DisconnectArguments
     ) {
         if (this.dbg) {
+            this.flushVmOutput();   // ← aggiungi questa riga
             vm_debug_stop(this.dbg);
             vm_debug_free(this.dbg);
             this.dbg = null;

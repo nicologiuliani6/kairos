@@ -8,6 +8,19 @@
 #include "vm_helpers.h"
 #include "vm_channel.h"
 
+#ifdef DAP_MODE
+  extern VM *g_current_vm;
+  #define vm_printf(...) do { \
+      VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL; \
+      if (_d && _d->out_len < DBG_OUTPUT_BUF_SIZE - 1) { \
+          _d->out_len += snprintf(_d->out_buf + _d->out_len, \
+              DBG_OUTPUT_BUF_SIZE - _d->out_len, __VA_ARGS__); \
+      } \
+  } while(0)
+#else
+  #define vm_printf(...) printf(__VA_ARGS__)
+#endif
+
 /* ======================================================================
  *  SWAP
  * ====================================================================== */
@@ -131,16 +144,16 @@ static inline void op_show(VM *vm, const char *frame_name)
     Var *v  = get_var(vm, fi, ID, "SHOW");
 
     if (v->T == TYPE_INT) {
-        printf("%s: %d\n", ID, *(v->value));
+        vm_printf("%s: %d\n", ID, *(v->value));
     } else if (v->T == TYPE_STACK || v->T == TYPE_CHANNEL) {
         char open = (v->T == TYPE_STACK) ? '[' : '<';
         char clos = (v->T == TYPE_STACK) ? ']' : '>';
-        printf("%s: %c", ID, open);
+        vm_printf("%s: %c", ID, open);
         for (size_t k = 0; k < v->stack_len; k++) {
-            printf("%d", v->value[k]);
-            if (k + 1 < v->stack_len) printf(", ");
+            vm_printf("%d", v->value[k]);
+            if (k + 1 < v->stack_len) vm_printf(", ");
         }
-        printf("%c\n", clos);
+        vm_printf("%c\n", clos);
     } else {
         vm_fatal("[VM] SHOW su variabile PARAM non linkata!\n");
     }

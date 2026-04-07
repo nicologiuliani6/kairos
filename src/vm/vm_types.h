@@ -5,6 +5,8 @@
 #include "char_id_map.h"
 #include "stack.h"
 
+#define DBG_OUTPUT_BUF_SIZE (1024 * 1024)  // 1 MB
+
 #define uint     unsigned int
 #define vm_fatal(msg) do { fprintf(stderr, msg); exit(EXIT_FAILURE); } while(0)
 
@@ -72,6 +74,7 @@ typedef struct {
  * ====================================================================== */
 
 typedef enum {
+    VM_MODE_IDLE,
     VM_MODE_RUN,
     VM_MODE_PAUSE,
     VM_MODE_STEP,
@@ -91,6 +94,8 @@ typedef struct {
     char instr[DBG_INSTR_LEN];
 } ExecRecord;
 
+#define DBG_OUTPUT_BUF_SIZE (1024 * 1024)  // 1 MB
+
 typedef struct {
     VMExecMode  mode;
     int         breakpoints[DBG_MAX_BREAKPOINTS];
@@ -102,9 +107,12 @@ typedef struct {
     pthread_mutex_t pause_mtx;
     pthread_cond_t  pause_cond;
     void (*on_pause)(int line, const char *frame_name, void *userdata);
-    void *userdata;
-    int  initialized;
-    int first_pause_reached;
+    void       *userdata;
+    int         initialized;
+    int         first_pause_reached;
+    /* Output buffer — usato in DAP_MODE al posto di printf */
+    char        out_buf[DBG_OUTPUT_BUF_SIZE];
+    int         out_len;
 } VMDebugState;
 
 typedef struct {
