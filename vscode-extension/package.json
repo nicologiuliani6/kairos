@@ -25,6 +25,13 @@
         "aliases": ["Kairos"]
       }
     ],
+    "grammars": [
+      {
+        "language": "kairos",
+        "scopeName": "source.kairos",
+        "path": "./syntaxes/kairos.tmLanguage.json"
+      }
+    ],
     "breakpoints": [
       {
         "language": "kairos"

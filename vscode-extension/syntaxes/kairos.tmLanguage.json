@@ -1,0 +1,30 @@
+{
+  "name": "Kairos",
+  "scopeName": "source.kairos",
+  "patterns": [
+    {
+      "name": "comment.line.double-slash.kairos",
+      "match": "//.*$"
+    },
+    {
+      "name": "keyword.control.kairos",
+      "match": "\\b(?:if|then|else|fi|from|loop|until|call|uncall|local|delocal|par|and|rap)\\b"
+    },
+    {
+      "name": "storage.type.kairos",
+      "match": "\\b(?:procedure|int|stack|channel)\\b"
+    },
+    {
+      "name": "constant.language.kairos",
+      "match": "\\b(?:nil|empty)\\b"
+    },
+    {
+      "name": "constant.numeric.integer.kairos",
+      "match": "\\b\\d+\\b"
+    },
+    {
+      "name": "keyword.operator.kairos",
+      "match": "<=>|\\^=|\\+=|-=|==|!=|>=|<=|=|\\+|-|>|<"
+    }
+  ]
+}
