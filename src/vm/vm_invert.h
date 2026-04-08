@@ -8,7 +8,7 @@
 #include "vm_helpers.h"
 #include "vm_ops.h"
 
-/* Forward — vm_run_BT è definita in Janus.c */
+/* Forward — vm_run_BT è definita in Kairos.c */
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
 
 /* ======================================================================

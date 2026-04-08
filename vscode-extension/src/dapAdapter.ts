@@ -22,7 +22,7 @@ import { Worker } from 'worker_threads';
  *  Tutto l'output (log, VM output) va su file o come DAP OutputEvent.
  * ====================================================================== */
 
-const logFile = '/tmp/janus-dap.log';
+const logFile = '/tmp/kairos-dap.log';
 
 function log(msg: string) {
     fs.appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
@@ -82,24 +82,24 @@ function loadLib() {
 }
 
 /* ======================================================================
- *  Compilazione .janus → bytecode
+ *  Compilazione .kairos → bytecode
  * ====================================================================== */
 
 function compileBytecode(
-    janusFile: string,
-    janusApp:  string,
+    kairosFile: string,
+    kairosApp:  string,
 ): { bytecode: string; compileOutput: string } {
 
-    const appDir = path.dirname(janusApp);
+    const appDir = path.dirname(kairosApp);
     const btFile = path.join(appDir, 'bytecode.txt');
 
-    log(`compileBytecode: app=${janusApp}, file=${janusFile}`);
+    log(`compileBytecode: app=${kairosApp}, file=${kairosFile}`);
 
     if (fs.existsSync(btFile)) fs.unlinkSync(btFile);
 
     const result = spawnSync(
-        janusApp,
-        [janusFile, '--dap', '--dump-bytecode'],
+        kairosApp,
+        [kairosFile, '--dap', '--dump-bytecode'],
         { cwd: appDir, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
     );
 
@@ -238,15 +238,15 @@ class PipeReader {
 interface LaunchArgs extends DebugProtocol.LaunchRequestArguments {
     program:      string;
     stopOnEntry?: boolean;
-    janusApp?:    string;
-    janusLib?:    string;
+    kairosApp?:    string;
+    kairosLib?:    string;
 }
 
 /* ======================================================================
  *  Sessione DAP principale
  * ====================================================================== */
 
-class JanusDebugSession extends LoggingDebugSession {
+class KairosDebugSession extends LoggingDebugSession {
 
     private dbg:        any    = null;
     private dbgPtr:     bigint = 0n;
@@ -300,13 +300,13 @@ class JanusDebugSession extends LoggingDebugSession {
         args:     LaunchArgs
     ) {
         // Imposta LIB_PATH prima di loadLib()
-        if (args.janusLib) {
-            LIB_PATH = args.janusLib;
+        if (args.kairosLib) {
+            LIB_PATH = args.kairosLib;
         }
 
         log('launchRequest chiamato, program=' + args.program);
-        log('janusApp=' + (args.janusApp || 'NON IMPOSTATO'));
-        log('janusLib=' + LIB_PATH);
+        log('kairosApp=' + (args.kairosApp || 'NON IMPOSTATO'));
+        log('kairosLib=' + LIB_PATH);
 
         // Carica la libreria ora che LIB_PATH è aggiornato
         try {
@@ -321,9 +321,9 @@ class JanusDebugSession extends LoggingDebugSession {
         let bytecode:      string;
         let compileOutput: string;
         try {
-            const appPath = args.janusApp || '';
+            const appPath = args.kairosApp || '';
             if (!appPath) {
-                this.sendErrorResponse(response, 1, 'janusApp non impostato nel launch.json');
+                this.sendErrorResponse(response, 1, 'kairosApp non impostato nel launch.json');
                 return;
             }
             ({ bytecode, compileOutput } = compileBytecode(this.sourceFile, appPath));
@@ -527,5 +527,5 @@ class JanusDebugSession extends LoggingDebugSession {
 }
 
 /* ── Avvia la sessione DAP ── */
-const session = new JanusDebugSession();
+const session = new KairosDebugSession();
 session.start(process.stdin, process.stdout);

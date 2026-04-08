@@ -1,5 +1,5 @@
 # ============================================================
-#  Janus — Makefile
+#  Kairos — Makefile
 #  Targets: all, run, test, test-one, release, clean, help
 # ============================================================
 
@@ -12,6 +12,7 @@ LIBVM       := build/libvm.so
 LIBVM_DAP   := build/libvm_dap.so
 DIST_DIR    := build/dist
 JPROGRAMS   := tests
+VM_SOURCES  := $(VM_DIR)/Janus.c $(VM_DIR)/Janus_dap.c
 
 # Flags di compilazione
 CC          := gcc
@@ -39,10 +40,10 @@ RESET  := \033[0m
 # ============================================================
 all: check-deps $(LIBVM)
 
-$(LIBVM): $(VM_DIR)/Janus.c $(wildcard $(VM_DIR)/*.h)
+$(LIBVM): $(VM_SOURCES) $(wildcard $(VM_DIR)/*.h)
 	@mkdir -p build
 	@echo "$(CYAN)Compilazione VM (debug)...$(RESET)"
-	$(CC) $(CFLAGS_DBG) -o $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR)
+	$(CC) $(CFLAGS_DBG) -o $(LIBVM) $(VM_SOURCES) -I$(VM_DIR)
 	@echo "$(GREEN)VM compilata: $(LIBVM)$(RESET)"
 
 # ============================================================
@@ -51,7 +52,7 @@ $(LIBVM): $(VM_DIR)/Janus.c $(wildcard $(VM_DIR)/*.h)
 build-debug: check-deps
 	@mkdir -p build
 	@echo "$(CYAN)Build debug con AddressSanitizer...$(RESET)"
-	$(CC) $(CFLAGS_DBG) -o $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR)
+	$(CC) $(CFLAGS_DBG) -o $(LIBVM) $(VM_SOURCES) -I$(VM_DIR)
 	@echo "$(GREEN)Build debug OK$(RESET)"
 
 build-release: check-deps $(VERSCRIPT)
@@ -59,31 +60,31 @@ build-release: check-deps $(VERSCRIPT)
 	@echo "$(CYAN)Build release (-O2)...$(RESET)"
 	$(CC) $(CFLAGS_REL) \
 	    -Wl,--version-script=$(VERSCRIPT) \
-	    -o $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR)
+	    -o $(LIBVM) $(VM_SOURCES) -I$(VM_DIR)
 	@echo "$(GREEN)Build release OK$(RESET)"
 
 # ============================================================
-#  release — build standalone JanusApp con PyInstaller
+#  release — build standalone KairosApp con PyInstaller
 # ============================================================
 release: build-release
-	@echo "$(CYAN)Build release JanusApp...$(RESET)"
+	@echo "$(CYAN)Build release KairosApp...$(RESET)"
 	@mkdir -p $(DIST_DIR)
 	$(PYINSTALLER) --onefile \
 		--log-level ERROR \
 		--distpath $(DIST_DIR) \
 		--workpath build/pyinstaller-work \
 		--specpath build \
-		--name JanusApp \
-	    $(SRC_DIR)/janus.py
-	@echo "$(GREEN)Build release OK: $(DIST_DIR)/JanusApp$(RESET)"
+		--name KairosApp \
+	    $(SRC_DIR)/kairos.py
+	@echo "$(GREEN)Build release OK: $(DIST_DIR)/KairosApp$(RESET)"
 
 build-dap: check-deps
 	@mkdir -p build
 	@echo "$(CYAN)Build DAP (senza ASan)...$(RESET)"
-	$(CC) $(CFLAGS_DAP) -o $(LIBVM_DAP) $(VM_DIR)/Janus.c -I$(VM_DIR)
+	$(CC) $(CFLAGS_DAP) -o $(LIBVM_DAP) $(VM_SOURCES) -I$(VM_DIR)
 	@echo "$(GREEN)Build DAP OK: $(LIBVM_DAP)$(RESET)"
 # Genera il version-script con i simboli pubblici del debugger
-$(VERSCRIPT): $(VM_DIR)/Janus.c
+$(VERSCRIPT): $(VM_SOURCES)
 	@printf 'LIBVM_1.0 {\n  global:\n' > $@
 	@for sym in \
 	    vm_run_from_string \
@@ -107,35 +108,35 @@ $(VERSCRIPT): $(VM_DIR)/Janus.c
 	@printf '  local:\n    *;\n};\n' >> $@
 
 # ============================================================
-#  run — esegue un singolo file .janus
-#  Uso: make run FILE=tests/test.janus
+#  run — esegue un singolo file .kairos
+#  Uso: make run FILE=tests/test.kairos
 # ============================================================
 run: $(LIBVM)
 ifndef FILE
-	$(error Specifica il file: make run FILE=tests/test.janus)
+	$(error Specifica il file: make run FILE=tests/test.kairos)
 endif
 	@echo "$(CYAN)Esecuzione: $(FILE)$(RESET)"
 	# Verifica se la VM è stata compilata con ASan (DEBUG)
 ifneq ($(findstring -fsanitize=address,$(CFLAGS_DBG)),)
 	LD_PRELOAD=$(shell gcc -print-file-name=libasan.so) \
 	ASAN_OPTIONS=detect_leaks=0 \
-	$(PYTHON) -m src.janus $(FILE) --dump-bytecode
+	$(PYTHON) -m src.kairos $(FILE) --dump-bytecode
 else
-	$(PYTHON) -m src.janus $(FILE) --dump-bytecode
+	$(PYTHON) -m src.kairos $(FILE) --dump-bytecode
 endif
 
 # ============================================================
-#  test — esegue tutti i .janus in tests/ e in examples/
+#  test — esegue tutti i .kairos in tests/ e in examples/
 # ============================================================
-JANUS_FILES := $(wildcard tests/*.janus examples/*.janus)
+KAIROS_FILES := $(wildcard tests/*.kairos examples/*.kairos)
 
 test: build-release
 	@echo "$(CYAN)=== Test suite ===$(RESET)"
 	@passed=0; failed=0; errors=""; \
-	for f in $(JANUS_FILES); do \
+	for f in $(KAIROS_FILES); do \
 		name=$$(basename $$f); \
 		# esegue il test con timeout di 5 secondi \
-		output=$$(timeout 5s $(PYTHON) -m src.janus $$f --dump-bytecode 2>&1); \
+		output=$$(timeout 5s $(PYTHON) -m src.kairos $$f --dump-bytecode 2>&1); \
 		status=$$?; \
 		if [ $$status -eq 124 ]; then \
 			echo "  $(RED)TIMEOUT$(RESET)  $$name"; \
@@ -161,14 +162,14 @@ test: build-release
 
 # ============================================================
 #  test-one — esegue un singolo test con output verboso
-#  Uso: make test-one FILE=tests/fib.janus
+#  Uso: make test-one FILE=tests/fib.kairos
 # ============================================================
 test-one: $(LIBVM)
 ifndef FILE
-	$(error Specifica il file: make test-one FILE=tests/fib.janus)
+	$(error Specifica il file: make test-one FILE=tests/fib.kairos)
 endif
 	@echo "$(CYAN)=== Test: $(FILE) ===$(RESET)"
-	@output=$$($(PYTHON) -m src.janus $(FILE) --dump-bytecode 2>&1); \
+	@output=$$($(PYTHON) -m src.kairos $(FILE) --dump-bytecode 2>&1); \
 	echo "$$output"; \
 	echo ""; \
 	if echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow"; then \
@@ -213,14 +214,14 @@ clean:
 # ============================================================
 help:
 	@echo ""
-	@echo "$(CYAN)Janus — Toolchain$(RESET)"
+	@echo "$(CYAN)Kairos — Toolchain$(RESET)"
 	@echo ""
 	@echo "  $(GREEN)make$(RESET)                         Compila la VM (debug + ASan)"
 	@echo "  $(GREEN)make build-debug$(RESET)             Compila con -g e AddressSanitizer"
 	@echo "  $(GREEN)make build-release$(RESET)           Compila con -O2 per la produzione"
-	@echo "  $(GREEN)make run FILE=<f.janus>$(RESET)      Esegue un singolo programma"
-	@echo "  $(GREEN)make test$(RESET)                    Esegue tutti i .janus in tests/"
-	@echo "  $(GREEN)make test-one FILE=<f.janus>$(RESET) Esegue un test con output verboso"
+	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma"
+	@echo "  $(GREEN)make test$(RESET)                    Esegue tutti i .kairos in tests/"
+	@echo "  $(GREEN)make test-one FILE=<f.kairos>$(RESET) Esegue un test con output verboso"
 	@echo "  $(GREEN)make release$(RESET)                 Build ottimizzata + pacchetto standalone"
 	@echo "  $(GREEN)make install-deps$(RESET)            Crea venv e installa ply/pyinstaller"
 	@echo "  $(GREEN)make clean$(RESET)                   Rimuove tutti gli artefatti"
@@ -228,7 +229,7 @@ help:
 
 # ============================================================
 #  test-debug — linka con libvm (ASan) per sviluppo VM
-#  Uso: make test-debug FILE=tests/fib.janus [BP=12]
+#  Uso: make test-debug FILE=tests/fib.kairos [BP=12]
 # ============================================================
 TEST_DEBUG_BIN     := build/test_debug
 TEST_DEBUG_DAP_BIN := build/test_debug_dap
@@ -241,7 +242,7 @@ $(TEST_DEBUG_BIN): test_debug.c $(LIBVM)
 
 test-debug: build-debug $(TEST_DEBUG_BIN)
 ifndef FILE
-	$(error Specifica il file: make test-debug FILE=tests/fib.janus)
+	$(error Specifica il file: make test-debug FILE=tests/fib.kairos)
 endif
 	@echo "$(CYAN)=== Debug (ASan): $(FILE) ===$(RESET)"
 	LD_PRELOAD=$(shell gcc -print-file-name=libasan.so) $(TEST_DEBUG_BIN) $(FILE) $(BP)
@@ -249,7 +250,7 @@ endif
 # ============================================================
 #  test-debug-dap — linka con libvm_dap (senza ASan), stesso
 #                   binario usato dal DAP adapter Node.js
-#  Uso: make test-debug-dap FILE=tests/fib.janus [BP=12]
+#  Uso: make test-debug-dap FILE=tests/fib.kairos [BP=12]
 # ============================================================
 $(TEST_DEBUG_DAP_BIN): test_debug.c $(LIBVM_DAP)
 	@echo "$(CYAN)Compilazione test_debug_dap (no ASan)...$(RESET)"
@@ -259,7 +260,7 @@ $(TEST_DEBUG_DAP_BIN): test_debug.c $(LIBVM_DAP)
 
 test-debug-dap: build-dap $(TEST_DEBUG_DAP_BIN)
 ifndef FILE
-	$(error Specifica il file: make test-debug-dap FILE=tests/fib.janus)
+	$(error Specifica il file: make test-debug-dap FILE=tests/fib.kairos)
 endif
 	@echo "$(CYAN)=== Debug DAP (no ASan): $(FILE) ===$(RESET)"
 	$(TEST_DEBUG_DAP_BIN) $(FILE) $(BP)

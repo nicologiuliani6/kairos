@@ -2,12 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "type": "janus",
+            "type": "kairos",
             "request": "launch",
-            "name": "Debug Janus",
+            "name": "Debug Kairos",
             "program": "${file}",
-            "janusApp": "/home/nico/Desktop/janus/build/dist/JanusApp",
-            "janusLib": "/home/nico/Desktop/janus/build/libvm_dap.so",
+            "kairosApp": "/home/nico/Desktop/kairos/build/dist/KairosApp",
+            "kairosLib": "/home/nico/Desktop/kairos/build/libvm_dap.so",
             "stopOnEntry": false
         }
     ]

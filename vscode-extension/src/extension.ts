@@ -4,14 +4,14 @@ import * as path from 'path';
 export function activate(context: vscode.ExtensionContext) {
     // aggiungi queste due righe all'inizio
     //const adapterPath = path.join(__dirname, 'dapAdapter.js');
-    //vscode.window.showInformationMessage(`Janus: adapterPath=${adapterPath}`);
+    //vscode.window.showInformationMessage(`Kairos: adapterPath=${adapterPath}`);
 
     // ── Comando: seleziona interprete Python ────────────────────────────
     const selectInterpreter = vscode.commands.registerCommand(
-        'janus.selectInterpreter',
+        'kairos.selectInterpreter',
         async () => {
             const current = vscode.workspace
-                .getConfiguration('janus')
+                .getConfiguration('kairos')
                 .get<string>('pythonPath', '');
 
             const choice = await vscode.window.showQuickPick(
@@ -26,9 +26,9 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (choice.id === 'default') {
                 await vscode.workspace
-                    .getConfiguration('janus')
+                    .getConfiguration('kairos')
                     .update('pythonPath', '', vscode.ConfigurationTarget.Global);
-                vscode.window.showInformationMessage('Janus: interprete reimpostato al default.');
+                vscode.window.showInformationMessage('Kairos: interprete reimpostato al default.');
                 return;
             }
 
@@ -44,10 +44,10 @@ export function activate(context: vscode.ExtensionContext) {
 
             const chosen = uris[0].fsPath;
             await vscode.workspace
-                .getConfiguration('janus')
+                .getConfiguration('kairos')
                 .update('pythonPath', chosen, vscode.ConfigurationTarget.Global);
 
-            vscode.window.showInformationMessage(`Janus: interprete impostato su ${chosen}`);
+            vscode.window.showInformationMessage(`Kairos: interprete impostato su ${chosen}`);
         }
     );
 
@@ -55,26 +55,26 @@ export function activate(context: vscode.ExtensionContext) {
     const statusBar = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left, 100
     );
-    statusBar.command = 'janus.selectInterpreter';
-    statusBar.tooltip = 'Clicca per cambiare interprete Python per Janus';
+    statusBar.command = 'kairos.selectInterpreter';
+    statusBar.tooltip = 'Clicca per cambiare interprete Python per Kairos';
 
     function updateStatusBar() {
         const p = vscode.workspace
-            .getConfiguration('janus')
+            .getConfiguration('kairos')
             .get<string>('pythonPath', '');
-        statusBar.text = `$(python) Janus: ${p ? path.basename(p) : 'default'}`;
+        statusBar.text = `$(python) Kairos: ${p ? path.basename(p) : 'default'}`;
         statusBar.show();
     }
 
     updateStatusBar();
     vscode.workspace.onDidChangeConfiguration(e => {
-        if (e.affectsConfiguration('janus.pythonPath')) updateStatusBar();
+        if (e.affectsConfiguration('kairos.pythonPath')) updateStatusBar();
     });
 
     // ── Factory DAP ──────────────────────────────────────────────────────
-    const factory = new JanusDebugAdapterDescriptorFactory();
+    const factory = new KairosDebugAdapterDescriptorFactory();
     context.subscriptions.push(
-        vscode.debug.registerDebugAdapterDescriptorFactory('janus', factory),
+        vscode.debug.registerDebugAdapterDescriptorFactory('kairos', factory),
         selectInterpreter,
         statusBar,
     );
@@ -82,7 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
-class JanusDebugAdapterDescriptorFactory
+class KairosDebugAdapterDescriptorFactory
     implements vscode.DebugAdapterDescriptorFactory
 {
     createDebugAdapterDescriptor(
@@ -91,7 +91,7 @@ class JanusDebugAdapterDescriptorFactory
     ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
         const adapterPath = path.join(__dirname, 'dapAdapter.js');
 
-        const config     = vscode.workspace.getConfiguration('janus');
+        const config     = vscode.workspace.getConfiguration('kairos');
         const pythonPath = config.get<string>('pythonPath', '');
         const libPath    = config.get<string>('libPath', '');      // ← nuovo
 
@@ -99,8 +99,8 @@ class JanusDebugAdapterDescriptorFactory
         for (const [k, v] of Object.entries(process.env)) {
             if (v !== undefined) env[k] = v;
         }
-        if (pythonPath) env['JANUS_PYTHON_PATH'] = pythonPath;
-        if (libPath)    env['JANUS_LIB_PATH']    = libPath;        // ← nuovo
+        if (pythonPath) env['KAIROS_PYTHON_PATH'] = pythonPath;
+        if (libPath)    env['KAIROS_LIB_PATH']    = libPath;        // ← nuovo
 
         return new vscode.DebugAdapterExecutable('node', [adapterPath], { env });
     }

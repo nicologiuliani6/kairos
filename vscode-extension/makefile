@@ -1,9 +1,9 @@
 # ============================================================
-#  Janus VSCode Extension — Makefile
+#  Kairos VSCode Extension — Makefile
 # ============================================================
 
 VSCE        := $(shell npm bin)/vsce
-EXT_NAME    := janus-debugger
+EXT_NAME    := kairos-debugger
 VERSION     := $(shell node -p "require('./package.json').version")
 VSIX        := $(EXT_NAME)-$(VERSION).vsix
 
@@ -70,7 +70,7 @@ clean:
 # ============================================================
 help:
 	@echo ""
-	@echo "Janus VSCode Extension — Comandi"
+	@echo "Kairos VSCode Extension — Comandi"
 	@echo ""
 	@echo "  make              Compila TypeScript"
 	@echo "  make watch        Ricompila automaticamente"

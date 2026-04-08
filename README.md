@@ -1,6 +1,6 @@
-# Janus
+# Kairos
 
-Janus è un linguaggio di programmazione **reversibile e concorrente**. Ogni programma Janus può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito tramite blocchi `par/rap` e comunicazione sincrona tra thread tramite canali tipizzati.
+Kairos è un linguaggio di programmazione **reversibile e concorrente**. Ogni programma Kairos può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito tramite blocchi `par/rap` e comunicazione sincrona tra thread tramite canali tipizzati.
 
 ---
 
@@ -10,7 +10,7 @@ Janus è un linguaggio di programmazione **reversibile e concorrente**. Ogni pro
 2. [Installazione e compilazione](#installazione-e-compilazione)
 3. [Toolchain — comandi make](#toolchain--comandi-make)
 4. [Architettura interna](#architettura-interna)
-5. [Il linguaggio Janus](#il-linguaggio-janus)
+5. [Il linguaggio Kairos](#il-linguaggio-kairos)
    - [Tipi](#tipi)
    - [Dichiarazioni globali](#dichiarazioni-globali)
    - [Variabili locali — local/delocal](#variabili-locali--localdelocal)
@@ -27,7 +27,7 @@ Janus è un linguaggio di programmazione **reversibile e concorrente**. Ogni pro
    - [Commenti](#commenti)
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
 7. [Esempi completi](#esempi-completi)
-8. [Il bytecode Janus](#il-bytecode-janus)
+8. [Il bytecode Kairos](#il-bytecode-kairos)
 9. [Errori comuni](#errori-comuni)
 
 ---
@@ -35,12 +35,12 @@ Janus è un linguaggio di programmazione **reversibile e concorrente**. Ogni pro
 ## Struttura del progetto
 
 ```
-janus/
+kairos/
 ├── makefile
 ├── README.md
 ├── .gitignore
 ├── src/
-│   ├── janus.py            ← entry point: compila ed esegue
+│   ├── kairos.py            ← entry point: compila ed esegue
 │   ├── __init__.py
 │   └── frontend/
 │       ├── lexer.py        ← analisi lessicale (PLY)
@@ -48,7 +48,9 @@ janus/
 │       ├── ast.py          ← utility: stampa AST
 │       └── bytecode.py     ← compilatore AST → bytecode
 ├── src/vm/
-│   ├── Janus.c             ← entry point della VM in C
+│   ├── Kairos.c             ← core runtime VM (exec/run/dump)
+│   ├── Kairos_dap.c         ← API debug/DAP (step, continue, JSON/output)
+│   ├── Kairos_core.h        ← interfaccia condivisa tra core e DAP
 │   ├── vm_types.h          ← strutture dati (VM, Frame, Var, Channel)
 │   ├── vm_helpers.h        ← funzioni di supporto
 │   ├── vm_ops.h            ← istruzioni runtime (LOCAL, PUSH, EVAL…)
@@ -86,8 +88,8 @@ janus/
 
 ```bash
 # 1. Clona il repository
-git clone <url> janus
-cd janus
+git clone <url> kairos
+cd kairos
 
 # 2. Crea il virtualenv e installa le dipendenze Python
 make install-deps
@@ -110,8 +112,9 @@ Dopo `make` troverai `build/libvm.so`.
 | `make` | Compila la VM in modalità debug (`-g -fsanitize=address,undefined`) |
 | `make build-debug` | Esplicita build debug con AddressSanitizer |
 | `make build-release` | Compila con `-O2 -DNDEBUG` |
-| `make run FILE=<f>` | Esegue un singolo file `.janus` |
-| `make test` | Esegue tutti i `.janus` in `tests/` e stampa PASS/FAIL |
+| `make build-dap` | Compila `libvm_dap.so` (senza ASan, per adapter DAP) |
+| `make run FILE=<f>` | Esegue un singolo file `.kairos` |
+| `make test` | Esegue tutti i `.kairos` in `tests/` e `examples/` |
 | `make test-one FILE=<f>` | Esegue un singolo test con output verboso |
 | `make release` | Build ottimizzata + pacchetto standalone con PyInstaller |
 | `make install-deps` | Crea il venv e installa `ply` e `pyinstaller` |
@@ -121,9 +124,9 @@ Dopo `make` troverai `build/libvm.so`.
 Esempi d'uso:
 
 ```bash
-make run FILE=examples/fib.janus
+make run FILE=examples/fib.kairos
 make test
-make test-one FILE=tests/test_uncall.janus
+make test-one FILE=tests/test_uncall.kairos
 make release
 ```
 
@@ -132,7 +135,7 @@ make release
 ## Architettura interna
 
 ```
-file.janus
+file.kairos
     │
     ▼
 [ lexer.py ]  ──  analisi lessicale con PLY
@@ -144,22 +147,23 @@ file.janus
 [ bytecode.py ] ── visita l'AST e produce il bytecode testuale
     │
     ▼  (stringa in memoria)
-[ Janus.c / libvm.so ] ── VM in C che interpreta il bytecode
+[ Kairos.c + Kairos_dap.c / libvm.so ] ── VM in C che interpreta il bytecode
     │
     ├── vm_exec()      prima passata: raccoglie frame, DECL, PARAM, LABEL
     ├── vm_run_BT()    loop principale di esecuzione forward
-    └── invert_op_to_line()  esecuzione inversa (UNCALL)
+    ├── invert_op_to_line()  esecuzione inversa (UNCALL)
+    └── API DAP/debug (step/continue/output pipe)
 ```
 
 Il frontend Python compila il sorgente in una stringa bytecode che viene passata direttamente alla VM tramite `ctypes` — nessun file intermedio su disco (a meno di `--dump-bytecode`).
 
 ---
 
-## Il linguaggio Janus
+## Il linguaggio Kairos
 
 ### Tipi
 
-Janus ha tre tipi primitivi:
+Kairos ha tre tipi primitivi:
 
 | Tipo | Descrizione |
 |------|-------------|
@@ -173,7 +177,7 @@ Janus ha tre tipi primitivi:
 
 Le variabili dichiarate nel corpo di `main` senza `local` sono variabili globali del frame. Vengono allocate nella prima passata della VM.
 
-```janus
+```kairos
 procedure main()
     int x          // dichiara x, vale 0
     channel ch     // dichiara ch
@@ -188,7 +192,7 @@ procedure main()
 
 `local` alloca una variabile con un valore iniziale. `delocal` la dealloca verificando che il valore finale corrisponda al valore atteso. Questa coppia garantisce la reversibilità: la VM può ricostruire esattamente lo stato precedente.
 
-```janus
+```kairos
 local int x = 0        // alloca x, inizializza a 0
 local int y = x        // alloca y, copia il valore corrente di x
 local stack s = nil    // stack vuoto
@@ -213,7 +217,7 @@ delocal int x = 0      // verifica che x == 0 prima di deallocare
 
 ### Operatori reversibili
 
-Janus ammette solo operatori che sono invertibili per costruzione:
+Kairos ammette solo operatori che sono invertibili per costruzione:
 
 | Operatore | Sintassi | Inverso |
 |-----------|----------|---------|
@@ -222,7 +226,7 @@ Janus ammette solo operatori che sono invertibili per costruzione:
 | XOR | `x ^= expr` | `x ^= expr` (è il proprio inverso) |
 | Swap | `x <=> y` | `x <=> y` (è il proprio inverso) |
 
-```janus
+```kairos
 x += 5        // x = x + 5
 x -= y        // x = x - y
 x ^= 42       // x = x XOR 42
@@ -237,7 +241,7 @@ x <=> y       // scambia x e y
 
 Le espressioni supportano addizione, sottrazione e parentesi:
 
-```janus
+```kairos
 x += (y + 1)
 x -= (a + b)
 x += ((a + b) - c)
@@ -249,14 +253,14 @@ I letterali numerici sono interi. Non sono supportate moltiplicazione o division
 
 ### Procedure e parametri
 
-```janus
+```kairos
 procedure nome(tipo param1, tipo param2)
     // corpo
 ```
 
 I parametri sono passati **per riferimento**: le modifiche ai parametri all'interno della procedura si riflettono sulle variabili del chiamante.
 
-```janus
+```kairos
 procedure increment(int x)
     x += 5
 
@@ -266,7 +270,7 @@ procedure main()
     delocal int a = 8
 ```
 
-Ogni programma Janus deve avere una procedura `main()` senza parametri. L'esecuzione parte da `main`.
+Ogni programma Kairos deve avere una procedura `main()` senza parametri. L'esecuzione parte da `main`.
 
 ---
 
@@ -274,7 +278,7 @@ Ogni programma Janus deve avere una procedura `main()` senza parametri. L'esecuz
 
 `call` esegue una procedura normalmente. `uncall` esegue la procedura **al contrario**: le istruzioni vengono eseguite in ordine inverso e ogni operazione viene sostituita dalla sua inversa (`+=` diventa `-=`, `push` diventa `pop`, ecc.).
 
-```janus
+```kairos
 procedure increment(int x)
     x += 5
 
@@ -293,9 +297,9 @@ procedure main()
 
 ### Blocco if-fi
 
-Il blocco condizionale in Janus richiede una **condizione di entrata** e una **condizione di uscita**:
+Il blocco condizionale in Kairos richiede una **condizione di entrata** e una **condizione di uscita**:
 
-```janus
+```kairos
 if <condizione_entrata> then
     // ramo then
 else
@@ -305,7 +309,7 @@ fi <condizione_uscita>
 
 La condizione di uscita viene valutata **dopo** il corpo ed è ciò che rende il blocco reversibile: l'inverso sa quale ramo è stato eseguito leggendo la condizione di uscita.
 
-```janus
+```kairos
 procedure check_boolean(int flag)
     if flag == 1 then
         show(flag)
@@ -320,7 +324,7 @@ procedure check_boolean(int flag)
 
 ### Ciclo from-loop-until
 
-```janus
+```kairos
 from <condizione_entrata> loop
     // corpo
 until <condizione_uscita>
@@ -329,7 +333,7 @@ until <condizione_uscita>
 - `from`: la condizione deve essere vera all'ingresso del ciclo (prima iterazione) e falsa per tutte le iterazioni successive.
 - `until`: la condizione deve essere falsa durante il ciclo e vera quando il ciclo termina.
 
-```janus
+```kairos
 // Esempio: somma da 1 a n
 local int i = 0
 from i == 0 loop
@@ -344,14 +348,14 @@ Il ciclo è reversibile: eseguito al contrario, la condizione `until` diventa la
 
 ### Stack — push e pop
 
-```janus
+```kairos
 push(var, stack)    // sposta il valore di var in cima allo stack, azzera var
 pop(var, stack)     // preleva dalla cima dello stack e lo aggiunge a var
 ```
 
 `push` azzera la variabile sorgente dopo aver copiato il valore (per preservare la biettività). `pop` **aggiunge** il valore prelevato alla variabile destinazione (non sovrascrive).
 
-```janus
+```kairos
 local stack s = nil
 local int x = 5
 push(x, s)          // s = [5], x = 0
@@ -370,7 +374,7 @@ L'inverso di `push` è `pop` e viceversa.
 
 I canali sono code sincrone (rendezvous): `ssend` blocca finché un `srecv` non è pronto a ricevere, e viceversa.
 
-```janus
+```kairos
 ssend(var, ch)      // invia var sul canale ch, azzera var
 srecv(var, ch)      // riceve dal canale ch e aggiunge il valore a var
 ```
@@ -383,7 +387,7 @@ I canali sono pensati per essere usati esclusivamente all'interno di blocchi `pa
 
 ### Parallelismo — par/and/rap
 
-```janus
+```kairos
 par
     // thread 0
 and
@@ -397,7 +401,7 @@ rap
 
 I blocchi `par` possono essere annidati:
 
-```janus
+```kairos
 par
     ssend(x, c)
 and
@@ -417,8 +421,9 @@ rap
 ### show
 
 `show(var)` stampa il valore corrente di una variabile su stdout. Non è reversibile — nell'inversione viene semplicemente saltata.
+Al termine dell'esecuzione, la VM stampa sempre anche un dump finale (`=== VM dump ===`), sia in run standard sia in modalità DAP.
 
-```janus
+```kairos
 show(x)        // stampa: x: 42
 show(result)   // stampa: result: [1, 2, 3, 4, 5]
 ```
@@ -427,7 +432,7 @@ show(result)   // stampa: result: [1, 2, 3, 4, 5]
 
 ### Commenti
 
-```janus
+```kairos
 // questo è un commento su riga singola
 ```
 
@@ -437,18 +442,18 @@ I commenti si estendono fino alla fine della riga. Non esistono commenti multiri
 
 ## Reversibilità — regole e vincoli
 
-Janus garantisce la reversibilità a patto che il programma rispetti alcune regole. Il compilatore effettua un'analisi statica e segnala le violazioni prima dell'esecuzione.
+Kairos garantisce la reversibilità a patto che il programma rispetti alcune regole. Il compilatore effettua un'analisi statica e segnala le violazioni prima dell'esecuzione.
 
 ### 1. Assegnamento: niente autoriflessività
 
-```janus
+```kairos
 x += x    // ERRORE: x compare su entrambi i lati
 x += y    // OK
 ```
 
 ### 2. if-fi: la variabile di controllo non deve cambiare nel corpo
 
-```janus
+```kairos
 if x == 0 then
     x += 1    // WARNING: x è la variabile di controllo
 fi x == 0
@@ -456,7 +461,7 @@ fi x == 0
 
 ### 3. local/delocal: la sorgente non deve essere modificata tra local e delocal
 
-```janus
+```kairos
 local int y = x     // y inizializzata con x
 x += 1              // WARNING: x viene modificata prima del delocal di y
 delocal int y = x   // y non può essere ricostruita in UNCALL
@@ -472,19 +477,31 @@ Se il valore finale della variabile non corrisponde a quello dichiarato nella `d
 
 ### 5. Stack e channel devono essere vuoti alla delocal
 
-```janus
+```kairos
 delocal stack s = nil     // s deve essere vuoto
 delocal channel ch = empty // ch deve essere vuoto
 ```
 
 ---
 
-## Il bytecode Janus
+## Il bytecode Kairos
 
 Il compilatore produce un bytecode testuale che la VM interpreta. Ogni riga ha il formato:
 
 ```
-NNNN  ISTRUZIONE [argomenti...]
+NNNN  @SRC   ISTRUZIONE [argomenti...]
+```
+
+dove:
+- `NNNN` è la riga fisica del bytecode (4 cifre, crescente).
+- `@SRC` è la riga del sorgente Kairos da cui l'istruzione proviene (usata anche dal debugger DAP).
+
+Esempio reale:
+
+```
+0052  @33     PAR_START
+0053  @33     THREAD_0
+0054  @34     CALL producer buffer n
 ```
 
 Le istruzioni principali:
@@ -522,11 +539,14 @@ Le istruzioni principali:
 Per vedere il bytecode generato da un programma:
 
 ```bash
-make run FILE=examples/fib.janus
+make run FILE=examples/fib.kairos
 # oppure
-./venv/bin/python -m src.janus examples/fib.janus --dump-bytecode
+./venv/bin/python -m src.kairos examples/fib.kairos --dump-bytecode
 # il bytecode viene scritto in bytecode.txt
 ```
+
+Nota:
+- con `--dap` il frontend scrive sempre `bytecode.txt` e non esegue direttamente la VM (l'esecuzione è gestita dall'adapter DAP).
 
 ---
 

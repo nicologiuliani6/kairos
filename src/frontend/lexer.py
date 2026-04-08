@@ -1,5 +1,5 @@
 """
-LEXER basilare per janus concorrenziale
+LEXER basilare per kairos concorrenziale
 Uso: python Jlexer.py <file>
 """
 import sys

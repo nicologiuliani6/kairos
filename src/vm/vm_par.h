@@ -11,7 +11,7 @@
 #include "vm_ops.h"
 
 /* Forward declarations — definite rispettivamente in vm_par.h (thread_entry)
-   e in Janus.c (vm_run_BT, invert_op_to_line). */
+   e in Kairos.c (vm_run_BT, invert_op_to_line). */
 static void *thread_entry(void *arg);
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,

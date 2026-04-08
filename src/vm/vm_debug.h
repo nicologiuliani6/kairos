@@ -2,7 +2,7 @@
 #define VM_DEBUG_H
 
 /*
- * vm_debug.h — infrastruttura di debug della VM Janus
+ * vm_debug.h — infrastruttura di debug della VM Kairos
  *
  * Include:
  *   - dbg_init / dbg_destroy
@@ -20,7 +20,7 @@
 #include "vm_types.h"
 #include "vm_helpers.h"
 #define VMLOG(...) do { \
-    FILE *_f = fopen("/tmp/janus-vm.log", "a"); \
+    FILE *_f = fopen("/tmp/kairos-vm.log", "a"); \
     if (_f) { fprintf(_f, __VA_ARGS__); fclose(_f); } \
 } while(0)
 
@@ -135,7 +135,7 @@ static inline void dbg_hook(VMDebugState *dbg,
              dbg_is_breakpoint(dbg, line))
         should_pause = 1;
     {
-    FILE *f = fopen("/tmp/janus-vm.log", "a");
+    FILE *f = fopen("/tmp/kairos-vm.log", "a");
     if (f) { fprintf(f, "dbg_hook line=%d mode=%d should_pause=%d\n", line, dbg->mode, should_pause); fclose(f); }
     }
     if (!should_pause) return;
