@@ -346,24 +346,24 @@ static void vm_free(VM *vm)
 
 void vm_dump(VM *vm)
 {
-    printf("=== VM dump ===\n");
+    vm_printf("=== VM dump ===\n");
     for (int i = 0; i <= vm->frame_top; i++) {
         Frame *f = &vm->frames[i];
         if (strcmp(f->name, "main") != 0) continue;
         for (int j = 0; j < f->var_count; j++) {
             Var *v = f->vars[j]; if (!v) continue;
-            printf("%s: ", v->name);
+            vm_printf("%s: ", v->name);
             if (v->T == TYPE_INT) {
-                printf("%d", *(v->value));
+                vm_printf("%d", *(v->value));
             } else {
-                printf("[");
+                vm_printf("[");
                 for (size_t k = 0; k < v->stack_len; k++) {
-                    printf("%d", v->value[k]);
-                    if (k + 1 < v->stack_len) printf(", ");
+                    vm_printf("%d", v->value[k]);
+                    if (k + 1 < v->stack_len) vm_printf(", ");
                 }
-                printf("]");
+                vm_printf("]");
             }
-            printf("\n");
+            vm_printf("\n");
         }
     }
 }
@@ -386,6 +386,8 @@ void vm_run_from_string(const char *bytecode)
     VM vm; memset(&vm, 0, sizeof(VM));
     vm.dbg = NULL;   /* modalità normale: nessun debugger */
     vm_exec(&vm, ast);
+    /* Dump finale sempre emesso in modalità run standard. */
+    vm_dump(&vm);
     vm_free(&vm);
 }
 
@@ -423,6 +425,8 @@ static void *debug_exec_thread(void *arg)
 
     (void)arg;
     vm_exec(g_debug_vm, g_debug_buf);
+    /* Anche in modalità DAP emettiamo il dump finale su stdout. */
+    vm_dump(g_debug_vm);
 
     if (g_debug_dbg) {
         pthread_mutex_lock(&g_debug_dbg->pause_mtx);

@@ -67,12 +67,12 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
 
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
-            char *a = strtok(NULL, " \t");
-            char *b = strtok(NULL, " \t");
-            char *c = strtok(NULL, " \t");
-            (void)b;
-            strncpy(pid,  a ? a : "", 63);
-            strncpy(pval, c ? c : "", 63);
+            char *a = strtok(NULL, " \t");  /* lhs */
+            /* strtok(NULL, " \t") salta l'operatore */
+            strtok(NULL, " \t");
+            char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
+            strncpy(pid,  a   ? a   : "", 63);
+            strncpy(pval, rhs,             63);
         } else if (!strcmp(fw, "JMPF") && !in_loop) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "FROM_ERR", 8)) {
@@ -119,12 +119,11 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
 
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
-            char *a = strtok(NULL, " \t");
-            char *b = strtok(NULL, " \t");
-            char *c = strtok(NULL, " \t");
-            (void)b;
-            strncpy(pid,  a ? a : "", 63);
-            strncpy(pval, c ? c : "", 63);
+            char *a = strtok(NULL, " \t");  /* lhs */
+            strtok(NULL, " \t");            /* op  */
+            char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
+            strncpy(pid,  a   ? a   : "", 63);
+            strncpy(pval, rhs,             63);
         } else if (!strcmp(fw, "JMPF") && !in_if) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
@@ -186,10 +185,9 @@ static inline IfZone line_if_zone(uint line, IfDescriptor *I, int n, int *idx)
 static inline void do_eval(VM *vm, uint fi, const char *id, const char *val)
 {
     uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
-    int rhs = char_id_map_exists(&vm->frames[fi].VarIndexer, val)
-        ? *(vm->frames[fi].vars[char_id_map_get(&vm->frames[fi].VarIndexer, val)]->value)
-        : (int)strtol(val, NULL, 10);
-    thread_val_IF = (*(vm->frames[fi].vars[vi]->value) == rhs);
+    int  lval = *(vm->frames[fi].vars[vi]->value);
+    int  rval = resolve_expr(vm, fi, val);
+    thread_val_IF = (lval == rval);
 }
 
 static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
@@ -424,10 +422,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
            in modo che SSEND e SRECV vengano scambiati dentro thread_entry.
            Le istruzioni interne sono già skippate da line_is_inside_par. */
         if (!strcmp(fw, "PAR_START")) {
-            /* cur è il numero-riga stampato nel bytecode (es. 5 per "0005  PAR_START").
-               go_to_line conta i \n fisici: riga fisica N = numero-bytecode N+1.
-               Vogliamo la riga DOPO PAR_START, cioè fisica cur+2. */
-            char *par_ptr = go_to_line(orig, cur + 2);
+            /* cur è il numero-riga stampato nel bytecode (es. 52 per "0052 PAR_START").
+               Il blocco PAR da scansionare inizia dalla riga successiva
+               (THREAD_0), quindi fisicamente cur+1. */
+            char *par_ptr = go_to_line(orig, cur + 1);
             if (par_ptr) {
                 ParBlock pb = scan_par_block(par_ptr);
                 exec_par_threads(vm, orig, cur_frame, &pb, 1, 1);

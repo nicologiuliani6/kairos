@@ -3,4 +3,4 @@ procedure main()
     from x == 0 loop
         show(x)
         x+=1
-    until x == 4
+    until x == 4000

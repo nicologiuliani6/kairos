@@ -37,6 +37,7 @@ procedure PC(stack buffer, int n, stack result)
     rap
 
 procedure main()
+    int y
     local stack buffer = nil
     local stack result = nil
     local int n = 5
