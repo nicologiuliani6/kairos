@@ -3,65 +3,91 @@
   "displayName": "Janus Debugger",
   "description": "Debugger reversibile per il linguaggio Janus",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nicologiuliani6/kairos-debugger"
+  },
+  "publisher": "nico",
   "engines": {
     "vscode": "^1.80.0"
   },
-  "categories": [
-    "Debuggers"
-  ],
+  "categories": ["Debuggers"],
   "activationEvents": [
     "onDebugResolve:janus",
     "onLanguage:janus"
   ],
   "main": "./out/extension.js",
   "contributes": {
-     "breakpoints": [
-        { "language": "janus" }
-    ],
     "languages": [
       {
         "id": "janus",
-        "extensions": [
-          ".janus"
-        ],
-        "aliases": [
-          "Janus"
-        ]
+        "extensions": [".janus"],
+        "aliases": ["Janus"]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "janus"
       }
     ],
     "debuggers": [
       {
         "type": "janus",
         "label": "Janus Debug",
-        "program": "./out/dapAdapter.js",
-        "runtime": "node",
+        "languages": ["janus"],
         "configurationAttributes": {
           "launch": {
-            "required": [
-              "program"
-            ],
+            "required": ["program"],
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Percorso del file .janus da eseguire"
+                "description": "File .janus da eseguire"
+              },
+              "janusApp": {
+                "type": "string",
+                "description": "Percorso dell'eseguibile JanusApp"
+              },
+              "janusLib": {
+                "type": "string",
+                "description": "Percorso di libvm_dap.so"
               },
               "stopOnEntry": {
                 "type": "boolean",
-                "default": true,
-                "description": "Fermati alla prima istruzione"
+                "default": false
               }
             }
           }
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Janus",
+      "properties": {
+        "janus.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Percorso dell'interprete Python."
         },
-        "initialConfigurations": [
-          {
-            "type": "janus",
-            "request": "launch",
-            "name": "Debug Janus",
-            "program": "${file}",
-            "stopOnEntry": true
-          }
-        ]
+        "janus.projectRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Percorso della root del progetto Janus."
+        },
+        "janus.libPath": {
+          "type": "string",
+          "default": "",
+          "description": "Percorso di libvm_dap.so (es. /home/user/janus/build/libvm_dap.so)"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "janus.selectInterpreter",
+        "title": "Janus: Seleziona interprete Python"
+      },
+      {
+        "command": "janus.selectRoot",
+        "title": "Janus: Seleziona root progetto"
       }
     ]
   },
@@ -69,14 +95,14 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./"
   },
+  "dependencies": {
+    "koffi": "^2.0.0",
+    "@vscode/debugadapter": "^1.61.0"
+  },
   "devDependencies": {
     "@types/node": "^25.5.2",
     "@types/vscode": "^1.80.0",
-    "@vscode/debugadapter": "^1.61.0",
     "@vscode/debugprotocol": "^1.61.0",
     "typescript": "^5.0.0"
-  },
-  "dependencies": {
-    "koffi": "^2.0.0"
   }
 }

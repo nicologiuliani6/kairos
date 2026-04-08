@@ -34,7 +34,7 @@ log('DAP adapter avviato');
  *  Caricamento libvm_dap.so tramite koffi
  * ====================================================================== */
 
-const LIB_PATH = path.join(__dirname, '../../build/libvm_dap.so');
+let LIB_PATH = path.join(__dirname, '../../build/libvm_dap.so');
 
 let lib: any;
 let vm_debug_new:                   ()                                    => any;
@@ -85,22 +85,22 @@ function loadLib() {
  *  Compilazione .janus → bytecode
  * ====================================================================== */
 
-function compileBytecode(janusFile: string): { bytecode: string; compileOutput: string } {
-    const root   = path.join(__dirname, '../../');
-    const venv   = path.join(root, 'venv/bin/python');
-    const btFile = path.join(root, 'bytecode.txt');
+function compileBytecode(
+    janusFile: string,
+    janusApp:  string,
+): { bytecode: string; compileOutput: string } {
+
+    const appDir = path.dirname(janusApp);
+    const btFile = path.join(appDir, 'bytecode.txt');
+
+    log(`compileBytecode: app=${janusApp}, file=${janusFile}`);
 
     if (fs.existsSync(btFile)) fs.unlinkSync(btFile);
 
     const result = spawnSync(
-        'env',
-        [
-            `LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so`,
-            venv,
-            '-m', 'src.frontend.bytecode',
-            janusFile,
-        ],
-        { cwd: root, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+        janusApp,
+        [janusFile, '--dap', '--dump-bytecode'],
+        { cwd: appDir, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
     );
 
     const compileOutput = [result.stdout || '', result.stderr || '']
@@ -117,17 +117,13 @@ function compileBytecode(janusFile: string): { bytecode: string; compileOutput: 
 
 /* ======================================================================
  *  vm_debug_continue in un Worker thread separato
- *
- *  vm_debug_continue() è una chiamata C bloccante — se la eseguiamo
- *  direttamente nel thread principale di Node.js, blocchiamo l'event loop
- *  e non possiamo ricevere i dati dalla pipe nel frattempo.
  * ====================================================================== */
 
 function runContinueInWorker(dbgPtr: bigint): Promise<number> {
     return new Promise((resolve, reject) => {
         const workerCode = `
 const { workerData, parentPort } = require('worker_threads');
-const koffi = require(workerData.koffiPath);  // ← path assoluto
+const koffi = require(workerData.koffiPath);
 
 try {
     const lib = koffi.load(workerData.libPath);
@@ -142,9 +138,9 @@ try {
         const worker = new Worker(workerCode, {
             eval: true,
             workerData: {
-                libPath:  LIB_PATH,
+                libPath:   LIB_PATH,
                 dbgPtr,
-                koffiPath: require.resolve('koffi'),  // ← aggiunto
+                koffiPath: require.resolve('koffi'),
             }
         });
 
@@ -158,25 +154,12 @@ try {
 
 /* ======================================================================
  *  Lettura dalla pipe C → Debug Console
- *
- *  Strategia a due livelli:
- *
- *  1. net.Socket({ fd }) con resume() — il modo "giusto" su Linux.
- *     Se funziona riceve i dati in streaming via event loop.
- *
- *  2. Fallback: polling con fs.readSync ogni 50 ms.
- *     Usato se il socket emette un errore subito dopo resume()
- *     (accade quando il fd non è in modalità non-bloccante o quando
- *     la versione di libuv non lo supporta come stream).
- *
- *  In entrambi i casi i chunk vengono inviati come DAP OutputEvent
- *  alla Debug Console di VS Code.
  * ====================================================================== */
 
 class PipeReader {
     private fd:       number;
-    private socket:   net.Socket | null  = null;
-    private interval: NodeJS.Timeout | null = null;
+    private socket:   net.Socket | null      = null;
+    private interval: NodeJS.Timeout | null  = null;
     private onData:   (text: string) => void;
     private usedFallback = false;
 
@@ -188,12 +171,11 @@ class PipeReader {
     start() {
         log(`PipeReader.start fd=${this.fd}`);
 
-        // ── Tentativo 1: net.Socket ──────────────────────────────────────
         try {
             const sock = new net.Socket({
-                fd:           this.fd,
-                readable:     true,
-                writable:     false,
+                fd:            this.fd,
+                readable:      true,
+                writable:      false,
                 allowHalfOpen: true,
             });
             sock.setEncoding('utf-8');
@@ -216,125 +198,72 @@ class PipeReader {
             sock.on('end',   () => log('pipe[socket] EOF'));
             sock.on('close', () => log('pipe[socket] chiusa'));
 
-            sock.resume();   // flowing mode — fondamentale
+            sock.resume();
             this.socket = sock;
 
-            // Se dopo 200 ms il socket non ha ancora emesso dati né errori,
-            // non possiamo sapere se funziona o meno — lasciamolo vivere.
-            // Il polling partirà solo su errore esplicito.
         } catch (e: any) {
-            log(`pipe[socket] costruttore fallito: ${e.message} — uso polling`);
+            log(`PipeReader socket fallito: ${e.message} — uso polling`);
             this._startPolling();
         }
     }
 
-    /* ── Fallback polling ───────────────────────────────────────────────── */
     private _startPolling() {
         if (this.usedFallback) return;
         this.usedFallback = true;
         log(`PipeReader: avvio polling fd=${this.fd}`);
 
         this.interval = setInterval(() => {
+            const buf = Buffer.alloc(4096);
             try {
-                const buf = Buffer.alloc(4096);
-                // null come position → legge dalla posizione corrente (pipe)
                 const n = fs.readSync(this.fd, buf, 0, buf.length, null);
                 if (n > 0) {
                     const text = buf.toString('utf-8', 0, n);
                     log(`pipe[poll] data: ${JSON.stringify(text)}`);
                     this.onData(text);
                 }
-            } catch (err: any) {
-                // EAGAIN / EWOULDBLOCK → nessun dato disponibile, normale
-                if (err.code !== 'EAGAIN' && err.code !== 'EWOULDBLOCK') {
-                    log(`pipe[poll] errore fatale: ${err.message}`);
-                    this.stop();
-                }
-            }
+            } catch (_) { /* EAGAIN / EWOULDBLOCK — normale */ }
         }, 50);
     }
 
     stop() {
-        log('PipeReader.stop');
-        if (this.socket) {
-            this.socket.destroy();
-            this.socket = null;
-        }
-        if (this.interval) {
-            clearInterval(this.interval);
-            this.interval = null;
-        }
+        if (this.socket)   { this.socket.destroy(); this.socket = null; }
+        if (this.interval) { clearInterval(this.interval); this.interval = null; }
     }
 }
 
 /* ======================================================================
- *  JanusDebugSession
+ *  Interfaccia LaunchArgs
  * ====================================================================== */
 
 interface LaunchArgs extends DebugProtocol.LaunchRequestArguments {
     program:      string;
     stopOnEntry?: boolean;
+    janusApp?:    string;
+    janusLib?:    string;
 }
+
+/* ======================================================================
+ *  Sessione DAP principale
+ * ====================================================================== */
 
 class JanusDebugSession extends LoggingDebugSession {
 
-    private dbg:        any        = null;
-    private dbgPtr:     bigint     = 0n;
-    private sourceFile: string     = '';
+    private dbg:        any    = null;
+    private dbgPtr:     bigint = 0n;
+    private sourceFile: string = '';
     private pipeReader: PipeReader | null = null;
 
     constructor() {
         super();
+        // loadLib() viene chiamato in launchRequest dopo aver impostato LIB_PATH
         this.setDebuggerLinesStartAt1(true);
-        loadLib();
-    }
-
-    /* ── Invia testo come OutputEvent nella Debug Console ── */
-    private sendOutput(text: string, category: 'stdout' | 'stderr' | 'console' = 'stdout') {
-        if (!text) return;
-        const body = text.endsWith('\n') ? text : text + '\n';
-        this.sendEvent(new OutputEvent(body, category));
-    }
-
-    /* ── Avvia la lettura dalla pipe C ── */
-    private startOutputPipe() {
-        if (!this.dbg) return;
-
-        const fd = vm_debug_get_output_fd(this.dbg);
-        log(`startOutputPipe: fd=${fd}`);
-
-        if (fd <= 0) {
-            log('WARN: pipe fd non valido — DAP_MODE non definito in compilazione?');
-            return;
-        }
-
-        // Rende il fd non-bloccante così fs.readSync non si blocca mai
-        // e net.Socket può usarlo senza deadlock.
-        try {
-            // fcntl F_SETFL O_NONBLOCK via Node.js non è esposto direttamente,
-            // ma net.Socket lo imposta automaticamente su Linux.
-            // Per sicurezza usiamo anche il flag O_NONBLOCK via koffi se serve.
-            // In pratica net.Socket + resume() lo fa già.
-        } catch (_) { /* ignorato */ }
-
-        this.pipeReader = new PipeReader(fd, (text) => {
-            this.sendOutput(text, 'console');
-        });
-        this.pipeReader.start();
-    }
-
-    /* ── Ferma il reader ── */
-    private stopOutputPipe() {
-        if (this.pipeReader) {
-            this.pipeReader.stop();
-            this.pipeReader = null;
-        }
+        this.setDebuggerColumnsStartAt1(true);
     }
 
     /* ── Initialize ── */
     protected initializeRequest(
         response: DebugProtocol.InitializeResponse,
-        _args: DebugProtocol.InitializeRequestArguments
+        _args:    DebugProtocol.InitializeRequestArguments
     ) {
         response.body = response.body || {};
         response.body.supportsStepBack                 = true;
@@ -343,17 +272,61 @@ class JanusDebugSession extends LoggingDebugSession {
         this.sendEvent(new InitializedEvent());
     }
 
+    /* ── Helper output ── */
+    private sendOutput(text: string, cat: string = 'console') {
+        this.sendEvent(new OutputEvent(text, cat));
+    }
+
+    /* ── Pipe output dalla VM ── */
+    private startOutputPipe() {
+        if (!this.dbg) return;
+        const fd = vm_debug_get_output_fd(this.dbg);
+        log(`startOutputPipe: fd=${fd}`);
+        if (fd < 0) return;
+
+        this.pipeReader = new PipeReader(fd, (text) => {
+            this.sendOutput(text, 'stdout');
+        });
+        this.pipeReader.start();
+    }
+
+    private stopOutputPipe() {
+        if (this.pipeReader) { this.pipeReader.stop(); this.pipeReader = null; }
+    }
+
     /* ── Launch ── */
     protected launchRequest(
         response: DebugProtocol.LaunchResponse,
-        args: LaunchArgs
+        args:     LaunchArgs
     ) {
+        // Imposta LIB_PATH prima di loadLib()
+        if (args.janusLib) {
+            LIB_PATH = args.janusLib;
+        }
+
+        log('launchRequest chiamato, program=' + args.program);
+        log('janusApp=' + (args.janusApp || 'NON IMPOSTATO'));
+        log('janusLib=' + LIB_PATH);
+
+        // Carica la libreria ora che LIB_PATH è aggiornato
+        try {
+            loadLib();
+        } catch (e: any) {
+            this.sendErrorResponse(response, 1, `Impossibile caricare libvm_dap.so: ${e.message}`);
+            return;
+        }
+
         this.sourceFile = args.program;
 
         let bytecode:      string;
         let compileOutput: string;
         try {
-            ({ bytecode, compileOutput } = compileBytecode(this.sourceFile));
+            const appPath = args.janusApp || '';
+            if (!appPath) {
+                this.sendErrorResponse(response, 1, 'janusApp non impostato nel launch.json');
+                return;
+            }
+            ({ bytecode, compileOutput } = compileBytecode(this.sourceFile, appPath));
         } catch (e: any) {
             this.sendOutput(`Errore di compilazione:\n${e.message}`, 'stderr');
             this.sendErrorResponse(response, 1, `Compilazione fallita: ${e.message}`);
@@ -361,30 +334,21 @@ class JanusDebugSession extends LoggingDebugSession {
         }
 
         if (compileOutput) {
-            this.sendOutput(`[compilatore]\n${compileOutput}\n`, 'console');
+            this.sendOutput(`[LEXER->PARSER->AST->BYTECODE]\n${compileOutput}\n`, 'console');
         }
 
-        // Crea la sessione di debug
         this.dbg = vm_debug_new();
-
         try {
             this.dbgPtr = BigInt(koffi.address(this.dbg));
         } catch {
             this.dbgPtr = BigInt(this.dbg);
         }
 
-        // Avvia la VM (bloccante fino alla prima PAUSE)
         vm_debug_start(bytecode, this.dbg);
-
-        // ── IMPORTANTE: avvia il reader DOPO vm_debug_start ──
-        // vm_debug_start crea la pipe internamente; il fd è valido solo ora.
-        // La VM è in pausa alla prima istruzione, quindi non c'è ancora
-        // nulla sulla pipe — nessun rischio di perdere dati.
         this.startOutputPipe();
-
         this.sendResponse(response);
 
-        if (args.stopOnEntry !== true) {
+        if (args.stopOnEntry === true) {
             this.sendEvent(new StoppedEvent('entry', 1));
         } else {
             this._doContinue();
@@ -394,14 +358,13 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── Continue (F5) ── */
     protected continueRequest(
         response: DebugProtocol.ContinueResponse,
-        _args: DebugProtocol.ContinueArguments
+        _args:    DebugProtocol.ContinueArguments
     ) {
         log('continueRequest');
         this.sendResponse(response);
         this._doContinue();
     }
 
-    /* ── Logica comune per continue ── */
     private _doContinue() {
         runContinueInWorker(this.dbgPtr)
             .then((line) => {
@@ -423,7 +386,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── Next (F10) ── */
     protected nextRequest(
         response: DebugProtocol.NextResponse,
-        _args: DebugProtocol.NextArguments
+        _args:    DebugProtocol.NextArguments
     ) {
         this.sendResponse(response);
         log('vm_debug_step');
@@ -447,7 +410,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── StepBack ── */
     protected stepBackRequest(
         response: DebugProtocol.StepBackResponse,
-        _args: DebugProtocol.StepBackArguments
+        _args:    DebugProtocol.StepBackArguments
     ) {
         this.sendResponse(response);
         log('vm_debug_step_back');
@@ -472,7 +435,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── StackTrace ── */
     protected stackTraceRequest(
         response: DebugProtocol.StackTraceResponse,
-        _args: DebugProtocol.StackTraceArguments
+        _args:    DebugProtocol.StackTraceArguments
     ) {
         const state = this.getState();
         const src   = new Source(path.basename(this.sourceFile), this.sourceFile);
@@ -484,7 +447,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── Scopes ── */
     protected scopesRequest(
         response: DebugProtocol.ScopesResponse,
-        _args: DebugProtocol.ScopesArguments
+        _args:    DebugProtocol.ScopesArguments
     ) {
         response.body = { scopes: [new Scope('Locals', 1, false)] };
         this.sendResponse(response);
@@ -493,7 +456,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── Variables ── */
     protected variablesRequest(
         response: DebugProtocol.VariablesResponse,
-        _args: DebugProtocol.VariablesArguments
+        _args:    DebugProtocol.VariablesArguments
     ) {
         const vars = this.getVariables();
         response.body = {
@@ -509,7 +472,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── SetBreakpoints ── */
     protected setBreakPointsRequest(
         response: DebugProtocol.SetBreakpointsResponse,
-        args: DebugProtocol.SetBreakpointsArguments
+        args:     DebugProtocol.SetBreakpointsArguments
     ) {
         if (this.dbg) vm_debug_clear_all_breakpoints(this.dbg);
 
@@ -526,7 +489,7 @@ class JanusDebugSession extends LoggingDebugSession {
     /* ── Disconnect ── */
     protected disconnectRequest(
         response: DebugProtocol.DisconnectResponse,
-        _args: DebugProtocol.DisconnectArguments
+        _args:    DebugProtocol.DisconnectArguments
     ) {
         this.stopOutputPipe();
         if (this.dbg) {
@@ -537,7 +500,7 @@ class JanusDebugSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    /* ── Helper: stato corrente (linea + frame) ── */
+    /* ── Helper: stato corrente ── */
     private getState(): { line: number; frame: string } {
         if (!this.dbg) return { line: 0, frame: 'main' };
         const buf = Buffer.alloc(65536);
@@ -550,7 +513,7 @@ class JanusDebugSession extends LoggingDebugSession {
         }
     }
 
-    /* ── Helper: variabili del frame corrente ── */
+    /* ── Helper: variabili ── */
     private getVariables(): any[] {
         if (!this.dbg) return [];
         const buf = Buffer.alloc(65536);

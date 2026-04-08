@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <unistd.h>
 #include <pthread.h>
 #include "vm_debug.h"
 
@@ -25,12 +26,12 @@ void vm_debug_panic(const char *fmt, ...)
 
     strncpy(g_debug_dbg->last_error, msg, sizeof(g_debug_dbg->last_error) - 1);
 
-    int olen = (int)strlen(msg);
-    int room = (int)sizeof(g_debug_dbg->out_buf) - g_debug_dbg->out_len - 1;
-    if (room > 0) {
-        int n = olen < room ? olen : room;
-        memcpy(g_debug_dbg->out_buf + g_debug_dbg->out_len, msg, n);
-        g_debug_dbg->out_len += n;
+    /* Scrivi sulla pipe — stesso canale usato da SHOW — così il DAP
+       adapter lo riceve come OutputEvent nella Debug Console */
+    if (g_debug_dbg->output_pipe_fd > 0) {
+        const char *prefix = "[ERRORE] ";
+        write(g_debug_dbg->output_pipe_fd, prefix, strlen(prefix));
+        write(g_debug_dbg->output_pipe_fd, msg, strlen(msg));
     }
 
     pthread_mutex_lock(&g_debug_dbg->pause_mtx);

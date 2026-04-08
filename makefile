@@ -62,6 +62,21 @@ build-release: check-deps $(VERSCRIPT)
 	    -o $(LIBVM) $(VM_DIR)/Janus.c -I$(VM_DIR)
 	@echo "$(GREEN)Build release OK$(RESET)"
 
+# ============================================================
+#  release — build standalone JanusApp con PyInstaller
+# ============================================================
+release: build-release
+	@echo "$(CYAN)Build release JanusApp...$(RESET)"
+	@mkdir -p $(DIST_DIR)
+	$(PYINSTALLER) --onefile \
+		--log-level ERROR \
+		--distpath $(DIST_DIR) \
+		--workpath build/pyinstaller-work \
+		--specpath build \
+		--name JanusApp \
+	    $(SRC_DIR)/janus.py
+	@echo "$(GREEN)Build release OK: $(DIST_DIR)/JanusApp$(RESET)"
+
 build-dap: check-deps
 	@mkdir -p build
 	@echo "$(CYAN)Build DAP (senza ASan)...$(RESET)"
@@ -102,24 +117,31 @@ endif
 	@echo "$(CYAN)Esecuzione: $(FILE)$(RESET)"
 	# Verifica se la VM è stata compilata con ASan (DEBUG)
 ifneq ($(findstring -fsanitize=address,$(CFLAGS_DBG)),)
-	# Precarica libasan
-	LD_PRELOAD=$(shell gcc -print-file-name=libasan.so) $(PYTHON) -m src.janus $(FILE) --dump-bytecode
+	LD_PRELOAD=$(shell gcc -print-file-name=libasan.so) \
+	ASAN_OPTIONS=detect_leaks=0 \
+	$(PYTHON) -m src.janus $(FILE) --dump-bytecode
 else
 	$(PYTHON) -m src.janus $(FILE) --dump-bytecode
 endif
 
 # ============================================================
-#  test — esegue tutti i .janus in tests/
+#  test — esegue tutti i .janus in tests/ e in examples/
 # ============================================================
-JANUS_FILES := $(wildcard $(JPROGRAMS)/*.janus)
+JANUS_FILES := $(wildcard tests/*.janus examples/*.janus)
 
 test: build-release
 	@echo "$(CYAN)=== Test suite ===$(RESET)"
 	@passed=0; failed=0; errors=""; \
 	for f in $(JANUS_FILES); do \
 		name=$$(basename $$f); \
-		output=$$($(PYTHON) -m src.janus $$f --dump-bytecode 2>&1); \
-		if echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow|assertion"; then \
+		# esegue il test con timeout di 5 secondi \
+		output=$$(timeout 5s $(PYTHON) -m src.janus $$f --dump-bytecode 2>&1); \
+		status=$$?; \
+		if [ $$status -eq 124 ]; then \
+			echo "  $(RED)TIMEOUT$(RESET)  $$name"; \
+			errors="$$errors\n--- $$name ---\nTest interrotto per timeout (5s)\n"; \
+			failed=$$((failed+1)); \
+		elif echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow|assertion"; then \
 			echo "  $(RED)FAIL$(RESET)  $$name"; \
 			errors="$$errors\n--- $$name ---\n$$output\n"; \
 			failed=$$((failed+1)); \
@@ -155,20 +177,6 @@ endif
 		echo "$(GREEN)PASS$(RESET)"; \
 	fi
 
-# ============================================================
-#  release — build ottimizzata + pacchetto PyInstaller
-# ============================================================
-release: build-release
-	@echo "$(CYAN)Packaging con PyInstaller...$(RESET)"
-	cd $(SRC_DIR) && $(PYINSTALLER) --onefile \
-		--name JanusApp \
-		--add-binary "vm/libvm.so:vm" \
-		--hidden-import=ply \
-		--hidden-import=ply.yacc \
-		--hidden-import=ply.lex \
-		janus.py
-	@echo "$(GREEN)Release pronta: $(DIST_DIR)/JanusApp$(RESET)"
-	@echo "$(YELLOW)SHA256: $$(sha256sum $(DIST_DIR)/JanusApp | cut -d' ' -f1)$(RESET)"
 
 # ============================================================
 #  install-deps — crea venv e installa dipendenze

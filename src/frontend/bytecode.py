@@ -17,8 +17,9 @@ class ByteCode_Compiler:
         self.bytecode_line = 0      # ← AGGIUNGI
 
     def emit(self, instr, lineno=None):
-        self.bytecode_line += 1     # ← AGGIUNGI
-        self.queue.put((self.bytecode_line, instr))   # ← CAMBIA src → self.bytecode_line
+        self.bytecode_line += 1
+        src_tag = f"@{lineno}" if lineno is not None else "@0"
+        self.queue.put((self.bytecode_line, src_tag, instr))
         self.addr += 1
 
     def expr_to_str(self, expr):
@@ -164,7 +165,6 @@ if __name__ == '__main__':
 
     with open("bytecode.txt", "w") as f:
         while not compiler.queue.empty():
-            src_line, instr = compiler.queue.get()
-            line = f"{src_line:04d}  {instr}\n"
+            phys, src_tag, instr = compiler.queue.get()
+            line = f"{phys:04d}  {src_tag:<8}  {instr}\n"
             f.write(line)
-            #print(line, end="")

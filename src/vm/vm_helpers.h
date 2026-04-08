@@ -151,8 +151,16 @@ static inline char *go_to_line(char *buf, uint line)
 
 static inline char *skip_lineno(char *line)
 {
+    /* Salta i 4 digit fisici */
     while (*line >= '0' && *line <= '9') line++;
+    /* Salta spazi */
     while (*line == ' ' || *line == '\t') line++;
+    /* Salta il tag sorgente @N se presente */
+    if (*line == '@') {
+        line++;
+        while (*line >= '0' && *line <= '9') line++;
+        while (*line == ' ' || *line == '\t') line++;
+    }
     return line;
 }
 

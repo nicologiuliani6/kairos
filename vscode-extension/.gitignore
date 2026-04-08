@@ -1,0 +1,11 @@
+# Dipendenze
+node_modules/
+
+# Build output (TypeScript → JS)
+out/
+
+# Package generato
+*.vsix
+
+# Mappe (opzionale ma consigliato)
+*.js.map

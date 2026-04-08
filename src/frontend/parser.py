@@ -1,6 +1,8 @@
 import sys
 import ply.yacc as yacc
 from .lexer import lexer, tokens
+import logging
+import tempfile
 
 VERBOSE = False
 
@@ -189,8 +191,16 @@ def p_error(p):
     else:
         print("[PARSER] errore sintattico: fine file inattesa")
 
-parser = yacc.yacc()
 
+_nulllog = logging.getLogger('ply.nulllog')
+_nulllog.addHandler(logging.NullHandler())
+
+parser = yacc.yacc(
+    errorlog=_nulllog,
+    debuglog=_nulllog,
+    outputdir=tempfile.gettempdir(),
+    debug=False,
+)
 if __name__ == '__main__':
     VERBOSE = True
     if len(sys.argv) < 2:

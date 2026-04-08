@@ -40,7 +40,7 @@ CharIdMap       FrameIndexer;
 
 static inline int extract_lineno(const char *raw_line)
 {
-    /* Il formato bytecode è "NNNN  OP ..." con 4 cifre + 2 spazi */
+    /* Estrae il numero fisico di riga (i primi 4 digit) */
     char tmp[8] = {0};
     int  i;
     for (i = 0; i < 4 && raw_line[i] >= '0' && raw_line[i] <= '9'; i++)
@@ -48,10 +48,18 @@ static inline int extract_lineno(const char *raw_line)
     return atoi(tmp);
 }
 
+static inline int extract_srcline(const char *raw_line)
+{
+    /* Formato: "NNNN  @SRC   OP" — cerca '@' e legge il numero sorgente */
+    const char *at = strchr(raw_line, '@');
+    if (!at) return extract_lineno(raw_line); /* fallback al fisico */
+    return atoi(at + 1);
+}
+
 #define DEBUG_HOOK(raw_ptr, instr_text)                                  \
     do {                                                                 \
         if (vm->dbg && vm->dbg->initialized) {                          \
-            int _ln = extract_lineno(raw_ptr);                          \
+            int _ln = extract_srcline(raw_ptr);                          \
             dbg_hook(vm->dbg, _ln, fname, instr_text);                  \
             if (vm->dbg->mode == VM_MODE_DONE &&                        \
                 vm->inversion_depth == 0) { *nl='\n'; goto done; }      \
@@ -93,10 +101,14 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
 
         /* ── DEBUG HOOK ── chiamato prima di ogni istruzione reale ── */
-        if (strcmp(fw, "PROC")  != 0 && strcmp(fw, "PARAM") != 0 &&
-            strcmp(fw, "LABEL") != 0 && strcmp(fw, "DECL")  != 0 &&
-            strcmp(fw, "HALT")  != 0) {
-            DEBUG_HOOK(ptr, lb);
+        if (strcmp(fw, "PROC") != 0 && strcmp(fw, "PARAM") != 0 &&
+            strcmp(fw, "HALT") != 0) {
+            if (strcmp(fw, "DECL") == 0 || strcmp(fw, "LABEL") == 0) {
+                if (vm->dbg && vm->dbg->initialized)
+                    vm->dbg->current_line = extract_srcline(ptr);
+            } else {
+                DEBUG_HOOK(ptr, lb);
+            }
         }
 
         if (!strcmp(fw, "END_PROC")) {
@@ -242,8 +254,9 @@ void vm_exec(VM *vm, char *buffer)
         if (!nl) break;
         *nl = '\0';
 
-        if (strlen(ptr) > 6) {
-            char *fw = strtok(ptr + 6, " \t");
+        if (*skip_lineno(ptr)) {
+            char *_skipped = skip_lineno(ptr);
+            char *fw = strtok(_skipped, " \t");
 
             if (!strcmp(fw, "START")) {
                 char_id_map_init(&FrameIndexer);
