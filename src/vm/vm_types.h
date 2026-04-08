@@ -113,6 +113,8 @@ typedef struct {
     char        out_buf[DBG_OUTPUT_BUF_SIZE];
     int         out_len;
     char last_error[1024]; 
+    int output_pipe_fd;   /* scrittura: la VM ci scrive sopra */
+    int output_pipe_rd;   /* lettura:   Node.js legge da qui  */
 } VMDebugState;
 
 typedef struct {

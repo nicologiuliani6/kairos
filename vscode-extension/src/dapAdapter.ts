@@ -12,8 +12,10 @@ import {
 import { DebugProtocol } from '@vscode/debugprotocol';
 import * as path from 'path';
 import * as koffi from 'koffi';
-import { execSync, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
+import { Worker } from 'worker_threads';
 
 /* ======================================================================
  *  IMPORTANTE: stdout è il canale DAP — NON scriverci mai direttamente.
@@ -24,7 +26,6 @@ const logFile = '/tmp/janus-dap.log';
 
 function log(msg: string) {
     fs.appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
-    // NON usare console.log (→ stdout → corrompe DAP)
 }
 
 log('DAP adapter avviato');
@@ -36,22 +37,19 @@ log('DAP adapter avviato');
 const LIB_PATH = path.join(__dirname, '../../build/libvm_dap.so');
 
 let lib: any;
-let vm_debug_new: () => any;
-let vm_debug_free: (dbg: any) => void;
-let vm_debug_start: (bytecode: string, dbg: any) => void;
-let vm_debug_stop: (dbg: any) => void;
-let vm_debug_step: (dbg: any) => number;
-let vm_debug_step_back: (dbg: any) => number;
-let vm_debug_continue: (dbg: any) => number;
-let vm_debug_set_breakpoint: (dbg: any, line: number) => void;
-let vm_debug_clear_breakpoint: (dbg: any, line: number) => void;
-let vm_debug_clear_all_breakpoints: (dbg: any) => void;
-let vm_debug_vars_json_ext: (dbg: any, out: Buffer, outsz: number) => number;
-let vm_debug_dump_json_ext: (dbg: any, out: Buffer, outsz: number) => number;
-// Funzione C che restituisce l'output della VM (stdout della VM) accumulato
-// Firma attesa: int vm_debug_output_ext(void* dbg, void* out, int outsz)
-// Se non esiste nella libreria, verrà usato il fallback file-based (vedi sotto).
-let vm_debug_output_ext: ((dbg: any, out: Buffer, outsz: number) => number) | null = null;
+let vm_debug_new:                   ()                                    => any;
+let vm_debug_free:                  (dbg: any)                            => void;
+let vm_debug_start:                 (bytecode: string, dbg: any)          => void;
+let vm_debug_stop:                  (dbg: any)                            => void;
+let vm_debug_step:                  (dbg: any)                            => number;
+let vm_debug_step_back:             (dbg: any)                            => number;
+let vm_debug_continue:              (dbg: any)                            => number;
+let vm_debug_set_breakpoint:        (dbg: any, line: number)              => void;
+let vm_debug_clear_breakpoint:      (dbg: any, line: number)              => void;
+let vm_debug_clear_all_breakpoints: (dbg: any)                            => void;
+let vm_debug_vars_json_ext:         (dbg: any, out: Buffer, sz: number)   => number;
+let vm_debug_dump_json_ext:         (dbg: any, out: Buffer, sz: number)   => number;
+let vm_debug_get_output_fd:         (dbg: any)                            => number;
 
 function loadLib() {
     log('Carico libvm_dap.so da: ' + LIB_PATH);
@@ -63,43 +61,29 @@ function loadLib() {
         throw e;
     }
     try {
-        vm_debug_new              = lib.func('void* vm_debug_new()');
-        vm_debug_free             = lib.func('void vm_debug_free(void*)');
-        vm_debug_start            = lib.func('void vm_debug_start(str, void*)');
-        vm_debug_stop             = lib.func('void vm_debug_stop(void*)');
-        vm_debug_step             = lib.func('int  vm_debug_step(void*)');
-        vm_debug_step_back        = lib.func('int  vm_debug_step_back(void*)');
-        vm_debug_continue         = lib.func('int  vm_debug_continue(void*)');
-        vm_debug_set_breakpoint   = lib.func('void vm_debug_set_breakpoint(void*, int)');
-        vm_debug_clear_breakpoint = lib.func('void vm_debug_clear_breakpoint(void*, int)');
-        vm_debug_clear_all_breakpoints = lib.func('void vm_debug_clear_all_breakpoints(void*)');
-        vm_debug_vars_json_ext    = lib.func('int  vm_debug_vars_json_ext(void*, void*, int)');
-        vm_debug_dump_json_ext    = lib.func('int  vm_debug_dump_json_ext(void*, void*, int)');
-        log('Funzioni principali caricate OK');
+        vm_debug_new                   = lib.func('void* vm_debug_new()');
+        vm_debug_free                  = lib.func('void  vm_debug_free(void*)');
+        vm_debug_start                 = lib.func('void  vm_debug_start(str, void*)');
+        vm_debug_stop                  = lib.func('void  vm_debug_stop(void*)');
+        vm_debug_step                  = lib.func('int   vm_debug_step(void*)');
+        vm_debug_step_back             = lib.func('int   vm_debug_step_back(void*)');
+        vm_debug_continue              = lib.func('int   vm_debug_continue(void*)');
+        vm_debug_set_breakpoint        = lib.func('void  vm_debug_set_breakpoint(void*, int)');
+        vm_debug_clear_breakpoint      = lib.func('void  vm_debug_clear_breakpoint(void*, int)');
+        vm_debug_clear_all_breakpoints = lib.func('void  vm_debug_clear_all_breakpoints(void*)');
+        vm_debug_vars_json_ext         = lib.func('int   vm_debug_vars_json_ext(void*, void*, int)');
+        vm_debug_dump_json_ext         = lib.func('int   vm_debug_dump_json_ext(void*, void*, int)');
+        vm_debug_get_output_fd         = lib.func('int   vm_debug_get_output_fd(void*)');
+        log('Funzioni caricate OK');
     } catch (e: any) {
         log('ERRORE func binding: ' + e.message);
         throw e;
     }
-
-    // Prova a caricare vm_debug_output_ext (opzionale — non tutte le versioni
-    // della libreria la espongono)
-    try {
-        vm_debug_output_ext = lib.func('int vm_debug_output_ext(void*, void*, int)');
-        log('vm_debug_output_ext caricata OK');
-    } catch {
-        log('vm_debug_output_ext non disponibile — uso fallback file-based');
-        vm_debug_output_ext = null;
-    }
 }
 
 /* ======================================================================
- *  Compilazione .janus → bytecode tramite janus.py
- *
- *  USA spawnSync invece di execSync così stderr della VM non va a finire
- *  nel file di log ma viene catturato e poi inviato come OutputEvent DAP.
+ *  Compilazione .janus → bytecode
  * ====================================================================== */
-
-const VM_OUTPUT_FILE = '/tmp/janus-vm-output.txt';
 
 function compileBytecode(janusFile: string): { bytecode: string; compileOutput: string } {
     const root   = path.join(__dirname, '../../');
@@ -108,13 +92,12 @@ function compileBytecode(janusFile: string): { bytecode: string; compileOutput: 
 
     if (fs.existsSync(btFile)) fs.unlinkSync(btFile);
 
-    // spawnSync cattura stdout+stderr invece di lasciarli passare al processo
     const result = spawnSync(
         'env',
         [
             `LD_PRELOAD=/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so`,
             venv,
-            '-m', 'src.frontend.bytecode',   // ← usa il __main__ già in bytecode.py
+            '-m', 'src.frontend.bytecode',
             janusFile,
         ],
         { cwd: root, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
@@ -126,54 +109,161 @@ function compileBytecode(janusFile: string): { bytecode: string; compileOutput: 
         .trim();
 
     if (!fs.existsSync(btFile)) {
-        throw new Error(
-            `Compilazione fallita (nessun bytecode.txt):\n${compileOutput}`
-        );
-    }
-
-    if (result.status !== 0) {
-        log(`WARN compilazione exit ${result.status} (ignorato, bytecode.txt presente)`);
+        throw new Error(`Compilazione fallita (nessun bytecode.txt):\n${compileOutput}`);
     }
 
     return { bytecode: fs.readFileSync(btFile, 'utf-8'), compileOutput };
 }
 
 /* ======================================================================
- *  Lettura output VM
+ *  vm_debug_continue in un Worker thread separato
  *
- *  Strategia 1 (preferita): vm_debug_output_ext() nella libreria C —
- *    la VM accumula il suo stdout in un buffer interno e lo espone qui.
- *
- *  Strategia 2 (fallback): la VM scrive su VM_OUTPUT_FILE; lo leggiamo
- *    dopo ogni step/continue e lo svuotiamo (truncate).
- *
- *  In entrambi i casi il risultato viene inviato come DAP OutputEvent
- *  ("stdout" category) così appare nel pannello DEBUG CONSOLE di VS Code.
+ *  vm_debug_continue() è una chiamata C bloccante — se la eseguiamo
+ *  direttamente nel thread principale di Node.js, blocchiamo l'event loop
+ *  e non possiamo ricevere i dati dalla pipe nel frattempo.
  * ====================================================================== */
 
-function readVmOutput(dbg: any): string {
-    // Strategia 1
-    if (vm_debug_output_ext && dbg) {
+function runContinueInWorker(dbgPtr: bigint): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const workerCode = `
+const { workerData, parentPort } = require('worker_threads');
+const koffi = require(workerData.koffiPath);  // ← path assoluto
+
+try {
+    const lib = koffi.load(workerData.libPath);
+    const vm_debug_continue = lib.func('int vm_debug_continue(void*)');
+    const line = vm_debug_continue(workerData.dbgPtr);
+    parentPort.postMessage({ ok: true, line });
+} catch (e) {
+    parentPort.postMessage({ ok: false, error: e.message });
+}
+        `;
+
+        const worker = new Worker(workerCode, {
+            eval: true,
+            workerData: {
+                libPath:  LIB_PATH,
+                dbgPtr,
+                koffiPath: require.resolve('koffi'),  // ← aggiunto
+            }
+        });
+
+        worker.on('message', (msg) => {
+            if (msg.ok) resolve(msg.line);
+            else        reject(new Error(msg.error));
+        });
+        worker.on('error', reject);
+    });
+}
+
+/* ======================================================================
+ *  Lettura dalla pipe C → Debug Console
+ *
+ *  Strategia a due livelli:
+ *
+ *  1. net.Socket({ fd }) con resume() — il modo "giusto" su Linux.
+ *     Se funziona riceve i dati in streaming via event loop.
+ *
+ *  2. Fallback: polling con fs.readSync ogni 50 ms.
+ *     Usato se il socket emette un errore subito dopo resume()
+ *     (accade quando il fd non è in modalità non-bloccante o quando
+ *     la versione di libuv non lo supporta come stream).
+ *
+ *  In entrambi i casi i chunk vengono inviati come DAP OutputEvent
+ *  alla Debug Console di VS Code.
+ * ====================================================================== */
+
+class PipeReader {
+    private fd:       number;
+    private socket:   net.Socket | null  = null;
+    private interval: NodeJS.Timeout | null = null;
+    private onData:   (text: string) => void;
+    private usedFallback = false;
+
+    constructor(fd: number, onData: (text: string) => void) {
+        this.fd     = fd;
+        this.onData = onData;
+    }
+
+    start() {
+        log(`PipeReader.start fd=${this.fd}`);
+
+        // ── Tentativo 1: net.Socket ──────────────────────────────────────
         try {
-            const buf = Buffer.alloc(1024 * 1024); // 1 MB
-            const n = vm_debug_output_ext(dbg, buf, buf.length);
-            if (n > 0) return buf.toString('utf-8', 0, n);
-            return '';
+            const sock = new net.Socket({
+                fd:           this.fd,
+                readable:     true,
+                writable:     false,
+                allowHalfOpen: true,
+            });
+            sock.setEncoding('utf-8');
+
+            let socketOk = false;
+
+            sock.on('data', (chunk: string) => {
+                socketOk = true;
+                log(`pipe[socket] data: ${JSON.stringify(chunk)}`);
+                this.onData(chunk);
+            });
+
+            sock.on('error', (err) => {
+                log(`pipe[socket] errore: ${err.message} — passo al polling`);
+                sock.destroy();
+                this.socket = null;
+                if (!socketOk) this._startPolling();
+            });
+
+            sock.on('end',   () => log('pipe[socket] EOF'));
+            sock.on('close', () => log('pipe[socket] chiusa'));
+
+            sock.resume();   // flowing mode — fondamentale
+            this.socket = sock;
+
+            // Se dopo 200 ms il socket non ha ancora emesso dati né errori,
+            // non possiamo sapere se funziona o meno — lasciamolo vivere.
+            // Il polling partirà solo su errore esplicito.
         } catch (e: any) {
-            log('WARN vm_debug_output_ext fallito: ' + e.message);
+            log(`pipe[socket] costruttore fallito: ${e.message} — uso polling`);
+            this._startPolling();
         }
     }
 
-    // Strategia 2 — file-based
-    try {
-        if (!fs.existsSync(VM_OUTPUT_FILE)) return '';
-        const content = fs.readFileSync(VM_OUTPUT_FILE, 'utf-8');
-        if (!content) return '';
-        // Svuota il file dopo la lettura
-        fs.writeFileSync(VM_OUTPUT_FILE, '');
-        return content;
-    } catch {
-        return '';
+    /* ── Fallback polling ───────────────────────────────────────────────── */
+    private _startPolling() {
+        if (this.usedFallback) return;
+        this.usedFallback = true;
+        log(`PipeReader: avvio polling fd=${this.fd}`);
+
+        this.interval = setInterval(() => {
+            try {
+                const buf = Buffer.alloc(4096);
+                // null come position → legge dalla posizione corrente (pipe)
+                const n = fs.readSync(this.fd, buf, 0, buf.length, null);
+                if (n > 0) {
+                    const text = buf.toString('utf-8', 0, n);
+                    log(`pipe[poll] data: ${JSON.stringify(text)}`);
+                    this.onData(text);
+                }
+            } catch (err: any) {
+                // EAGAIN / EWOULDBLOCK → nessun dato disponibile, normale
+                if (err.code !== 'EAGAIN' && err.code !== 'EWOULDBLOCK') {
+                    log(`pipe[poll] errore fatale: ${err.message}`);
+                    this.stop();
+                }
+            }
+        }, 50);
+    }
+
+    stop() {
+        log('PipeReader.stop');
+        if (this.socket) {
+            this.socket.destroy();
+            this.socket = null;
+        }
+        if (this.interval) {
+            clearInterval(this.interval);
+            this.interval = null;
+        }
     }
 }
 
@@ -182,14 +272,16 @@ function readVmOutput(dbg: any): string {
  * ====================================================================== */
 
 interface LaunchArgs extends DebugProtocol.LaunchRequestArguments {
-    program: string;
+    program:      string;
     stopOnEntry?: boolean;
 }
 
 class JanusDebugSession extends LoggingDebugSession {
 
-    private dbg: any = null;
-    private sourceFile: string = '';
+    private dbg:        any        = null;
+    private dbgPtr:     bigint     = 0n;
+    private sourceFile: string     = '';
+    private pipeReader: PipeReader | null = null;
 
     constructor() {
         super();
@@ -197,19 +289,46 @@ class JanusDebugSession extends LoggingDebugSession {
         loadLib();
     }
 
-    /* ── Helper: invia testo come OutputEvent nella Debug Console ── */
+    /* ── Invia testo come OutputEvent nella Debug Console ── */
     private sendOutput(text: string, category: 'stdout' | 'stderr' | 'console' = 'stdout') {
         if (!text) return;
-        // Assicura newline finale
         const body = text.endsWith('\n') ? text : text + '\n';
         this.sendEvent(new OutputEvent(body, category));
     }
 
-    /* ── Helper: legge output VM e lo invia come OutputEvent ── */
-    private flushVmOutput() {
-        const out = readVmOutput(this.dbg);
-        log('flushVmOutput: ' + JSON.stringify(out));  // ← aggiungi
-        if (out) this.sendOutput(out, 'console');
+    /* ── Avvia la lettura dalla pipe C ── */
+    private startOutputPipe() {
+        if (!this.dbg) return;
+
+        const fd = vm_debug_get_output_fd(this.dbg);
+        log(`startOutputPipe: fd=${fd}`);
+
+        if (fd <= 0) {
+            log('WARN: pipe fd non valido — DAP_MODE non definito in compilazione?');
+            return;
+        }
+
+        // Rende il fd non-bloccante così fs.readSync non si blocca mai
+        // e net.Socket può usarlo senza deadlock.
+        try {
+            // fcntl F_SETFL O_NONBLOCK via Node.js non è esposto direttamente,
+            // ma net.Socket lo imposta automaticamente su Linux.
+            // Per sicurezza usiamo anche il flag O_NONBLOCK via koffi se serve.
+            // In pratica net.Socket + resume() lo fa già.
+        } catch (_) { /* ignorato */ }
+
+        this.pipeReader = new PipeReader(fd, (text) => {
+            this.sendOutput(text, 'console');
+        });
+        this.pipeReader.start();
+    }
+
+    /* ── Ferma il reader ── */
+    private stopOutputPipe() {
+        if (this.pipeReader) {
+            this.pipeReader.stop();
+            this.pipeReader = null;
+        }
     }
 
     /* ── Initialize ── */
@@ -218,7 +337,7 @@ class JanusDebugSession extends LoggingDebugSession {
         _args: DebugProtocol.InitializeRequestArguments
     ) {
         response.body = response.body || {};
-        response.body.supportsStepBack = true;
+        response.body.supportsStepBack                 = true;
         response.body.supportsConfigurationDoneRequest = true;
         this.sendResponse(response);
         this.sendEvent(new InitializedEvent());
@@ -231,7 +350,7 @@ class JanusDebugSession extends LoggingDebugSession {
     ) {
         this.sourceFile = args.program;
 
-        let bytecode: string;
+        let bytecode:      string;
         let compileOutput: string;
         try {
             ({ bytecode, compileOutput } = compileBytecode(this.sourceFile));
@@ -241,38 +360,111 @@ class JanusDebugSession extends LoggingDebugSession {
             return;
         }
 
-        // Mostra l'output del compilatore nella Debug Console (es. warning)
         if (compileOutput) {
             this.sendOutput(`[compilatore]\n${compileOutput}\n`, 'console');
         }
 
+        // Crea la sessione di debug
         this.dbg = vm_debug_new();
+
+        try {
+            this.dbgPtr = BigInt(koffi.address(this.dbg));
+        } catch {
+            this.dbgPtr = BigInt(this.dbg);
+        }
+
+        // Avvia la VM (bloccante fino alla prima PAUSE)
         vm_debug_start(bytecode, this.dbg);
 
-        // Eventuale output prodotto durante l'avvio (es. print all'inizio del programma)
-        this.flushVmOutput();
+        // ── IMPORTANTE: avvia il reader DOPO vm_debug_start ──
+        // vm_debug_start crea la pipe internamente; il fd è valido solo ora.
+        // La VM è in pausa alla prima istruzione, quindi non c'è ancora
+        // nulla sulla pipe — nessun rischio di perdere dati.
+        this.startOutputPipe();
 
         this.sendResponse(response);
 
         if (args.stopOnEntry !== true) {
             this.sendEvent(new StoppedEvent('entry', 1));
         } else {
-            const line = vm_debug_continue(this.dbg);
-            this.flushVmOutput();
-            log(`launchRequest: auto-continue ritorna linea: ${line}`);
-            if (line < 0) {
-                log('Terminazione VM');
-                this.flushVmOutput();          // flush esplicito prima di terminare
-                this.sendEvent(new TerminatedEvent());
-            } else {
-                this.sendEvent(new StoppedEvent('breakpoint', 1));
-            }
+            this._doContinue();
         }
     }
 
+    /* ── Continue (F5) ── */
+    protected continueRequest(
+        response: DebugProtocol.ContinueResponse,
+        _args: DebugProtocol.ContinueArguments
+    ) {
+        log('continueRequest');
+        this.sendResponse(response);
+        this._doContinue();
+    }
+
+    /* ── Logica comune per continue ── */
+    private _doContinue() {
+        runContinueInWorker(this.dbgPtr)
+            .then((line) => {
+                log(`_doContinue: line=${line}`);
+                if (line < 0) {
+                    log('VM terminata');
+                    this.sendEvent(new TerminatedEvent());
+                } else {
+                    this.sendEvent(new StoppedEvent('breakpoint', 1));
+                }
+            })
+            .catch((e) => {
+                log(`_doContinue error: ${e.message}`);
+                this.sendOutput(`Errore VM: ${e.message}`, 'stderr');
+                this.sendEvent(new TerminatedEvent());
+            });
+    }
+
+    /* ── Next (F10) ── */
+    protected nextRequest(
+        response: DebugProtocol.NextResponse,
+        _args: DebugProtocol.NextArguments
+    ) {
+        this.sendResponse(response);
+        log('vm_debug_step');
+        let line: number;
+        try {
+            line = vm_debug_step(this.dbg);
+            log(`step ritorna: ${line}`);
+        } catch (e: any) {
+            log('CRASH step: ' + e.message);
+            this.sendOutput(`CRASH step: ${e.message}`, 'stderr');
+            return;
+        }
+
+        if (line < 0) {
+            this.sendEvent(new TerminatedEvent());
+        } else {
+            this.sendEvent(new StoppedEvent('step', 1));
+        }
+    }
+
+    /* ── StepBack ── */
+    protected stepBackRequest(
+        response: DebugProtocol.StepBackResponse,
+        _args: DebugProtocol.StepBackArguments
+    ) {
+        this.sendResponse(response);
+        log('vm_debug_step_back');
+        let line: number;
+        try {
+            line = vm_debug_step_back(this.dbg);
+            log(`step_back ritorna: ${line}`);
+        } catch (e: any) {
+            log('CRASH step_back: ' + e.message);
+            this.sendOutput(`CRASH step_back: ${e.message}`, 'stderr');
+            return;
+        }
+        this.sendEvent(new StoppedEvent('step', 1));
+    }
+
     /* ── Threads ── */
-   protected threadsRequest(response: DebugProtocol.ThreadsResponse) {
-        log('threadsRequest chiamato');
+    protected threadsRequest(response: DebugProtocol.ThreadsResponse) {
         response.body = { threads: [new Thread(1, 'main')] };
         this.sendResponse(response);
     }
@@ -306,89 +498,12 @@ class JanusDebugSession extends LoggingDebugSession {
         const vars = this.getVariables();
         response.body = {
             variables: vars.map(v => ({
-                name: v.name,
-                value: JSON.stringify(v.value),
-                variablesReference: 0
+                name:               v.name,
+                value:              JSON.stringify(v.value),
+                variablesReference: 0,
             }))
         };
         this.sendResponse(response);
-    }
-
-    /* ── Continue ── */
-    protected continueRequest(
-        response: DebugProtocol.ContinueResponse,
-        _args: DebugProtocol.ContinueArguments
-    ) {
-        log('continueRequest CHIAMATO');   // ← primissima riga
-        this.sendResponse(response);
-        log('prima di vm_debug_continue');   // ← aggiungi
-        let line: number;
-        try {
-            line = vm_debug_continue(this.dbg);
-             log(`dopo vm_debug_continue, line=${line}`);   
-        } catch (e: any) {
-            log('CRASH in vm_debug_continue: ' + e.message);
-            this.sendOutput(`CRASH vm_debug_continue: ${e.message}`, 'stderr');
-            throw e;
-        }
-
-        // ← aggiungi questo
-        const raw = readVmOutput(this.dbg);
-        log(`continueRequest: raw output = ${JSON.stringify(raw)}, len = ${raw.length}`);
-        if (raw) this.sendOutput(raw, 'console');
-
-        if (line < 0) {
-            log('Terminazione VM');
-            this.sendEvent(new TerminatedEvent());
-        } else {
-            this.sendEvent(new StoppedEvent('breakpoint', 1));
-        }
-    }
-
-    /* ── Next (step over) ── */
-    protected nextRequest(
-        response: DebugProtocol.NextResponse,
-        _args: DebugProtocol.NextArguments
-    ) {
-        this.sendResponse(response);
-        log('Chiamo vm_debug_step()');
-        let line: number;
-        try {
-            line = vm_debug_step(this.dbg);
-            log(`vm_debug_step ritorna linea: ${line}`);
-        } catch (e: any) {
-            log('CRASH in vm_debug_step: ' + e.message);
-            this.sendOutput(`CRASH vm_debug_step: ${e.message}`, 'stderr');
-            throw e;
-        }
-        this.flushVmOutput();
-
-        if (line < 0) {
-            log('Terminazione VM');
-            this.sendEvent(new TerminatedEvent());
-        } else {
-            this.sendEvent(new StoppedEvent('step', 1));
-        }
-    }
-
-    /* ── StepBack ── */
-    protected stepBackRequest(
-        response: DebugProtocol.StepBackResponse,
-        _args: DebugProtocol.StepBackArguments
-    ) {
-        this.sendResponse(response);
-        log('Chiamo vm_debug_step_back()');
-        let line: number;
-        try {
-            line = vm_debug_step_back(this.dbg);
-            log(`vm_debug_step_back ritorna linea: ${line}`);
-        } catch (e: any) {
-            log('CRASH in vm_debug_step_back: ' + e.message);
-            this.sendOutput(`CRASH vm_debug_step_back: ${e.message}`, 'stderr');
-            throw e;
-        }
-        // line < 0 = history esaurita, non è terminazione
-        this.sendEvent(new StoppedEvent('step', 1));
     }
 
     /* ── SetBreakpoints ── */
@@ -396,13 +511,11 @@ class JanusDebugSession extends LoggingDebugSession {
         response: DebugProtocol.SetBreakpointsResponse,
         args: DebugProtocol.SetBreakpointsArguments
     ) {
-        if (this.dbg) {
-            vm_debug_clear_all_breakpoints(this.dbg);
-        }
+        if (this.dbg) vm_debug_clear_all_breakpoints(this.dbg);
 
         const bps = (args.breakpoints || []).map(bp => {
             if (this.dbg) vm_debug_set_breakpoint(this.dbg, bp.line);
-            log(`Breakpoint set @ line ${bp.line}`);
+            log(`Breakpoint @ ${bp.line}`);
             return { verified: true, line: bp.line };
         });
 
@@ -415,8 +528,8 @@ class JanusDebugSession extends LoggingDebugSession {
         response: DebugProtocol.DisconnectResponse,
         _args: DebugProtocol.DisconnectArguments
     ) {
+        this.stopOutputPipe();
         if (this.dbg) {
-            this.flushVmOutput();   // ← aggiungi questa riga
             vm_debug_stop(this.dbg);
             vm_debug_free(this.dbg);
             this.dbg = null;
@@ -424,7 +537,7 @@ class JanusDebugSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    /* ── Helper: stato corrente dalla VM ── */
+    /* ── Helper: stato corrente (linea + frame) ── */
     private getState(): { line: number; frame: string } {
         if (!this.dbg) return { line: 0, frame: 'main' };
         const buf = Buffer.alloc(65536);
