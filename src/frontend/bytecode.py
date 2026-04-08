@@ -14,10 +14,11 @@ class ByteCode_Compiler:
         self.queue = Queue()
         self.addr  = 0
         self.current_lineno = 0
+        self.bytecode_line = 0      # ← AGGIUNGI
 
     def emit(self, instr, lineno=None):
-        src = lineno if lineno is not None else self.current_lineno
-        self.queue.put((src, instr))
+        self.bytecode_line += 1     # ← AGGIUNGI
+        self.queue.put((self.bytecode_line, instr))   # ← CAMBIA src → self.bytecode_line
         self.addr += 1
 
     def expr_to_str(self, expr):

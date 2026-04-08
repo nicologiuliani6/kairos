@@ -52,10 +52,8 @@ static inline int extract_lineno(const char *raw_line)
         if (vm->dbg && vm->dbg->initialized) {                          \
             int _ln = extract_lineno(raw_ptr);                          \
             dbg_hook(vm->dbg, _ln, fname, instr_text);                  \
-            /* Se dopo la pausa il mode è STEP_BACK, saltiamo fuori     \
-               dal loop: vm_run_BT non gestisce l'inversione diretta,   \
-               lo farà l'API esterna. */                                 \
-            if (vm->dbg->mode == VM_MODE_DONE) { *nl='\n'; goto done; } \
+            if (vm->dbg->mode == VM_MODE_DONE &&                        \
+                vm->inversion_depth == 0) { *nl='\n'; goto done; }      \
         }                                                                \
     } while(0)
 
@@ -174,6 +172,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         }
         else if (!strcmp(fw, "UNCALL")) {
             char *pn  = strtok(NULL, " \t");
+            VMLOG("[UNCALL] chiamato per '%s'\n", pn ? pn : "NULL");
             uint  cfi = char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
             int   pc  = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
@@ -183,10 +182,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 int src = char_id_map_get(&vm->frames[curi].VarIndexer, p);
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[curi].vars[src];
             }
-            if (ii != pc) { 
-                 vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn);
-                }
+            VMLOG("[UNCALL] param linkati: %d, end_addr=%u addr=%u\n",
+                    ii, vm->frames[cfi].end_addr, vm->frames[cfi].addr);
             invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             *nl = '\n'; ptr = nl + 1; continue;
         }
@@ -257,10 +256,15 @@ void vm_exec(VM *vm, char *buffer)
                 stack_init(&vm->frames[idx].LocalVariables);
                 strncpy(vm->frames[idx].name, name, VAR_NAME_LENGTH - 1);
                 vm->frames[idx].addr = line;
+                VMLOG("[EXEC] PROC '%s' addr=%u\n", name, line);
 
             } else if (!strcmp(fw, "END_PROC")) {
                 char *name = strtok(NULL, " \t");
                 vm->frames[vm->frame_top].end_addr = line;
+                VMLOG("[EXEC] END_PROC '%s' addr=%u end_addr=%u\n",
+                    name,
+                    vm->frames[vm->frame_top].addr,
+                    vm->frames[vm->frame_top].end_addr);
                 if (!strcmp(name, "main"))
                     vm_run_BT(vm, orig, "main");
 

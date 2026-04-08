@@ -19,6 +19,10 @@
 #include <string.h>
 #include "vm_types.h"
 #include "vm_helpers.h"
+#define VMLOG(...) do { \
+    FILE *_f = fopen("/tmp/janus-vm.log", "a"); \
+    if (_f) { fprintf(_f, __VA_ARGS__); fclose(_f); } \
+} while(0)
 
 /* ======================================================================
  *  Inizializzazione / distruzione

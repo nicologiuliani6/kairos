@@ -119,6 +119,7 @@ typedef struct {
     Frame frames[MAX_FRAMES];
     int   frame_top;
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
+    int   inversion_depth;  
 } VM;
 
 struct ThreadArgs {

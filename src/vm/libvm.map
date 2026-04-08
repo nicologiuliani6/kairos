@@ -1,0 +1,21 @@
+LIBVM_1.0 {
+  global:
+    vm_run_from_string;
+    vm_debug_new;
+    vm_debug_free;
+    vm_debug_start;
+    vm_debug_stop;
+    vm_debug_step;
+    vm_debug_step_back;
+    vm_debug_continue;
+    vm_debug_continue_inverse;
+    vm_debug_goto_line;
+    vm_debug_set_breakpoint;
+    vm_debug_clear_breakpoint;
+    vm_debug_clear_all_breakpoints;
+    vm_debug_dump_json_ext;
+    vm_debug_vars_json_ext;
+    vm_debug_output_ext;
+  local:
+    *;
+};
