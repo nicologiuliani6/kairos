@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>    /* pipe, close */
 
 /* ── ordine di inclusione importante ── */
 #define DEFINE_VM_DEBUG_PANIC
@@ -468,6 +469,15 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     g_debug_dbg = dbg;
     g_debug_vm  = calloc(1, sizeof(VM));
     g_debug_vm->dbg = dbg;
+     /* Crea la pipe per lo streaming dell'output */
+    int fds[2];
+    if (pipe(fds) == 0) {
+        dbg->output_pipe_rd = fds[0];
+        dbg->output_pipe_fd = fds[1];
+    } else {
+        dbg->output_pipe_rd = -1;
+        dbg->output_pipe_fd = -1;
+    }
 
     /* Copia del bytecode */
     size_t blen = strlen(bytecode) + 1;
@@ -535,7 +545,6 @@ int vm_debug_step_back(VMDebugState *dbg)
     //fprintf(stderr, "[STEP_BACK] invertendo riga %d: '%s'\n", rec->line, rec->instr);
     /* Esegui l'inversione della riga che abbiamo appena lasciato */
     if (g_debug_vm) {
-        uint fi = char_id_map_get(&FrameIndexer, rec->frame);
         invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig,
                   rec->line, rec->line + 1);
     }
@@ -645,7 +654,12 @@ void vm_debug_stop(VMDebugState *dbg)
     if (!dbg) return;
     dbg_resume(dbg, VM_MODE_DONE);
     pthread_join(g_debug_tid, NULL);
-    free(g_debug_buf); 
+
+    /* Chiudi la pipe */
+    if (dbg->output_pipe_fd > 0) { close(dbg->output_pipe_fd); dbg->output_pipe_fd = -1; }
+    if (dbg->output_pipe_rd > 0) { close(dbg->output_pipe_rd); dbg->output_pipe_rd = -1; }
+
+    free(g_debug_buf);
     g_debug_buf = NULL;
     free(g_debug_buf_orig);
     g_debug_buf_orig = NULL;  
@@ -653,6 +667,11 @@ void vm_debug_stop(VMDebugState *dbg)
     free(g_debug_vm);  
     g_debug_vm  = NULL;
     g_debug_dbg = NULL;
+}
+
+int vm_debug_get_output_fd(VMDebugState *dbg)
+{
+    return dbg ? dbg->output_pipe_rd : -1;
 }
 
 void vm_debug_set_breakpoint(VMDebugState *dbg, int line)

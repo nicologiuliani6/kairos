@@ -12,9 +12,10 @@
   extern VM *g_current_vm;
   #define vm_printf(...) do { \
       VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL; \
-      if (_d && _d->out_len < DBG_OUTPUT_BUF_SIZE - 1) { \
-          _d->out_len += snprintf(_d->out_buf + _d->out_len, \
-              DBG_OUTPUT_BUF_SIZE - _d->out_len, __VA_ARGS__); \
+      if (_d && _d->output_pipe_fd > 0) { \
+          char _tmp[512]; \
+          int  _n = snprintf(_tmp, sizeof(_tmp), __VA_ARGS__); \
+          if (_n > 0) write(_d->output_pipe_fd, _tmp, _n); \
       } \
   } while(0)
 #else
