@@ -283,7 +283,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     //fprintf(stderr, "[INVERT] frame='%s'\n", frame_name);
     char *orig = strdup(buffer);
     if (!orig) { vm_debug_panic("[UNCALL] strdup fallita\n"); }
-
+    VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
+    vm->inversion_depth++;   
     char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
     char *at = strchr(base, '@'); if (at) *at = '\0';
     uint fi_reset = char_id_map_get(&FrameIndexer, base);
@@ -307,19 +308,15 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     int npars = collect_par_ranges(orig, start_ln, vm->frames[fi_reset].end_addr, pars, MAX_PARS);
 
     char *lp[MAX_LINES]; uint ln[MAX_LINES]; int nl = 0;
-    char *ptr = go_to_line(orig, start);
-    char *dbg_ptr = go_to_line(orig, start);
-    //fprintf(stderr, "[INVERT] go_to_line(%u) = '%s'\n", start, dbg_ptr ? dbg_ptr : "NULL");
+    char *ptr = go_to_line(orig, stop + 1);   // ← CAMBIA: parti da dopo PROC
     while (ptr && *ptr && nl < MAX_LINES) {
-        //fprintf(stderr, "[INVERT] start_ln=%u addr=%u\n", start_ln, vm->frames[fi_reset].addr);
         char *newline = strchr(ptr, '\n'); if (!newline) break;
         *newline = '\0';
         uint cur_ln = (uint)atoi(ptr);
         char tmp[512]; strncpy(tmp, ptr, sizeof(tmp) - 1);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "END_PROC")) { *newline = '\n'; break; }
-        /* Includi solo le righe nel range [start, stop) */
-        if (cur_ln >= start && cur_ln < stop) {
+        if (cur_ln <= start && cur_ln > stop) {   // ← già corretto
             lp[nl] = strdup(ptr); ln[nl] = cur_ln; nl++;
         }
         *newline = '\n'; ptr = newline + 1;
@@ -402,7 +399,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
                 vm->frames[cfi].vars[pi[j++]] = vm->frames[curi].vars[si];
             }
-            invert_op_to_line(vm, pn, orig, vm->frames[cfi].addr + 1, vm->frames[cfi].end_addr - 1);
+            invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
         }
@@ -456,6 +453,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     }
 
     for (int j = 0; j < nl; j++) free(lp[j]);
+    VMLOG("[INVERT] completata, righe processate=%d\n", nl);
+    vm->inversion_depth--;
     free(orig);
 #undef MAX_LOOPS
 #undef MAX_IFS
