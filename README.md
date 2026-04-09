@@ -1,14 +1,20 @@
 # Kairos
 
-Kairos è un linguaggio di programmazione **reversibile e concorrente**. Ogni programma Kairos può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito tramite blocchi `par/rap` e comunicazione sincrona tra thread tramite canali tipizzati.
+Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirato a [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) e modificato per apliare a problemi concorrenziali deterministici. Ogni programma Kairos può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito e comunicazione sincrona tra thread tramite canali tipizzati.
 
 ---
 
 ## Indice
 
+
 1. [Struttura del progetto](#struttura-del-progetto)
-2. [Installazione e compilazione](#installazione-e-compilazione)
+2. [Installazione](#installazione)
+   - [Requisiti](#requisiti)
+   - [Setup da zero](#setup-da-zero)
+   - [Compilazione](#compilazione)
 3. [Toolchain — comandi make](#toolchain--comandi-make)
+   - [Pacchetti Linux](#pacchetti-linux)
+   - [Integrazione VS Code](#integrazione-vs-code)
 4. [Architettura interna](#architettura-interna)
 5. [Il linguaggio Kairos](#il-linguaggio-kairos)
    - [Tipi](#tipi)
@@ -28,9 +34,8 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**. Ogni pr
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
 7. [Esempi completi](#esempi-completi)
 8. [Il bytecode Kairos](#il-bytecode-kairos)
-9. [Packaging Linux (.deb/.rpm/.pkg)](#packaging-linux-debrpmpkg)
-10. [Integrazione VS Code Extension](#integrazione-vs-code-extension)
-11. [Errori comuni](#errori-comuni)
+9. [Integrazione VS Code Extension](#integrazione-vs-code-extension)
+10. [Errori comuni](#errori-comuni)
 
 ---
 
@@ -90,17 +95,20 @@ kairos/
 
 ```bash
 # 1. Clona il repository
-git clone <url> kairos
+git clone https://github.com/nicologiuliani6/kairos.git
 cd kairos
 
 # 2. Crea il virtualenv e installa le dipendenze Python
 make install-deps
 
-# 3. Compila la VM (release)
+# 3. Compila la VM
 make
 
-# oppure esplicitamente
-make build-release
+# 4. Esegui un file
+make run FILE=examples/fib.kairos
+
+# Compila la App come file singolo 
+make release
 ```
 
 Dopo `make` troverai `build/libvm.so`.
@@ -109,29 +117,24 @@ Dopo `make` troverai `build/libvm.so`.
 
 ## Toolchain — comandi make
 
+I target sono definiti nel file `makefile` (minuscolo).
+
 | Comando | Descrizione |
 |---------|-------------|
 | `make` | Compila la VM in modalità release (`-O2 -DNDEBUG`) |
-| `make build-release` | Compila `libvm.so` con ottimizzazioni |
-| `make build-dap` | Compila `libvm_dap.so` per adapter DAP |
-| `make run FILE=<f>` | Esegue un singolo file `.kairos` |
+| `make build-release` | Compila `build/libvm.so` con ottimizzazioni |
+| `make build-dap` | Compila `build/libvm_dap.so` per il debugger DAP |
+| `make run FILE=<f.kairos>` | Esegue un singolo file `.kairos` (con `--dump-bytecode`) |
 | `make test` | Esegue tutti i `.kairos` in `tests/` e `examples/` |
-| `make release` | Build ottimizzata + pacchetto standalone con PyInstaller |
+| `make release` | Genera `build/dist/KairosApp` con PyInstaller |
 | `make install-deps` | Crea il venv e installa `ply` e `pyinstaller` |
-| `make clean` | Rimuove tutti gli artefatti generati |
+| `make clean` | Rimuove `.so`, artefatti PyInstaller e cache Python |
 | `make help` | Mostra il riepilogo dei comandi |
 
-Esempi d'uso:
-
-```bash
-make run FILE=examples/fib.kairos
-make test
-make release
-```
 
 ---
 
-## Packaging Linux (.deb/.rpm/.pkg)
+### Pacchetti Linux
 
 La toolchain packaging vive in `packaging/linux`.
 
@@ -178,7 +181,7 @@ Per dettagli completi vedi `packaging/linux/README.md`.
 
 ---
 
-## Integrazione VS Code Extension
+### Integrazione VS Code
 
 L'estensione è nel repository separato https://github.com/nicologiuliani6/kairos-vscode-debugger.
 
@@ -489,16 +492,23 @@ rap
 **Inversione di par:** `uncall` su una procedura contenente `par` inverte l'ordine dei thread e scambia `ssend↔srecv` e `call↔uncall` all'interno di ogni thread.
 
 ---
-
 ### show
 
-`show(var)` stampa il valore corrente di una variabile su stdout. Non è reversibile — nell'inversione viene semplicemente saltata.
-Al termine dell'esecuzione, la VM stampa sempre anche un dump finale (`=== VM dump ===`), sia in run standard sia in modalità DAP.
+Per definizione, l’I/O non è compatibile con la reversibilità.  
+In Kairos, le operazioni di output tramite `show(var)` sono trattate come un’astrazione esterna al modello reversibile, pensata esclusivamente come supporto allo sviluppo e al debugging.
 
-```kairos
+`show(var)` stampa il valore corrente di una variabile su `stdout`.
+```
 show(x)        // stampa: x: 42
 show(result)   // stampa: result: [1, 2, 3, 4, 5]
 ```
+Al termine dell’esecuzione, la VM produce sempre anche un dump finale dello stato:
+
+```text
+=== VM dump ===
+x: 0
+```
+
 
 ---
 
@@ -558,7 +568,7 @@ delocal channel ch = empty // ch deve essere vuoto
 
 ## Il bytecode Kairos
 
-Il compilatore produce un bytecode testuale che la VM interpreta. Il formato consigliato e':
+Il compilatore produce un bytecode testuale che la VM interpreta. Il formato e':
 
 ```
 @SRC   ISTRUZIONE [argomenti...]
@@ -567,17 +577,6 @@ Il compilatore produce un bytecode testuale che la VM interpreta. Il formato con
 dove:
 - `@SRC` è la riga del sorgente Kairos da cui l'istruzione proviene (usata anche dal debugger DAP).
 
-Nota importante:
-- Non e' piu' necessario scrivere `NNNN` a mano.
-- La VM aggiunge automaticamente la numerazione fisica interna in base alla posizione nel file (riga 1 -> `0001`, riga 2 -> `0002`, ...).
-
-Esempio reale:
-
-```
-@33     PAR_START
-@33     THREAD_0
-@34     CALL producer buffer n
-```
 
 Le istruzioni principali:
 
