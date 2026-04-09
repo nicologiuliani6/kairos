@@ -1,6 +1,6 @@
 # Kairos
 
-Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirato a [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) e modificato per apliare a problemi concorrenziali deterministici. Ogni programma Kairos può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito e comunicazione sincrona tra thread tramite canali tipizzati.
+Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirato a [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) e modificato per ampliare a problemi concorrenziali deterministici. Ogni programma Kairos può essere eseguito sia in avanti che all'indietro: l'inverso di qualunque computazione è sempre ben definito e calcolabile. Il linguaggio supporta parallelismo esplicito e comunicazione sincrona tra thread tramite canali tipizzati.
 
 ---
 
