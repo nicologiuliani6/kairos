@@ -12,13 +12,54 @@
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop);
 int vm_check_if_reversibility(const char *buffer);
+void vm_debug_start(const char *bytecode, VMDebugState *dbg);
+void vm_debug_stop(VMDebugState *dbg);
+int vm_debug_step(VMDebugState *dbg);
 
 /* Stato globale del debugger (usato dall'API esterna). */
 static VM       *g_debug_vm       = NULL;
 VMDebugState    *g_debug_dbg      = NULL;
 static char     *g_debug_buf      = NULL;
+static char     *g_debug_src_raw  = NULL;
 static char     *g_debug_buf_orig = NULL;
 static pthread_t g_debug_tid;
+
+static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
+{
+    if (!dbg || !g_debug_src_raw) return -1;
+
+    int bp_count = dbg->bp_count;
+    int bps[DBG_MAX_BREAKPOINTS];
+    if (bp_count > DBG_MAX_BREAKPOINTS) bp_count = DBG_MAX_BREAKPOINTS;
+    for (int i = 0; i < bp_count; i++) bps[i] = dbg->breakpoints[i];
+
+    char *src = strdup(g_debug_src_raw);
+    if (!src) return -1;
+
+    vm_debug_stop(dbg);
+
+    dbg->history_top = -1;
+    dbg->first_pause_reached = 0;
+    dbg->mode = VM_MODE_STEP;
+    dbg->out_len = 0;
+    dbg->bp_count = bp_count;
+    for (int i = 0; i < bp_count; i++) dbg->breakpoints[i] = bps[i];
+
+    vm_debug_start(src, dbg);
+    free(src);
+
+    /* Rebuild interno per step-back/reverse-continue:
+       non deve produrre output utente (es. SHOW) in Debug Console. */
+    dbg->suppress_output = 1;
+
+    int guard = 0;
+    while (dbg->history_top < target_top && guard++ < DBG_MAX_HISTORY * 4) {
+        int line = vm_debug_step(dbg);
+        if (line < 0) break;
+    }
+    dbg->suppress_output = 0;
+    return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
+}
 
 static void *debug_exec_thread(void *arg)
 {
@@ -35,10 +76,12 @@ static void *debug_exec_thread(void *arg)
         pthread_cond_broadcast(&g_debug_dbg->pause_cond);
         pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
 
-        pthread_mutex_lock(&g_debug_dbg->pause_mtx);
-        while (g_debug_dbg->mode == VM_MODE_DONE)
-            pthread_cond_wait(&g_debug_dbg->pause_cond, &g_debug_dbg->pause_mtx);
-        pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
+        if (!g_debug_dbg->shutting_down) {
+            pthread_mutex_lock(&g_debug_dbg->pause_mtx);
+            while (g_debug_dbg->mode == VM_MODE_DONE)
+                pthread_cond_wait(&g_debug_dbg->pause_cond, &g_debug_dbg->pause_mtx);
+            pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
+        }
 
         if (g_debug_dbg->on_pause)
             g_debug_dbg->on_pause(-1, "done", g_debug_dbg->userdata);
@@ -66,10 +109,12 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
         if (g_debug_dbg) dbg_resume(g_debug_dbg, VM_MODE_DONE);
         pthread_join(g_debug_tid, NULL);
         free(g_debug_buf);
+        free(g_debug_src_raw);
         vm_free(g_debug_vm);
         free(g_debug_vm);
         g_debug_vm  = NULL;
         g_debug_buf = NULL;
+        g_debug_src_raw = NULL;
     }
 
     g_debug_dbg = dbg;
@@ -92,8 +137,11 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     }
 
     size_t blen = strlen(normalized) + 1;
+    size_t rlen = strlen(bytecode) + 1;
     g_debug_buf = malloc(blen);
     memcpy(g_debug_buf, normalized, blen);
+    g_debug_src_raw = malloc(rlen);
+    memcpy(g_debug_src_raw, bytecode, rlen);
     g_debug_buf_orig = malloc(blen);
     memcpy(g_debug_buf_orig, normalized, blen);
     free(normalized);
@@ -101,8 +149,10 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     if (vm_check_if_reversibility(g_debug_buf) > 0)
         fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
 
-    if (dbg->mode == VM_MODE_RUN)
-        dbg->mode = VM_MODE_STEP;
+    dbg->mode = VM_MODE_STEP;
+    dbg->first_pause_reached = 0;
+    dbg->shutting_down = 0;
+    dbg->ignore_breakpoint_once_line = -1;
 
     pthread_create(&g_debug_tid, NULL, debug_exec_thread, NULL);
     pthread_mutex_lock(&dbg->pause_mtx);
@@ -128,39 +178,8 @@ int vm_debug_step(VMDebugState *dbg)
 int vm_debug_step_back(VMDebugState *dbg)
 {
     if (!dbg || dbg->history_top < 0) return -1;
-    int first_line = (dbg->history_top >= 0) ? dbg->history[0].line : 0;
-    char first_frame[VAR_NAME_LENGTH];
-    if (dbg->history_top >= 0) {
-        strncpy(first_frame, dbg->history[0].frame, VAR_NAME_LENGTH - 1);
-        first_frame[VAR_NAME_LENGTH - 1] = '\0';
-    } else {
-        strncpy(first_frame, "start", VAR_NAME_LENGTH - 1);
-        first_frame[VAR_NAME_LENGTH - 1] = '\0';
-    }
-
-    pthread_mutex_lock(&dbg->pause_mtx);
-    dbg->mode = VM_MODE_CONTINUE_INV;
-    pthread_mutex_unlock(&dbg->pause_mtx);
-
-    ExecRecord *rec = dbg_pop_history(dbg);
-    if (!rec) return -1;
-    if (g_debug_vm)
-        invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig, rec->line, rec->line - 1);
-
-    pthread_mutex_lock(&dbg->pause_mtx);
-    dbg->mode = VM_MODE_PAUSE;
-    pthread_mutex_unlock(&dbg->pause_mtx);
-
-    int prev_line = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].line : first_line;
-    dbg->current_line = prev_line;
-    if (dbg->history_top >= 0)
-        strncpy(dbg->current_frame, dbg->history[dbg->history_top].frame, VAR_NAME_LENGTH - 1);
-    else
-        strncpy(dbg->current_frame, first_frame, VAR_NAME_LENGTH - 1);
-
-    if (dbg->on_pause)
-        dbg->on_pause(prev_line, dbg->current_frame, dbg->userdata);
-    return prev_line;
+    int target_top = dbg->history_top - 1;
+    return vm_debug_rebuild_to_history_top(dbg, target_top);
 }
 
 int vm_debug_continue(VMDebugState *dbg)
@@ -185,51 +204,15 @@ int vm_debug_continue(VMDebugState *dbg)
 
 int vm_debug_continue_inverse(VMDebugState *dbg)
 {
-    if (!dbg) return -1;
-    if (dbg->history_top < 0) {
-        dbg->current_line = 0;
-        strncpy(dbg->current_frame, "start", VAR_NAME_LENGTH - 1);
-        if (dbg->on_pause) dbg->on_pause(0, "start", dbg->userdata);
-        return 0;
-    }
-
-    pthread_mutex_lock(&dbg->pause_mtx);
-    dbg->mode = VM_MODE_CONTINUE_INV;
-    pthread_mutex_unlock(&dbg->pause_mtx);
-
-    int first_line = dbg->history[0].line;
-    char first_frame[VAR_NAME_LENGTH];
-    strncpy(first_frame, dbg->history[0].frame, VAR_NAME_LENGTH - 1);
-    first_frame[VAR_NAME_LENGTH - 1] = '\0';
-
-    while (dbg->history_top >= 0) {
-        ExecRecord *rec = dbg_pop_history(dbg);
-        if (!rec) break;
-        if (g_debug_vm)
-            invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig, rec->line, rec->line - 1);
-
-        int next_line = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].line : first_line;
-        const char *next_frame = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].frame : first_frame;
-
-        dbg->current_line = next_line;
-        strncpy(dbg->current_frame, next_frame, VAR_NAME_LENGTH - 1);
-
-        if (dbg->history_top < 0 || dbg_is_breakpoint(dbg, next_line)) {
-            pthread_mutex_lock(&dbg->pause_mtx);
-            dbg->mode = VM_MODE_PAUSE;
-            pthread_mutex_unlock(&dbg->pause_mtx);
-            if (dbg->on_pause) dbg->on_pause(next_line, next_frame, dbg->userdata);
-            return next_line;
+    if (!dbg || dbg->history_top < 0) return 0;
+    int target_top = -1;
+    for (int i = dbg->history_top - 1; i >= 0; i--) {
+        if (dbg_is_breakpoint(dbg, dbg->history[i].line)) {
+            target_top = i;
+            break;
         }
     }
-
-    pthread_mutex_lock(&dbg->pause_mtx);
-    dbg->mode = VM_MODE_PAUSE;
-    pthread_mutex_unlock(&dbg->pause_mtx);
-    dbg->current_line = first_line;
-    strncpy(dbg->current_frame, first_frame, VAR_NAME_LENGTH - 1);
-    if (dbg->on_pause) dbg->on_pause(first_line, first_frame, dbg->userdata);
-    return first_line;
+    return vm_debug_rebuild_to_history_top(dbg, target_top);
 }
 
 int vm_debug_goto_line(VMDebugState *dbg, int target_line)
@@ -257,7 +240,15 @@ int vm_debug_vars_json_ext(VMDebugState *dbg, char *out, int outsz)
 void vm_debug_stop(VMDebugState *dbg)
 {
     if (!dbg) return;
-    dbg_resume(dbg, VM_MODE_DONE);
+    dbg->shutting_down = 1;
+    pthread_mutex_lock(&dbg->pause_mtx);
+    if (dbg->mode == VM_MODE_DONE) {
+        dbg->mode = VM_MODE_IDLE;
+    } else {
+        dbg->mode = VM_MODE_DONE;
+    }
+    pthread_cond_broadcast(&dbg->pause_cond);
+    pthread_mutex_unlock(&dbg->pause_mtx);
     pthread_join(g_debug_tid, NULL);
 
     if (dbg->output_pipe_fd > 0) { close(dbg->output_pipe_fd); dbg->output_pipe_fd = -1; }
@@ -265,6 +256,8 @@ void vm_debug_stop(VMDebugState *dbg)
 
     free(g_debug_buf);
     g_debug_buf = NULL;
+    free(g_debug_src_raw);
+    g_debug_src_raw = NULL;
     free(g_debug_buf_orig);
     g_debug_buf_orig = NULL;
     vm_free(g_debug_vm);
@@ -286,6 +279,12 @@ void vm_debug_set_breakpoint(VMDebugState *dbg, int line)
 void vm_debug_clear_breakpoint(VMDebugState *dbg, int line)
 {
     _vm_debug_clear_breakpoint(dbg, line);
+}
+
+void vm_debug_ignore_breakpoint_once(VMDebugState *dbg, int line)
+{
+    if (!dbg) return;
+    dbg->ignore_breakpoint_once_line = line;
 }
 
 void vm_debug_clear_all_breakpoints(VMDebugState *dbg)

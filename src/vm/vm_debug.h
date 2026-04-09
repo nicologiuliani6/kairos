@@ -33,6 +33,7 @@ static inline void dbg_init(VMDebugState *dbg)
     memset(dbg, 0, sizeof(VMDebugState));
     dbg->mode        = VM_MODE_RUN;
     dbg->history_top = -1;
+    dbg->ignore_breakpoint_once_line = -1;
     dbg->bp_count    = 0;
     pthread_mutex_init(&dbg->pause_mtx, NULL);
     pthread_cond_init (&dbg->pause_cond, NULL);
@@ -161,9 +162,13 @@ static inline void dbg_hook(VMDebugState *dbg,
 
     if (dbg->mode == VM_MODE_STEP || dbg->mode == VM_MODE_STEP_BACK)
         should_pause = 1;
-    else if ((dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) &&
-             dbg_is_breakpoint(dbg, line))
-        should_pause = 1;
+    else if (dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) {
+        if (dbg->ignore_breakpoint_once_line == line) {
+            dbg->ignore_breakpoint_once_line = -1;
+        } else if (dbg_is_breakpoint(dbg, line)) {
+            should_pause = 1;
+        }
+    }
 
     {
         FILE *f = fopen("/tmp/kairos-vm.log", "a");

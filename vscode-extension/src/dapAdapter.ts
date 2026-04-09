@@ -48,10 +48,12 @@ let vm_debug_continue:              (dbg: any)                            => num
 let vm_debug_continue_inverse:      (dbg: any)                            => number;
 let vm_debug_set_breakpoint:        (dbg: any, line: number)              => void;
 let vm_debug_clear_breakpoint:      (dbg: any, line: number)              => void;
+let vm_debug_ignore_breakpoint_once:(dbg: any, line: number)              => void;
 let vm_debug_clear_all_breakpoints: (dbg: any)                            => void;
 let vm_debug_vars_json_ext:         (dbg: any, out: Buffer, sz: number)   => number;
 let vm_debug_dump_json_ext:         (dbg: any, out: Buffer, sz: number)   => number;
 let vm_debug_get_output_fd:         (dbg: any)                            => number;
+let vm_debug_output_ext:            (dbg: any, out: Buffer, sz: number)   => number;
 
 function loadLib() {
     log('Carico libvm_dap.so da: ' + LIB_PATH);
@@ -73,10 +75,12 @@ function loadLib() {
         vm_debug_continue_inverse      = lib.func('int   vm_debug_continue_inverse(void*)');
         vm_debug_set_breakpoint        = lib.func('void  vm_debug_set_breakpoint(void*, int)');
         vm_debug_clear_breakpoint      = lib.func('void  vm_debug_clear_breakpoint(void*, int)');
+        vm_debug_ignore_breakpoint_once= lib.func('void  vm_debug_ignore_breakpoint_once(void*, int)');
         vm_debug_clear_all_breakpoints = lib.func('void  vm_debug_clear_all_breakpoints(void*)');
         vm_debug_vars_json_ext         = lib.func('int   vm_debug_vars_json_ext(void*, void*, int)');
         vm_debug_dump_json_ext         = lib.func('int   vm_debug_dump_json_ext(void*, void*, int)');
         vm_debug_get_output_fd         = lib.func('int   vm_debug_get_output_fd(void*)');
+        vm_debug_output_ext            = lib.func('int   vm_debug_output_ext(void*, void*, int)');
         log('Funzioni caricate OK');
     } catch (e: any) {
         log('ERRORE func binding: ' + e.message);
@@ -176,7 +180,6 @@ class PipeReader {
 
     start() {
         log(`PipeReader.start fd=${this.fd}`);
-
         try {
             const sock = new net.Socket({
                 fd:            this.fd,
@@ -218,16 +221,23 @@ class PipeReader {
         this.usedFallback = true;
         log(`PipeReader: avvio polling fd=${this.fd}`);
 
+        let inFlight = false;
         this.interval = setInterval(() => {
+            if (inFlight) return;
+            inFlight = true;
             const buf = Buffer.alloc(4096);
-            try {
-                const n = fs.readSync(this.fd, buf, 0, buf.length, null);
-                if (n > 0) {
-                    const text = buf.toString('utf-8', 0, n);
+            fs.read(this.fd, buf, 0, buf.length, null, (err, bytesRead, b) => {
+                inFlight = false;
+                if (err) {
+                    log(`pipe[poll] read err: ${err.message}`);
+                    return;
+                }
+                if (bytesRead > 0) {
+                    const text = b.toString('utf-8', 0, bytesRead);
                     log(`pipe[poll] data: ${JSON.stringify(text)}`);
                     this.onData(text);
                 }
-            } catch (_) { /* EAGAIN / EWOULDBLOCK — normale */ }
+            });
         }, 50);
     }
 
@@ -262,6 +272,7 @@ class KairosDebugSession extends LoggingDebugSession {
     private configurationDone = false;
     private autoContinuePending = false;
     private breakpoints = new Set<number>();
+    private terminationTimer: NodeJS.Timeout | null = null;
 
     constructor() {
         super();
@@ -295,13 +306,79 @@ class KairosDebugSession extends LoggingDebugSession {
         if (fd < 0) return;
 
         this.pipeReader = new PipeReader(fd, (text) => {
-            this.sendOutput(text, 'stdout');
+            // 'console' e' visualizzato in modo piu' affidabile in Debug Console.
+            this.sendOutput(text, 'console');
         });
         this.pipeReader.start();
     }
 
     private stopOutputPipe() {
         if (this.pipeReader) { this.pipeReader.stop(); this.pipeReader = null; }
+    }
+
+    private clearTerminationTimer() {
+        if (this.terminationTimer) {
+            clearTimeout(this.terminationTimer);
+            this.terminationTimer = null;
+        }
+    }
+
+    private emitStopped(reason: string) {
+        this.flushVmOutputBuffer();
+        this.sendEvent(new StoppedEvent(reason, 1));
+    }
+
+    // Flush sincrono del buffer VM (fallback anti-race a fine esecuzione).
+    private flushVmOutputBuffer(): number {
+        if (!this.dbg) return 0;
+        const buf = Buffer.alloc(65536);
+        let emitted = 0;
+        for (;;) {
+            let n = 0;
+            try {
+                n = vm_debug_output_ext(this.dbg, buf, buf.length);
+            } catch {
+                break;
+            }
+            if (n <= 0) break;
+            this.sendOutput(buf.toString('utf-8', 0, n), 'console');
+            emitted += n;
+        }
+        return emitted;
+    }
+
+    // Fallback: se il dump VM non e' arrivato, costruiscilo dallo stato corrente.
+    private emitFallbackFinalDump() {
+        const vars = this.getVariables();
+        if (!vars || vars.length === 0) return;
+        const lines: string[] = ['=== VM dump ==='];
+        for (const v of vars) {
+            const value = Array.isArray(v.value) ? `[${v.value.join(', ')}]` : String(v.value);
+            lines.push(`${v.name}: ${value}`);
+        }
+        this.sendOutput(`${lines.join('\n')}\n`, 'console');
+    }
+
+    // Drain best-effort direttamente dal fd pipe (utile dopo stepBack/rebuild).
+    private async flushPipeFdBestEffort(attempts: number = 6, delayMs: number = 40) {
+        if (!this.dbg) return;
+        const fd = vm_debug_get_output_fd(this.dbg);
+        if (fd < 0) return;
+
+        for (let i = 0; i < attempts; i++) {
+            const text = await new Promise<string>((resolve) => {
+                const buf = Buffer.alloc(4096);
+                fs.read(fd, buf, 0, buf.length, null, (err, bytesRead, b) => {
+                    if (err || bytesRead <= 0) return resolve('');
+                    resolve(b.toString('utf-8', 0, bytesRead));
+                });
+            });
+            if (text) {
+                log(`pipe[flush] data: ${JSON.stringify(text)}`);
+                this.sendOutput(text, 'console');
+            }
+            await new Promise((r) => setTimeout(r, delayMs));
+        }
     }
 
     /* ── Launch ── */
@@ -360,7 +437,7 @@ class KairosDebugSession extends LoggingDebugSession {
         this.launchReady = true;
 
         if (args.stopOnEntry === true) {
-            this.sendEvent(new StoppedEvent('entry', 1));
+            this.emitStopped('entry');
         } else {
             this.autoContinuePending = true;
             this.maybeAutoContinue();
@@ -386,7 +463,7 @@ class KairosDebugSession extends LoggingDebugSession {
         const state = this.getState();
         if (this.breakpoints.has(state.line)) {
             this.autoContinuePending = false;
-            this.sendEvent(new StoppedEvent('breakpoint', 1));
+            this.emitStopped('breakpoint');
             return;
         }
 
@@ -402,25 +479,51 @@ class KairosDebugSession extends LoggingDebugSession {
         log('continueRequest');
         this.sendResponse(response);
         const state = this.getState();
+        if (this.breakpoints.has(state.line)) {
+            vm_debug_ignore_breakpoint_once(this.dbg, state.line);
+        }
         this._doContinue(state.line, true, 0);
     }
 
-    private _doContinue(originLine?: number, collapseSameLineStops: boolean = false, depth: number = 0) {
+    private _doContinue(
+        originLine?: number,
+        collapseSameLineStops: boolean = false,
+        depth: number = 0
+    ) {
         runContinueInWorker(this.dbgPtr)
             .then((line) => {
                 log(`_doContinue: line=${line}`);
                 if (line < 0) {
                     log('VM terminata');
-                    this.sendEvent(new TerminatedEvent());
+                    const firstFlush = this.flushVmOutputBuffer();
+                    // In VS Code, dopo stepBack/rebuild possono arrivare ultimi chunk
+                    // dalla pipe con leggero ritardo. Rimandiamo di poco il terminate.
+                    this.clearTerminationTimer();
+                    this.terminationTimer = setTimeout(() => {
+                        (async () => {
+                            this.terminationTimer = null;
+                            const secondFlush = this.flushVmOutputBuffer();
+                            await this.flushPipeFdBestEffort();
+                            const thirdFlush = this.flushVmOutputBuffer();
+                            if ((firstFlush + secondFlush + thirdFlush) === 0) {
+                                this.emitFallbackFinalDump();
+                            }
+                            this.sendEvent(new TerminatedEvent());
+                        })().catch((e: any) => {
+                            log(`flushPipeFdBestEffort error: ${e?.message || e}`);
+                            this.sendEvent(new TerminatedEvent());
+                        });
+                    }, 150);
                 } else if (collapseSameLineStops &&
                            originLine !== undefined &&
                            line === originLine &&
+                           !this.breakpoints.has(line) &&
                            depth < 64) {
                     // Collassa stop duplicati sulla stessa riga sorgente
                     // (es. FROM/LOOP con piu' istruzioni bytecode sulla stessa linea).
                     this._doContinue(originLine, true, depth + 1);
                 } else {
-                    this.sendEvent(new StoppedEvent('breakpoint', 1));
+                    this.emitStopped('breakpoint');
                 }
             })
             .catch((e) => {
@@ -450,7 +553,7 @@ class KairosDebugSession extends LoggingDebugSession {
         if (line < 0) {
             this.sendEvent(new TerminatedEvent());
         } else {
-            this.sendEvent(new StoppedEvent('step', 1));
+            this.emitStopped('step');
         }
     }
 
@@ -469,10 +572,13 @@ class KairosDebugSession extends LoggingDebugSession {
             this.sendOutput(`CRASH step_back: ${e.message}`, 'stderr');
             return;
         }
+        // step_back ricostruisce la VM internamente: la pipe di output cambia.
+        this.stopOutputPipe();
+        this.startOutputPipe();
         this.sendResponse(response);
         this.sendEvent(new InvalidatedEvent(['variables', 'registers']));
         this.sendEvent(new InvalidatedEvent(['stacks']));
-        this.sendEvent(new StoppedEvent('step', 1));
+        this.emitStopped('step');
     }
 
     protected reverseContinueRequest(
@@ -491,9 +597,12 @@ class KairosDebugSession extends LoggingDebugSession {
             return;
         }
 
+        // reverseContinue usa la stessa rebuild: riaggancia output pipe.
+        this.stopOutputPipe();
+        this.startOutputPipe();
         this.sendEvent(new InvalidatedEvent(['variables', 'registers']));
         this.sendEvent(new InvalidatedEvent(['stacks']));
-        this.sendEvent(new StoppedEvent('step', 1));
+        this.emitStopped('step');
     }
 
     /* ── Threads ── */
@@ -563,6 +672,7 @@ class KairosDebugSession extends LoggingDebugSession {
         response: DebugProtocol.DisconnectResponse,
         _args:    DebugProtocol.DisconnectArguments
     ) {
+        this.clearTerminationTimer();
         this.stopOutputPipe();
         if (this.dbg) {
             vm_debug_stop(this.dbg);

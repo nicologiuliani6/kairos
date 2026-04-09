@@ -1,7 +1,6 @@
 procedure main()
     int x 
     from x == 0 loop
+        show(x)
         x+=1
-    until x == 3
-    x+=1
-    show(x)
+    until x == 10

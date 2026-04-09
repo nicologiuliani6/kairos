@@ -109,9 +109,13 @@ typedef struct {
     void       *userdata;
     int         initialized;
     int         first_pause_reached;
+    int         needs_pc_resync;
+    int         shutting_down;
+    int         ignore_breakpoint_once_line;
     /* Output buffer — usato in DAP_MODE al posto di printf */
     char        out_buf[DBG_OUTPUT_BUF_SIZE];
     int         out_len;
+    int         suppress_output;
     char last_error[1024]; 
     int output_pipe_fd;   /* scrittura: la VM ci scrive sopra */
     int output_pipe_rd;   /* lettura:   Node.js legge da qui  */
