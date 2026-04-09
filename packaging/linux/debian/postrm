@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+# On full removal, also drop linker path config and refresh cache.
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+  rm -f /etc/ld.so.conf.d/kairosapp.conf
+  ldconfig
+fi
+
+exit 0

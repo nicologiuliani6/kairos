@@ -28,7 +28,9 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**. Ogni pr
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
 7. [Esempi completi](#esempi-completi)
 8. [Il bytecode Kairos](#il-bytecode-kairos)
-9. [Errori comuni](#errori-comuni)
+9. [Packaging Linux (.deb/.rpm/.pkg)](#packaging-linux-debrpmpkg)
+10. [Integrazione VS Code Extension](#integrazione-vs-code-extension)
+11. [Errori comuni](#errori-comuni)
 
 ---
 
@@ -126,6 +128,79 @@ make run FILE=examples/fib.kairos
 make test
 make release
 ```
+
+---
+
+## Packaging Linux (.deb/.rpm/.pkg)
+
+La toolchain packaging vive in `packaging/linux`.
+
+### Build pacchetto Debian/Ubuntu (consigliato su Ubuntu)
+
+```bash
+cd packaging/linux
+./build-deb.sh
+```
+
+Lo script esegue automaticamente:
+
+- `make release`
+- `make build-dap`
+- bump versione patch automatico da `packaging/linux/VERSION`
+
+Output: `packaging/linux/kairosapp_<versione>_<arch>.deb`
+
+Installazione:
+
+```bash
+sudo dpkg -i ./packaging/linux/kairosapp_<versione>_amd64.deb
+```
+
+Disinstallazione:
+
+```bash
+sudo dpkg -r kairosapp
+sudo dpkg -P kairosapp   # purge completa
+```
+
+Path installati dal pacchetto:
+
+- `/usr/local/bin/kairosapp`
+- `/opt/kairosapp/KairosApp`
+- `/usr/local/lib/kairosapp/dap.so`
+
+### Altre distro
+
+- RPM (Fedora/RHEL): `./packaging/linux/build-rpm.sh` (richiede `rpmbuild`)
+- Arch: `./packaging/linux/build-arch.sh` (richiede `makepkg`)
+
+Per dettagli completi vedi `packaging/linux/README.md`.
+
+---
+
+## Integrazione VS Code Extension
+
+L'estensione è nel repository separato https://github.com/nicologiuliani6/kairos-vscode-debugger.
+
+Con installazione `.deb`, i default runtime da usare sono:
+
+- `kairos.appPath`: `/usr/local/bin/kairosapp`
+- `kairos.libPath`: `/usr/local/lib/kairosapp/dap.so`
+
+Workflow rapido estensione:
+
+```bash
+git clone https://github.com/nicologiuliani6/kairos-vscode-debugger.git
+cd kairos-vscode-debugger
+make reinstall
+```
+
+Poi in VS Code: `Developer: Reload Window`.
+
+Se serve override per progetto, usa `launch.json` con:
+
+- `kairosApp`
+- `kairosLib`
 
 ---
 
