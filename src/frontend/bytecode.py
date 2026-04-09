@@ -119,22 +119,27 @@ class ByteCode_Compiler:
                 self.emit(f"ASSERT {lhs_e} {op_e} {rhs_e}", lineno)
 
             case 'from':
-                _, entry_cond, body, until_cond, lineno = ast
+                if len(ast) >= 6:
+                    _, entry_cond, body, until_cond, from_lineno, until_lineno = ast
+                else:
+                    # Compatibilita' con AST vecchi: una sola linea per tutto il loop.
+                    _, entry_cond, body, until_cond, from_lineno = ast
+                    until_lineno = from_lineno
                 uid         = self.addr
                 start_label = f"FROM_START_{uid}"
                 err_label   = f"FROM_ERR_{uid}"
 
                 lhs, op, rhs = self.cond_to_str(entry_cond)
-                self.emit(f"EVAL {lhs} {op} {rhs}", lineno)
-                self.emit(f"JMPF {err_label}", lineno)
-                self.emit(f"LABEL {start_label}", lineno)
+                self.emit(f"EVAL {lhs} {op} {rhs}", from_lineno)
+                self.emit(f"JMPF {err_label}", from_lineno)
+                self.emit(f"LABEL {start_label}", from_lineno)
                 for stmt in body:
                     self.process(stmt)
                 lhs_u, op_u, rhs_u = self.cond_to_str(until_cond)
-                self.emit(f"EVAL {lhs_u} {op_u} {rhs_u}", lineno)
-                self.emit(f"JMPF {start_label}", lineno)
-                self.emit(f"LABEL FROM_END_{uid}", lineno)
-                self.emit(f"LABEL {err_label}", lineno)
+                self.emit(f"EVAL {lhs_u} {op_u} {rhs_u}", until_lineno)
+                self.emit(f"JMPF {start_label}", until_lineno)
+                self.emit(f"LABEL FROM_END_{uid}", until_lineno)
+                self.emit(f"LABEL {err_label}", until_lineno)
 
             case 'par':
                 _, branches, lineno = ast
@@ -165,6 +170,6 @@ if __name__ == '__main__':
 
     with open("bytecode.txt", "w") as f:
         while not compiler.queue.empty():
-            phys, src_tag, instr = compiler.queue.get()
-            line = f"{phys:04d}  {src_tag:<8}  {instr}\n"
+            _phys, src_tag, instr = compiler.queue.get()
+            line = f"{src_tag:<8}  {instr}\n"
             f.write(line)

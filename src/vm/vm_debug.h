@@ -129,26 +129,28 @@ static inline void dbg_hook(VMDebugState *dbg,
     dbg_record(dbg, line, frame, instr_text);
 
     int should_pause = 0;
+    pthread_mutex_lock(&dbg->pause_mtx);
+
     if (dbg->mode == VM_MODE_STEP || dbg->mode == VM_MODE_STEP_BACK)
         should_pause = 1;
     else if ((dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) &&
              dbg_is_breakpoint(dbg, line))
         should_pause = 1;
+
     {
-    FILE *f = fopen("/tmp/kairos-vm.log", "a");
-    if (f) { fprintf(f, "dbg_hook line=%d mode=%d should_pause=%d\n", line, dbg->mode, should_pause); fclose(f); }
+        FILE *f = fopen("/tmp/kairos-vm.log", "a");
+        if (f) { fprintf(f, "dbg_hook line=%d mode=%d should_pause=%d\n", line, dbg->mode, should_pause); fclose(f); }
     }
-    if (!should_pause) return;
 
-    /* ── FIX: prendi il mutex PRIMA di segnalare first_pause_reached ── */
-    pthread_mutex_lock(&dbg->pause_mtx);
-    dbg->mode = VM_MODE_PAUSE;
-    if (dbg->on_pause)
-        dbg->on_pause(line, frame, dbg->userdata);
-    dbg->first_pause_reached = 1;
-    pthread_cond_broadcast(&dbg->pause_cond);   /* sveglia vm_debug_start */
+    if (should_pause) {
+        dbg->mode = VM_MODE_PAUSE;
+        if (dbg->on_pause)
+            dbg->on_pause(line, frame, dbg->userdata);
+        dbg->first_pause_reached = 1;
+        pthread_cond_broadcast(&dbg->pause_cond);   /* sveglia vm_debug_start */
+    }
 
-    /* Attendi che il controllore ci sblocchi */
+    /* Se qualcuno ha messo in pausa il debugger, tutti i thread si fermano qui. */
     while (dbg->mode == VM_MODE_PAUSE)
         pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
     pthread_mutex_unlock(&dbg->pause_mtx);

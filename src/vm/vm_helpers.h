@@ -164,6 +164,52 @@ static inline char *skip_lineno(char *line)
     return line;
 }
 
+/*
+ * Aggiunge sempre il prefisso fisico "NNNN" usando il numero della riga
+ * nel file/stringa in ingresso.
+ */
+static inline char *normalize_bytecode_physical_lines(const char *input)
+{
+    if (!input) return NULL;
+    size_t in_len = strlen(input);
+    size_t out_cap = in_len * 8 + 64; /* margine ampio: prefisso su ogni riga */
+    char *out = malloc(out_cap);
+    if (!out) return NULL;
+
+    size_t out_len = 0;
+    unsigned line_no = 1;
+    const char *cur = input;
+
+    while (*cur) {
+        const char *nl = strchr(cur, '\n');
+        size_t len = nl ? (size_t)(nl - cur) : strlen(cur);
+        int empty = (len == 0);
+
+        if (!empty) {
+            int w = snprintf(out + out_len, out_cap - out_len, "%04u  ", line_no);
+            if (w < 0 || (size_t)w >= out_cap - out_len) { free(out); return NULL; }
+            out_len += (size_t)w;
+        }
+
+        if (!empty) {
+            if (out_len + len + 2 >= out_cap) { free(out); return NULL; }
+            memcpy(out + out_len, cur, len);
+            out_len += len;
+        }
+
+        if (nl) {
+            out[out_len++] = '\n';
+            cur = nl + 1;
+        } else {
+            break;
+        }
+        line_no++;
+    }
+
+    out[out_len] = '\0';
+    return out;
+}
+
 static inline void delete_var(Var *vars[], int *size, int n)
 {
     if (n < 0 || n >= *size) { printf("Indice fuori range!\n"); return; }

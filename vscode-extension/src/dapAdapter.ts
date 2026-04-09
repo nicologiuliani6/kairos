@@ -252,6 +252,10 @@ class KairosDebugSession extends LoggingDebugSession {
     private dbgPtr:     bigint = 0n;
     private sourceFile: string = '';
     private pipeReader: PipeReader | null = null;
+    private launchReady = false;
+    private configurationDone = false;
+    private autoContinuePending = false;
+    private breakpoints = new Set<number>();
 
     constructor() {
         super();
@@ -347,12 +351,41 @@ class KairosDebugSession extends LoggingDebugSession {
         vm_debug_start(bytecode, this.dbg);
         this.startOutputPipe();
         this.sendResponse(response);
+        this.launchReady = true;
 
         if (args.stopOnEntry === true) {
             this.sendEvent(new StoppedEvent('entry', 1));
         } else {
-            this._doContinue();
+            this.autoContinuePending = true;
+            this.maybeAutoContinue();
         }
+    }
+
+    protected configurationDoneRequest(
+        response: DebugProtocol.ConfigurationDoneResponse,
+        _args: DebugProtocol.ConfigurationDoneArguments
+    ) {
+        this.configurationDone = true;
+        this.sendResponse(response);
+        this.maybeAutoContinue();
+    }
+
+    private maybeAutoContinue() {
+        if (!this.autoContinuePending) return;
+        if (!this.launchReady) return;
+        if (!this.configurationDone) return;
+
+        // La VM entra inizialmente in pausa sul primo statement.
+        // Se su quella riga c'e' un breakpoint, non auto-continuare.
+        const state = this.getState();
+        if (this.breakpoints.has(state.line)) {
+            this.autoContinuePending = false;
+            this.sendEvent(new StoppedEvent('breakpoint', 1));
+            return;
+        }
+
+        this.autoContinuePending = false;
+        this._doContinue();
     }
 
     /* ── Continue (F5) ── */
@@ -362,16 +395,24 @@ class KairosDebugSession extends LoggingDebugSession {
     ) {
         log('continueRequest');
         this.sendResponse(response);
-        this._doContinue();
+        const state = this.getState();
+        this._doContinue(state.line, true, 0);
     }
 
-    private _doContinue() {
+    private _doContinue(originLine?: number, collapseSameLineStops: boolean = false, depth: number = 0) {
         runContinueInWorker(this.dbgPtr)
             .then((line) => {
                 log(`_doContinue: line=${line}`);
                 if (line < 0) {
                     log('VM terminata');
                     this.sendEvent(new TerminatedEvent());
+                } else if (collapseSameLineStops &&
+                           originLine !== undefined &&
+                           line === originLine &&
+                           depth < 64) {
+                    // Collassa stop duplicati sulla stessa riga sorgente
+                    // (es. FROM/LOOP con piu' istruzioni bytecode sulla stessa linea).
+                    this._doContinue(originLine, true, depth + 1);
                 } else {
                     this.sendEvent(new StoppedEvent('breakpoint', 1));
                 }
@@ -475,9 +516,11 @@ class KairosDebugSession extends LoggingDebugSession {
         args:     DebugProtocol.SetBreakpointsArguments
     ) {
         if (this.dbg) vm_debug_clear_all_breakpoints(this.dbg);
+        this.breakpoints.clear();
 
         const bps = (args.breakpoints || []).map(bp => {
             if (this.dbg) vm_debug_set_breakpoint(this.dbg, bp.line);
+            this.breakpoints.add(bp.line);
             log(`Breakpoint @ ${bp.line}`);
             return { verified: true, line: bp.line };
         });

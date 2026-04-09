@@ -85,11 +85,18 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
         dbg->output_pipe_fd = -1;
     }
 
-    size_t blen = strlen(bytecode) + 1;
+    char *normalized = normalize_bytecode_physical_lines(bytecode);
+    if (!normalized) {
+        vm_debug_panic("[DAP] normalizzazione bytecode fallita\n");
+        return;
+    }
+
+    size_t blen = strlen(normalized) + 1;
     g_debug_buf = malloc(blen);
-    memcpy(g_debug_buf, bytecode, blen);
+    memcpy(g_debug_buf, normalized, blen);
     g_debug_buf_orig = malloc(blen);
-    memcpy(g_debug_buf_orig, bytecode, blen);
+    memcpy(g_debug_buf_orig, normalized, blen);
+    free(normalized);
 
     if (vm_check_if_reversibility(g_debug_buf) > 0)
         fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
