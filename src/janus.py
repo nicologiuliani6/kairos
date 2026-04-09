@@ -26,13 +26,15 @@ if __name__ == '__main__':
 
     bytecode_str = "\n".join(lines) + "\n"
 
-    # In modalità --dap scrivi sempre bytecode.txt (il DAP server lo legge)
-    if dap_mode or "--dump-bytecode" in sys.argv:
+    if "--dump-bytecode" in sys.argv:
         with open("bytecode.txt", "w") as f:
             f.write(bytecode_str)
 
-    # In modalità --dap non eseguire la VM: il DAP server gestisce l'esecuzione
+    # In modalità --dap non scrivere su disco: il DAP legge il bytecode da stdout.
     if dap_mode:
+        print("<<<KAIROS_BYTECODE_BEGIN>>>")
+        print(bytecode_str, end="")
+        print("<<<KAIROS_BYTECODE_END>>>")
         sys.exit(0)
 
     # Ricava la root del progetto (da qui cerchiamo build/)

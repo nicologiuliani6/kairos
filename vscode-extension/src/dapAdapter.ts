@@ -1,6 +1,7 @@
 import {
     LoggingDebugSession,
     InitializedEvent,
+    InvalidatedEvent,
     StoppedEvent,
     TerminatedEvent,
     StackFrame,
@@ -44,6 +45,7 @@ let vm_debug_stop:                  (dbg: any)                            => voi
 let vm_debug_step:                  (dbg: any)                            => number;
 let vm_debug_step_back:             (dbg: any)                            => number;
 let vm_debug_continue:              (dbg: any)                            => number;
+let vm_debug_continue_inverse:      (dbg: any)                            => number;
 let vm_debug_set_breakpoint:        (dbg: any, line: number)              => void;
 let vm_debug_clear_breakpoint:      (dbg: any, line: number)              => void;
 let vm_debug_clear_all_breakpoints: (dbg: any)                            => void;
@@ -68,6 +70,7 @@ function loadLib() {
         vm_debug_step                  = lib.func('int   vm_debug_step(void*)');
         vm_debug_step_back             = lib.func('int   vm_debug_step_back(void*)');
         vm_debug_continue              = lib.func('int   vm_debug_continue(void*)');
+        vm_debug_continue_inverse      = lib.func('int   vm_debug_continue_inverse(void*)');
         vm_debug_set_breakpoint        = lib.func('void  vm_debug_set_breakpoint(void*, int)');
         vm_debug_clear_breakpoint      = lib.func('void  vm_debug_clear_breakpoint(void*, int)');
         vm_debug_clear_all_breakpoints = lib.func('void  vm_debug_clear_all_breakpoints(void*)');
@@ -91,28 +94,31 @@ function compileBytecode(
 ): { bytecode: string; compileOutput: string } {
 
     const appDir = path.dirname(kairosApp);
-    const btFile = path.join(appDir, 'bytecode.txt');
 
     log(`compileBytecode: app=${kairosApp}, file=${kairosFile}`);
 
-    if (fs.existsSync(btFile)) fs.unlinkSync(btFile);
-
     const result = spawnSync(
         kairosApp,
-        [kairosFile, '--dap', '--dump-bytecode'],
+        [kairosFile, '--dap'],
         { cwd: appDir, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
     );
 
-    const compileOutput = [result.stdout || '', result.stderr || '']
+    const stdoutText = result.stdout || '';
+    const begin = '<<<KAIROS_BYTECODE_BEGIN>>>';
+    const end = '<<<KAIROS_BYTECODE_END>>>';
+    const m = stdoutText.match(new RegExp(`${begin}\\n([\\s\\S]*?)\\n${end}`));
+    if (!m) {
+        const fallback = [stdoutText, result.stderr || ''].filter(Boolean).join('\n').trim();
+        throw new Error(`Compilazione fallita (bytecode non ricevuto da stdout):\n${fallback}`);
+    }
+    const bytecode = m[1].endsWith('\n') ? m[1] : `${m[1]}\n`;
+    const stdoutWithoutBytecode = stdoutText.replace(m[0], '').trim();
+
+    const compileOutput = [stdoutWithoutBytecode, result.stderr || '']
         .filter(Boolean)
         .join('\n')
         .trim();
-
-    if (!fs.existsSync(btFile)) {
-        throw new Error(`Compilazione fallita (nessun bytecode.txt):\n${compileOutput}`);
-    }
-
-    return { bytecode: fs.readFileSync(btFile, 'utf-8'), compileOutput };
+    return { bytecode, compileOutput };
 }
 
 /* ======================================================================
@@ -453,7 +459,6 @@ class KairosDebugSession extends LoggingDebugSession {
         response: DebugProtocol.StepBackResponse,
         _args:    DebugProtocol.StepBackArguments
     ) {
-        this.sendResponse(response);
         log('vm_debug_step_back');
         let line: number;
         try {
@@ -464,6 +469,30 @@ class KairosDebugSession extends LoggingDebugSession {
             this.sendOutput(`CRASH step_back: ${e.message}`, 'stderr');
             return;
         }
+        this.sendResponse(response);
+        this.sendEvent(new InvalidatedEvent(['variables', 'registers']));
+        this.sendEvent(new InvalidatedEvent(['stacks']));
+        this.sendEvent(new StoppedEvent('step', 1));
+    }
+
+    protected reverseContinueRequest(
+        response: DebugProtocol.ReverseContinueResponse,
+        _args: DebugProtocol.ReverseContinueArguments
+    ) {
+        this.sendResponse(response);
+        log('vm_debug_continue_inverse');
+        let line: number;
+        try {
+            line = vm_debug_continue_inverse(this.dbg);
+            log(`continue_inverse ritorna: ${line}`);
+        } catch (e: any) {
+            log('CRASH continue_inverse: ' + e.message);
+            this.sendOutput(`CRASH continue_inverse: ${e.message}`, 'stderr');
+            return;
+        }
+
+        this.sendEvent(new InvalidatedEvent(['variables', 'registers']));
+        this.sendEvent(new InvalidatedEvent(['stacks']));
         this.sendEvent(new StoppedEvent('step', 1));
     }
 

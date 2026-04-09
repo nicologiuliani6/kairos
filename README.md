@@ -94,10 +94,10 @@ cd kairos
 # 2. Crea il virtualenv e installa le dipendenze Python
 make install-deps
 
-# 3. Compila la VM (debug, con AddressSanitizer)
+# 3. Compila la VM (release)
 make
 
-# oppure solo la build ottimizzata
+# oppure esplicitamente
 make build-release
 ```
 
@@ -109,13 +109,11 @@ Dopo `make` troverai `build/libvm.so`.
 
 | Comando | Descrizione |
 |---------|-------------|
-| `make` | Compila la VM in modalità debug (`-g -fsanitize=address,undefined`) |
-| `make build-debug` | Esplicita build debug con AddressSanitizer |
-| `make build-release` | Compila con `-O2 -DNDEBUG` |
-| `make build-dap` | Compila `libvm_dap.so` (senza ASan, per adapter DAP) |
+| `make` | Compila la VM in modalità release (`-O2 -DNDEBUG`) |
+| `make build-release` | Compila `libvm.so` con ottimizzazioni |
+| `make build-dap` | Compila `libvm_dap.so` per adapter DAP |
 | `make run FILE=<f>` | Esegue un singolo file `.kairos` |
 | `make test` | Esegue tutti i `.kairos` in `tests/` e `examples/` |
-| `make test-one FILE=<f>` | Esegue un singolo test con output verboso |
 | `make release` | Build ottimizzata + pacchetto standalone con PyInstaller |
 | `make install-deps` | Crea il venv e installa `ply` e `pyinstaller` |
 | `make clean` | Rimuove tutti gli artefatti generati |
@@ -126,7 +124,6 @@ Esempi d'uso:
 ```bash
 make run FILE=examples/fib.kairos
 make test
-make test-one FILE=tests/test_uncall.kairos
 make release
 ```
 
@@ -549,7 +546,8 @@ make run FILE=examples/fib.kairos
 ```
 
 Nota:
-- con `--dap` il frontend scrive sempre `bytecode.txt` e non esegue direttamente la VM (l'esecuzione è gestita dall'adapter DAP).
+- con `--dap` il frontend non esegue direttamente la VM: restituisce il bytecode via stdout all'adapter DAP (nessun file temporaneo su disco).
+- in debug DAP, `Step Back` inverte una sola istruzione; `Reverse Continue` inverte finché trova il primo breakpoint a ritroso, oppure si ferma all'inizio del programma se non ci sono breakpoint precedenti.
 
 ---
 

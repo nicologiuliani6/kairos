@@ -128,16 +128,35 @@ int vm_debug_step(VMDebugState *dbg)
 int vm_debug_step_back(VMDebugState *dbg)
 {
     if (!dbg || dbg->history_top < 0) return -1;
+    int first_line = (dbg->history_top >= 0) ? dbg->history[0].line : 0;
+    char first_frame[VAR_NAME_LENGTH];
+    if (dbg->history_top >= 0) {
+        strncpy(first_frame, dbg->history[0].frame, VAR_NAME_LENGTH - 1);
+        first_frame[VAR_NAME_LENGTH - 1] = '\0';
+    } else {
+        strncpy(first_frame, "start", VAR_NAME_LENGTH - 1);
+        first_frame[VAR_NAME_LENGTH - 1] = '\0';
+    }
+
+    pthread_mutex_lock(&dbg->pause_mtx);
+    dbg->mode = VM_MODE_CONTINUE_INV;
+    pthread_mutex_unlock(&dbg->pause_mtx);
 
     ExecRecord *rec = dbg_pop_history(dbg);
     if (!rec) return -1;
     if (g_debug_vm)
-        invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig, rec->line, rec->line + 1);
+        invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig, rec->line, rec->line - 1);
 
-    int prev_line = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].line : 0;
+    pthread_mutex_lock(&dbg->pause_mtx);
+    dbg->mode = VM_MODE_PAUSE;
+    pthread_mutex_unlock(&dbg->pause_mtx);
+
+    int prev_line = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].line : first_line;
     dbg->current_line = prev_line;
     if (dbg->history_top >= 0)
         strncpy(dbg->current_frame, dbg->history[dbg->history_top].frame, VAR_NAME_LENGTH - 1);
+    else
+        strncpy(dbg->current_frame, first_frame, VAR_NAME_LENGTH - 1);
 
     if (dbg->on_pause)
         dbg->on_pause(prev_line, dbg->current_frame, dbg->userdata);
@@ -166,22 +185,51 @@ int vm_debug_continue(VMDebugState *dbg)
 
 int vm_debug_continue_inverse(VMDebugState *dbg)
 {
-    if (!dbg || dbg->history_top < 0) return -1;
-    while (dbg->history_top >= 0) {
-        ExecRecord *rec = &dbg->history[dbg->history_top];
-        if (dbg_is_breakpoint(dbg, rec->line)) {
-            dbg->current_line = rec->line;
-            strncpy(dbg->current_frame, rec->frame, VAR_NAME_LENGTH - 1);
-            dbg->history_top--;
-            if (dbg->on_pause)
-                dbg->on_pause(rec->line, rec->frame, dbg->userdata);
-            return rec->line;
-        }
-        dbg->history_top--;
+    if (!dbg) return -1;
+    if (dbg->history_top < 0) {
+        dbg->current_line = 0;
+        strncpy(dbg->current_frame, "start", VAR_NAME_LENGTH - 1);
+        if (dbg->on_pause) dbg->on_pause(0, "start", dbg->userdata);
+        return 0;
     }
-    if (dbg->on_pause)
-        dbg->on_pause(0, "start", dbg->userdata);
-    return 0;
+
+    pthread_mutex_lock(&dbg->pause_mtx);
+    dbg->mode = VM_MODE_CONTINUE_INV;
+    pthread_mutex_unlock(&dbg->pause_mtx);
+
+    int first_line = dbg->history[0].line;
+    char first_frame[VAR_NAME_LENGTH];
+    strncpy(first_frame, dbg->history[0].frame, VAR_NAME_LENGTH - 1);
+    first_frame[VAR_NAME_LENGTH - 1] = '\0';
+
+    while (dbg->history_top >= 0) {
+        ExecRecord *rec = dbg_pop_history(dbg);
+        if (!rec) break;
+        if (g_debug_vm)
+            invert_op_to_line(g_debug_vm, rec->frame, g_debug_buf_orig, rec->line, rec->line - 1);
+
+        int next_line = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].line : first_line;
+        const char *next_frame = (dbg->history_top >= 0) ? dbg->history[dbg->history_top].frame : first_frame;
+
+        dbg->current_line = next_line;
+        strncpy(dbg->current_frame, next_frame, VAR_NAME_LENGTH - 1);
+
+        if (dbg->history_top < 0 || dbg_is_breakpoint(dbg, next_line)) {
+            pthread_mutex_lock(&dbg->pause_mtx);
+            dbg->mode = VM_MODE_PAUSE;
+            pthread_mutex_unlock(&dbg->pause_mtx);
+            if (dbg->on_pause) dbg->on_pause(next_line, next_frame, dbg->userdata);
+            return next_line;
+        }
+    }
+
+    pthread_mutex_lock(&dbg->pause_mtx);
+    dbg->mode = VM_MODE_PAUSE;
+    pthread_mutex_unlock(&dbg->pause_mtx);
+    dbg->current_line = first_line;
+    strncpy(dbg->current_frame, first_frame, VAR_NAME_LENGTH - 1);
+    if (dbg->on_pause) dbg->on_pause(first_line, first_frame, dbg->userdata);
+    return first_line;
 }
 
 int vm_debug_goto_line(VMDebugState *dbg, int target_line)

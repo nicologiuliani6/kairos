@@ -88,6 +88,31 @@ static inline void dbg_record(VMDebugState *dbg,
                               int line, const char *frame, const char *instr)
 {
     if (!dbg) return;
+    if (!instr || !*instr) return;
+
+    /* Registra solo istruzioni che hanno effetto semantico sullo stato.
+       Evita che step-back si fermi su metadati di controllo (es. EVAL/JMP/LABEL). */
+    char instr_copy[DBG_INSTR_LEN];
+    strncpy(instr_copy, instr, sizeof(instr_copy) - 1);
+    instr_copy[sizeof(instr_copy) - 1] = '\0';
+    char *p = skip_lineno(instr_copy);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '\0') return;
+
+    char op[64];
+    int oi = 0;
+    while (*p && *p != ' ' && *p != '\t' && oi < (int)sizeof(op) - 1) {
+        op[oi++] = *p++;
+    }
+    op[oi] = '\0';
+    if (op[0] == '\0') return;
+    if (!strcmp(op, "EVAL")   || !strcmp(op, "JMPF")  || !strcmp(op, "JMP")   ||
+        !strcmp(op, "ASSERT") || !strcmp(op, "LABEL") || !strcmp(op, "DECL")  ||
+        !strcmp(op, "PARAM")  || !strcmp(op, "HALT")  || !strcmp(op, "PAR_END") ||
+        strncmp(op, "THREAD_", 7) == 0) {
+        return;
+    }
+
     int idx = dbg->history_top + 1;
     if (idx >= DBG_MAX_HISTORY) {
         /* Ring buffer: scorriamo di uno (perdiamo la storia più vecchia) */
@@ -126,7 +151,10 @@ static inline void dbg_hook(VMDebugState *dbg,
     dbg->current_line = line;
     strncpy(dbg->current_frame, frame, VAR_NAME_LENGTH - 1);
 
-    dbg_record(dbg, line, frame, instr_text);
+    /* Durante l'inversione guidata da step-back non registrare nuova history,
+       altrimenti si reinseriscono record mentre li stiamo consumando. */
+    if (dbg->mode != VM_MODE_CONTINUE_INV)
+        dbg_record(dbg, line, frame, instr_text);
 
     int should_pause = 0;
     pthread_mutex_lock(&dbg->pause_mtx);

@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "kairos",
+            "request": "launch",
+            "name": "Debug Kairos",
+            "program": "${file}",
+            "kairosApp": "/home/nico/Desktop/kairos/build/dist/KairosApp",
+            "kairosLib": "/home/nico/Desktop/kairos/build/libvm_dap.so",
+            "stopOnEntry": false
+        }
+    ]
+}
