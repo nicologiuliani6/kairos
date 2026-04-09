@@ -92,7 +92,8 @@ def p_condition(p):
 # ── Dichiarazioni di tipo ───────────────────────────────────────────────────
 def p_type_decl(p):
     '''statement : type ID'''
-    p[0] = ('decl', p[1], p[2], p.lineno(1))
+    # Usa la linea dell'identificatore: il non-terminale "type" non ha sempre lineno affidabile.
+    p[0] = ('decl', p[1], p[2], p.lineno(2))
     if VERBOSE: print(f"dichiarazione: {p[2]} ({p[1]})")
 
 # ── Assegnamenti reversibili ────────────────────────────────────────────────
@@ -159,7 +160,8 @@ def p_uncall(p):
 # ── FROM loop ───────────────────────────────────────────────────────────────
 def p_from(p):
     '''statement : FROM condition LOOP opt_body UNTIL condition'''
-    p[0] = ('from', p[2], p[4], p[6], p.lineno(1))
+    # Salviamo sia la linea di FROM che quella di UNTIL per il mapping breakpoint.
+    p[0] = ('from', p[2], p[4], p[6], p.lineno(1), p.lineno(5))
     if VERBOSE: print(f"from: {p[2]} until: {p[6]}")
 
 # ── IF / ELSE ───────────────────────────────────────────────────────────────

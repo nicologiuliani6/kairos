@@ -1,6 +1,8 @@
 procedure main()
     int x 
+    x+=0
     from x == 0 loop
         show(x)
         x+=1
-    until x == 4000
+    until x == 3
+    show(x)

@@ -9,6 +9,14 @@
 #include "vm_helpers.h"
 #include "vm_frames.h"
 #include "vm_ops.h"
+#include "vm_debug.h"
+
+static inline int par_extract_srcline(const char *raw_line)
+{
+    const char *at = strchr(raw_line, '@');
+    if (!at) return 0;
+    return atoi(at + 1);
+}
 
 /* Forward declarations — definite rispettivamente in vm_par.h (thread_entry)
    e in Kairos.c (vm_run_BT, invert_op_to_line). */
@@ -126,10 +134,19 @@ static void *thread_entry(void *arg)
 
         if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END"))
             { *nl = '\n'; break; }
-        else if (!strcmp(fw, "PAR_START")) {
+        if (vm->dbg && vm->dbg->initialized) {
+            if (!strcmp(fw, "DECL") || !strcmp(fw, "LABEL")) {
+                vm->dbg->current_line = par_extract_srcline(ptr);
+            } else if (strcmp(fw, "PARAM") != 0) {
+                dbg_hook(vm->dbg, par_extract_srcline(ptr), fname, lb);
+            }
+        }
+        if (!strcmp(fw, "PAR_START")) {
             *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
-            exec_par_threads(vm, args->buffer, fname, &pb, 0, args->is_inverse);
+            /* Nei PAR annidati serve un buffer dedicato per thread:
+               i parser line-based modificano temporaneamente '\n' in '\0'. */
+            exec_par_threads(vm, args->buffer, fname, &pb, 1, args->is_inverse);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             continue;
         }

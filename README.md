@@ -486,22 +486,25 @@ delocal channel ch = empty // ch deve essere vuoto
 
 ## Il bytecode Kairos
 
-Il compilatore produce un bytecode testuale che la VM interpreta. Ogni riga ha il formato:
+Il compilatore produce un bytecode testuale che la VM interpreta. Il formato consigliato e':
 
 ```
-NNNN  @SRC   ISTRUZIONE [argomenti...]
+@SRC   ISTRUZIONE [argomenti...]
 ```
 
 dove:
-- `NNNN` è la riga fisica del bytecode (4 cifre, crescente).
 - `@SRC` è la riga del sorgente Kairos da cui l'istruzione proviene (usata anche dal debugger DAP).
+
+Nota importante:
+- Non e' piu' necessario scrivere `NNNN` a mano.
+- La VM aggiunge automaticamente la numerazione fisica interna in base alla posizione nel file (riga 1 -> `0001`, riga 2 -> `0002`, ...).
 
 Esempio reale:
 
 ```
-0052  @33     PAR_START
-0053  @33     THREAD_0
-0054  @34     CALL producer buffer n
+@33     PAR_START
+@33     THREAD_0
+@34     CALL producer buffer n
 ```
 
 Le istruzioni principali:

@@ -7,9 +7,17 @@
 #include "vm_types.h"
 #include "vm_helpers.h"
 #include "vm_ops.h"
+#include "vm_debug.h"
 
 /* Forward — vm_run_BT è definita in Kairos.c */
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
+
+static inline int invert_extract_srcline(const char *raw_line)
+{
+    const char *at = strchr(raw_line, '@');
+    if (!at) return 0;
+    return atoi(at + 1);
+}
 
 /* ======================================================================
  *  Descrittori strutturali per loop e if (usati dall'inversore)
@@ -387,6 +395,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         if (!strcmp(fw, "PAR_END")) { i--; continue; }
 
         if (!strcmp(fw, "CALL")) {
+            if (vm->dbg && vm->dbg->initialized)
+                dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
             uint cfi  = char_id_map_get(&FrameIndexer, pn);
             uint curi = char_id_map_get(&FrameIndexer, frame_name);
@@ -402,6 +412,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             i--; continue;
         }
         if (!strcmp(fw, "UNCALL")) {
+            if (vm->dbg && vm->dbg->initialized)
+                dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
             uint cfi  = char_id_map_get(&FrameIndexer, pn);
             uint curi = fi;
@@ -422,6 +434,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
            in modo che SSEND e SRECV vengano scambiati dentro thread_entry.
            Le istruzioni interne sono già skippate da line_is_inside_par. */
         if (!strcmp(fw, "PAR_START")) {
+            if (vm->dbg && vm->dbg->initialized)
+                dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             /* cur è il numero-riga stampato nel bytecode (es. 52 per "0052 PAR_START").
                Il blocco PAR da scansionare inizia dalla riga successiva
                (THREAD_0), quindi fisicamente cur+1. */
@@ -431,6 +445,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 exec_par_threads(vm, orig, cur_frame, &pb, 1, 1);
             }
             i--; continue;
+        }
+
+        if (vm->dbg && vm->dbg->initialized) {
+            if (!strcmp(fw, "DECL") || !strcmp(fw, "LABEL")) {
+                vm->dbg->current_line = invert_extract_srcline(lp[i]);
+            } else if (strcmp(fw, "PARAM") != 0) {
+                dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
+            }
         }
 
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, cur_frame);

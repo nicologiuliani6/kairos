@@ -21,8 +21,8 @@ if __name__ == '__main__':
 
     lines = []
     while not BT_Compiler.queue.empty():
-        phys, src_tag, instr = BT_Compiler.queue.get()
-        lines.append(f"{phys:04d}  {src_tag:<6}  {instr}")
+        _phys, src_tag, instr = BT_Compiler.queue.get()
+        lines.append(f"{src_tag:<6}  {instr}")
 
     bytecode_str = "\n".join(lines) + "\n"
 

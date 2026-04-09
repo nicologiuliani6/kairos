@@ -100,15 +100,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
 
-        /* ── DEBUG HOOK ── chiamato prima di ogni istruzione reale ── */
+        /* ── DEBUG HOOK ── chiamato prima di ogni istruzione breakpointable ── */
         if (strcmp(fw, "PROC") != 0 && strcmp(fw, "PARAM") != 0 &&
             strcmp(fw, "HALT") != 0) {
-            if (strcmp(fw, "DECL") == 0 || strcmp(fw, "LABEL") == 0) {
-                if (vm->dbg && vm->dbg->initialized)
-                    vm->dbg->current_line = extract_srcline(ptr);
-            } else {
-                DEBUG_HOOK(ptr, lb);
-            }
+            DEBUG_HOOK(ptr, lb);
         }
 
         if (!strcmp(fw, "END_PROC")) {
@@ -372,13 +367,13 @@ void vm_dump(VM *vm)
  *  Entry point — esecuzione normale (invariato)
  * ====================================================================== */
 
-#define AST_BUFFER (1024 * 10)
-
 void vm_run_from_string(const char *bytecode)
 {
-    char ast[AST_BUFFER];
-    ast[0] = '\0';
-    strncat(ast, bytecode, sizeof(ast) - 1);
+    char *ast = normalize_bytecode_physical_lines(bytecode);
+    if (!ast) {
+        fprintf(stderr, "Errore: normalizzazione bytecode fallita.\n");
+        return;
+    }
 
     if (vm_check_if_reversibility(ast) > 0)
         fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
@@ -389,4 +384,5 @@ void vm_run_from_string(const char *bytecode)
     /* Dump finale sempre emesso in modalità run standard. */
     vm_dump(&vm);
     vm_free(&vm);
+    free(ast);
 }
