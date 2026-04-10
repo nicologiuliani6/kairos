@@ -1,0 +1,145 @@
+// =====================================
+// libreria malloc reversibile
+// =====================================
+
+// --- INTERNO ---
+
+procedure free_pool(channel ch, int n)
+    local int i = 0
+    from i == 0 loop
+        i += 1
+        local int index = 0
+            index += i
+            ssend(index, ch)
+        delocal int index = 0
+    until i == n
+    delocal int i = n
+
+procedure collect_pool(channel ch, int n, stack idx_stack)
+    local int i = 0
+    from i == 0 loop
+        i += 1
+        local int index = 0
+            srecv(index, ch)
+            show(index)             // debug
+            push(index, idx_stack)
+        delocal int index = 0
+    until i == n
+    delocal int i = n
+
+// --- API PUBBLICA ---
+
+procedure mem_init(channel ch, stack idx_stack, int n)
+    call free_pool(ch, n)
+
+procedure mem_alloc(channel ch, stack cell, stack idx_stack)
+    local int tmp = 0
+        srecv(tmp, ch)
+        local int zero = 0
+            push(zero, cell)
+        delocal int zero = 0
+        push(tmp, idx_stack)
+    delocal int tmp = 0
+
+procedure mem_free(channel ch, stack cell, stack idx_stack)
+    local int tmp = 0
+        pop(tmp, idx_stack)
+        local int zero = 0
+            pop(zero, cell)
+        delocal int zero = 0
+        ssend(tmp, ch)
+    delocal int tmp = 0
+
+procedure mem_collect(channel ch, stack idx_stack, int n)
+    call collect_pool(ch, n, idx_stack)
+
+procedure mem_write(stack cell, int value, stack garbage)
+    local int tmp = 0
+        pop(tmp, cell)
+        push(tmp, garbage)
+        tmp += value
+        push(tmp, cell)
+    delocal int tmp = 0
+
+procedure mem_reset(stack cell, stack garbage)
+    local int tmp = 0
+        pop(tmp, cell)
+        push(tmp, garbage)
+        local int zero = 0
+            push(zero, cell)
+        delocal int zero = 0
+    delocal int tmp = 0
+
+// --- ESEMPIO D'USO ---
+
+procedure go()
+    stack garbage
+    stack idx_stack
+    local channel ch = empty
+    local stack cell1 = nil
+    local stack cell2 = nil
+    local stack cell3 = nil
+    local int v1 = 42
+    local int v2 = 99
+    local int v3 = 7
+    local int n = 3
+
+    par
+        call mem_init(ch, idx_stack, n)
+    and
+        call mem_alloc(ch, cell1, idx_stack)
+    and
+        call mem_alloc(ch, cell2, idx_stack)
+    and
+        call mem_alloc(ch, cell3, idx_stack)
+    rap
+
+    call mem_write(cell1, v1, garbage)
+    call mem_write(cell2, v2, garbage)
+    call mem_write(cell3, v3, garbage)
+
+    local int val = 0
+        pop(val, cell1)
+        show(val)               // 42
+        push(val, cell1)
+    delocal int val = 0
+
+    local int val = 0
+        pop(val, cell2)
+        show(val)               // 99
+        push(val, cell2)
+    delocal int val = 0
+
+    local int val = 0
+        pop(val, cell3)
+        show(val)               // 7
+        push(val, cell3)
+    delocal int val = 0
+
+    call mem_reset(cell3, garbage)
+    call mem_reset(cell2, garbage)
+    call mem_reset(cell1, garbage)
+
+    par
+        call mem_collect(ch, idx_stack, n)
+    and
+        call mem_free(ch, cell3, idx_stack)
+    and
+        call mem_free(ch, cell2, idx_stack)
+    and
+        call mem_free(ch, cell1, idx_stack)
+    rap
+
+    delocal int n = 3
+    delocal int v3 = 7
+    delocal int v2 = 99
+    delocal int v1 = 42
+    delocal stack cell3 = nil
+    delocal stack cell2 = nil
+    delocal stack cell1 = nil
+    delocal channel ch = empty
+    show(garbage)
+
+procedure main()
+    call go()
+    uncall go()
