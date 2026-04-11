@@ -3,6 +3,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "vm_types.h"
 #include "vm_debug.h"
@@ -125,6 +126,13 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     if (pipe(fds) == 0) {
         dbg->output_pipe_rd = fds[0];
         dbg->output_pipe_fd = fds[1];
+        (void)fcntl(fds[1], F_SETFL, O_NONBLOCK);
+        /* Pipe kernel default ~64 KiB: con migliaia di SHOW si riempie, write()
+         * non bloccanti falliscono e l'output resta solo in out_buf fino alla pausa.
+         * Su Linux alziamo il buffer (es. loop 10k × ~8 B ≈ 80 KiB). */
+#if defined(__linux__) && defined(F_SETPIPE_SZ)
+        (void)fcntl(fds[1], F_SETPIPE_SZ, 1024 * 1024);
+#endif
     } else {
         dbg->output_pipe_rd = -1;
         dbg->output_pipe_fd = -1;

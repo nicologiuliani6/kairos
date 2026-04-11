@@ -72,13 +72,19 @@ static void print_state(VMDebugState *dbg, const char *label) {
 }
 
 static void drain_dap_pipe_output(int fd, char *acc, size_t accsz) {
-    if (fd < 0) return;
-    char chunk[4096];
+    if (fd < 0 || accsz < 2) return;
+    size_t len = strnlen(acc, accsz - 1);
+    char chunk[8192];
     for (;;) {
-        ssize_t n = read(fd, chunk, sizeof(chunk) - 1);
+        ssize_t n = read(fd, chunk, sizeof(chunk));
         if (n > 0) {
-            chunk[n] = '\0';
-            if (strlen(acc) + (size_t)n + 1 < accsz) strcat(acc, chunk);
+            size_t room = (len < accsz - 1) ? (accsz - 1 - len) : 0;
+            if (room > 0) {
+                size_t cpy = (size_t)n < room ? (size_t)n : room;
+                memcpy(acc + len, chunk, cpy);
+                len += cpy;
+                acc[len] = '\0';
+            }
             continue;
         }
         if (n == 0) break;
@@ -88,7 +94,7 @@ static void drain_dap_pipe_output(int fd, char *acc, size_t accsz) {
 }
 
 int main(void) {
-    const char *src = "tests/test_loop.kairos";
+    const char *src = "tests/fixtures/dap_long_show.kairos";
     char *bytecode = compile_kairos_to_bytecode(src);
     if (!bytecode) {
         fprintf(stderr, "ERRORE: impossibile generare bytecode da %s\n", src);
@@ -123,25 +129,35 @@ int main(void) {
         if (flags >= 0) fcntl(out_fd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    char out[32768] = {0};
-    /* Resume fino a fine, come nel caso utente */
+    /* dap_long_show.kairos: ultimo show è x: 9999 (until x == 10000) */
+    size_t out_cap = 2u * 1024u * 1024u;
+    char *out = (char *)calloc(1, out_cap);
+    if (!out) {
+        fprintf(stderr, "OOM out buffer\n");
+        vm_debug_stop(dbg);
+        vm_debug_free(dbg);
+        free(bytecode);
+        return 3;
+    }
     line = vm_debug_continue(dbg);
-    drain_dap_pipe_output(out_fd, out, sizeof(out));
+    drain_dap_pipe_output(out_fd, out, out_cap);
 
     printf("continue-2 -> line=%d\n", line);
     print_state(dbg, "after-continue-2");
-    printf("dap-output(pipe):\n%s\n", out);
+    printf("dap-output(pipe): (primi 400 char)\n%.400s...\n", out);
 
     char vars2[65536] = {0};
     vm_debug_vars_json_ext(dbg, vars2, (int)sizeof(vars2));
-    if (line < 0 && strstr(out, "x: 4") != NULL) {
-        printf("RESULT: PASS (output DAP presente fino a fine)\n");
+    int ok = (line < 0 && strstr(out, "x: 9999") != NULL);
+    if (ok) {
+        printf("RESULT: PASS (SHOW in streaming sulla pipe fino a x: 9999)\n");
     } else {
         printf("RESULT: FAIL (output DAP assente/incompleto)\n");
     }
 
     vm_debug_stop(dbg);
     vm_debug_free(dbg);
+    free(out);
     free(bytecode);
-    return 0;
+    return ok ? 0 : 1;
 }

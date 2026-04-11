@@ -1,0 +1,7 @@
+// FROM / UNTIL + SHOW (suite veloce; loop corto)
+procedure main()
+    int x
+    from x == 0 loop
+        show(x)
+        x+=1
+    until x == 100

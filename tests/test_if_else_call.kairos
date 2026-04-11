@@ -1,9 +1,8 @@
+// IF / ELSE / FI + call
 procedure check_boolean(int flag)
     if flag == 1 then
-        //do something
         show(flag)
     else
-        //do something
         show(flag)
     fi flag == 1
 

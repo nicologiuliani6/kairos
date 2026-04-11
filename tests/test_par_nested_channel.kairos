@@ -1,3 +1,4 @@
+// PAR / RAP annidati + channel SSEND/SRECV
 procedure main()
     channel c
     int x11
@@ -6,12 +7,12 @@ procedure main()
     x12+=12
     int x21
     int x22
-    par 
+    par
         show(x11)
         ssend(x11, c)
         show(x11)
     and
-        par 
+        par
             show(x12)
             ssend(x12, c)
             show(x12)

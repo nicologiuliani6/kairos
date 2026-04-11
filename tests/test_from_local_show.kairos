@@ -1,3 +1,4 @@
+// FROM loop + LOCAL/DELOCAL + SHOW
 procedure main()
     local int y = 3
     int x1

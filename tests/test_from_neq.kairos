@@ -1,0 +1,8 @@
+// FROM con condizione !=
+procedure main()
+    local int x = 0
+    from x != 3 loop
+        x += 1
+    until x == 3
+    show(x)
+    delocal int x = 3

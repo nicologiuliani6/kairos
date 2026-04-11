@@ -113,6 +113,10 @@ static inline void dbg_record(VMDebugState *dbg,
         strncmp(op, "THREAD_", 7) == 0) {
         return;
     }
+    /* SHOW non modifica lo stato: escluderlo evita history enormi (loop + DAP)
+       e memmove O(n) ad ogni istruzione quando il buffer è pieno. */
+    if (!strcmp(op, "SHOW"))
+        return;
 
     int idx = dbg->history_top + 1;
     if (idx >= DBG_MAX_HISTORY) {
@@ -120,9 +124,8 @@ static inline void dbg_record(VMDebugState *dbg,
         memmove(dbg->history, dbg->history + 1,
                 (DBG_MAX_HISTORY - 1) * sizeof(ExecRecord));
         idx = DBG_MAX_HISTORY - 1;
-    } else {
-        dbg->history_top = idx;
     }
+    dbg->history_top = idx;
     dbg->history[idx].line = line;
     strncpy(dbg->history[idx].frame, frame,  VAR_NAME_LENGTH - 1);
     strncpy(dbg->history[idx].instr, instr,  DBG_INSTR_LEN   - 1);
@@ -168,11 +171,6 @@ static inline void dbg_hook(VMDebugState *dbg,
         } else if (dbg_is_breakpoint(dbg, line)) {
             should_pause = 1;
         }
-    }
-
-    {
-        FILE *f = fopen("/tmp/kairos-vm.log", "a");
-        if (f) { fprintf(f, "dbg_hook line=%d mode=%d should_pause=%d\n", line, dbg->mode, should_pause); fclose(f); }
     }
 
     if (should_pause) {

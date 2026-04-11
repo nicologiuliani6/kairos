@@ -9,14 +9,25 @@
 #include "vm_channel.h"
 
 #ifdef DAP_MODE
-extern VM *g_current_vm; 
+#include <unistd.h>
+extern VM *g_current_vm;
+  /* Accumula su out_buf (per vm_debug_output_ext in pausa) e invia subito sulla
+   * pipe (letta dall'host DAP) così la Debug Console vede gli SHOW senza attendere
+   * breakpoint/fine. La pipe è O_NONBLOCK in vm_debug_start per non bloccare la VM. */
   #define vm_printf(...) do { \
       VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL; \
       if (_d) { \
           if (_d->suppress_output) break; \
           int _avail = DBG_OUTPUT_BUF_SIZE - _d->out_len - 1; \
-          if (_avail > 0) \
-              _d->out_len += snprintf(_d->out_buf + _d->out_len, _avail, __VA_ARGS__); \
+          if (_avail > 0) { \
+              int _base = _d->out_len; \
+              int _nw = snprintf(_d->out_buf + _base, _avail, __VA_ARGS__); \
+              if (_nw > 0) { \
+                  _d->out_len = _base + _nw; \
+                  if (_d->output_pipe_fd > 0) \
+                      (void)write(_d->output_pipe_fd, _d->out_buf + _base, (size_t)_nw); \
+              } \
+          } \
       } \
   } while(0)
 #else

@@ -1,27 +1,25 @@
+// PAR + ricorsione (encrypt) + UNCALL
 procedure encrypt(int m, int k)
     if k == 0 then
-        //skip
     else
         m += k
         k -= 1
         call encrypt(m, k)
     fi k == 0
 
-
 procedure main()
     local int key = 17
     local int msg = 0
-    show(msg)          // 0
-    show(key)          // 17
-    par 
+    show(msg)
+    show(key)
+    par
         call encrypt(msg, key)
-    and 
-        show(msg)          // 153 (17+16+...+1)
-        show(key)          // 0 
+    and
+        show(msg)
+        show(key)
         uncall encrypt(msg, key)
     rap
-    show(msg)          // torna 0
-    show(key)          // torna 17
+    show(msg)
+    show(key)
     delocal int msg = 0
     delocal int key = 17
-
