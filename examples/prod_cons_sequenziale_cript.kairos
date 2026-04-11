@@ -1,3 +1,5 @@
+// Nota: `uncall PC` in main() va in errore (stack); escluso da `make test`.
+// Usa `prod_cons_sequenziale.kairos` come riferimento reversibile.
 procedure encrypt(int m, int k)
     m^=k
 

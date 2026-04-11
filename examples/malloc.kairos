@@ -72,7 +72,7 @@ procedure mem_reset(stack cell, stack garbage)
 
 // --- ESEMPIO D'USO ---
 
-procedure go()
+procedure test_malloc()
     stack garbage
     stack idx_stack
     local channel ch = empty
@@ -141,5 +141,5 @@ procedure go()
     show(garbage)
 
 procedure main()
-    call go()
-    uncall go()
+    call test_malloc()
+    uncall test_malloc()

@@ -1,0 +1,19 @@
+// +=  -=  ^=  <=>  reversibili
+procedure main()
+    local int a = 10
+    local int b = 20
+    local int c = 7
+    a += 3
+    b -= 4
+    c ^= 2
+    a <=> b
+    show(a)
+    show(b)
+    show(c)
+    a <=> b
+    c ^= 2
+    b += 4
+    a -= 3
+    delocal int c = 7
+    delocal int b = 20
+    delocal int a = 10

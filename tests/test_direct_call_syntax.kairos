@@ -1,0 +1,9 @@
+// chiamata diretta nome_proc(args) senza keyword call
+procedure bump(int x)
+    x += 1
+
+procedure main()
+    local int a = 0
+    bump(a)
+    show(a)
+    delocal int a = 1

@@ -23,3 +23,4 @@ bytecode.txt
 node_modules/
 out/
 test_debug
+tests/test_dap_autonomous

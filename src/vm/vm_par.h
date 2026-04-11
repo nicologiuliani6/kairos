@@ -83,9 +83,12 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     }
 
     /* Avvia i thread uno alla volta, attendendo che si blocchino o terminino.
-       In inversione serve ordine opposto (ultimo thread del PAR per primo). */
+       Stesso ordine (0..count-1) per forward e inverse: la coda FIFO del canale
+       realizza già lo stack LIFO delle comunicazioni per l'undo; avviare i
+       thread in ordine inverso in is_inverse rompeva gli accoppiamenti con
+       3+ thread (es. examples/malloc.kairos). */
     for (int step = 0; step < pb->count; step++) {
-        int t = is_inverse ? (pb->count - 1 - step) : step;
+        int t = step;
         pthread_create(&args[t]->tid, NULL, thread_entry, args[t]);
         pthread_mutex_lock(&done_mtx);
         while (!args[t]->finished && !args[t]->blocked)

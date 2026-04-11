@@ -24,7 +24,7 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 RESET  := \033[0m
 
-.PHONY: all build-release build-dap run test release install-deps check-deps clean help
+.PHONY: all build-release build-dap test-dap run test release install-deps check-deps clean help
 
 # Default: build ottimizzata
 all: build-release
@@ -42,6 +42,13 @@ build-dap: check-deps
 	@echo "$(CYAN)Build DAP...$(RESET)"
 	$(CC) $(CFLAGS_DAP) -o $(LIBVM_DAP) $(VM_SOURCES) -I$(VM_DIR)
 	@echo "$(GREEN)Build DAP OK: $(LIBVM_DAP)$(RESET)"
+
+# Test C: pipe DAP + continue lungo (tests/fixtures/dap_long_show.kairos)
+test-dap: build-dap
+	@mkdir -p build
+	$(CC) -g -I$(VM_DIR) tests/test_dap_autonomous.c -L build -lvm_dap -lpthread \
+	    -Wl,-rpath,'$$ORIGIN' -o build/test_dap_autonomous
+	./build/test_dap_autonomous
 
 # Genera il version-script con i simboli pubblici del debugger
 $(VERSCRIPT): $(VM_SOURCES)
@@ -69,15 +76,17 @@ $(VERSCRIPT): $(VM_SOURCES)
 
 run: build-release
 ifndef FILE
-	$(error Specifica il file: make run FILE=tests/test.kairos)
+	$(error Specifica il file: make run FILE=tests/test_from_local_show.kairos)
 endif
 	@echo "$(CYAN)Esecuzione: $(FILE)$(RESET)"
 	$(PYTHON) -m src.kairos $(FILE) --dump-bytecode
 
-KAIROS_FILES := $(wildcard tests/*.kairos examples/*.kairos)
+# tests/*.kairos + examples/; esclusi: tests/fixtures/; esempi noti non validi in suite.
+KAIROS_EXCLUDE := examples/prod_cons_sequenziale_cript.kairos
+KAIROS_FILES := $(filter-out $(KAIROS_EXCLUDE),$(sort $(wildcard tests/*.kairos examples/*.kairos)))
 
 test: build-release
-	@echo "$(CYAN)=== Test suite ===$(RESET)"
+	@echo "$(CYAN)=== Test suite (.kairos in tests/ + examples/) ===$(RESET)"
 	@passed=0; failed=0; errors=""; \
 	for f in $(KAIROS_FILES); do \
 		name=$$(basename $$f); \
@@ -87,7 +96,11 @@ test: build-release
 			echo "  $(RED)TIMEOUT$(RESET)  $$name"; \
 			errors="$$errors\n--- $$name ---\nTest interrotto per timeout (5s)\n"; \
 			failed=$$((failed+1)); \
-		elif echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow|assertion"; then \
+		elif [ $$status -ne 0 ]; then \
+			echo "  $(RED)FAIL$(RESET)  $$name (exit $$status)"; \
+			errors="$$errors\n--- $$name ---\n$$output\n"; \
+			failed=$$((failed+1)); \
+		elif echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow|assertion|\\[VM\\].*sconosciuta|\\[ERRORE\\]"; then \
 			echo "  $(RED)FAIL$(RESET)  $$name"; \
 			errors="$$errors\n--- $$name ---\n$$output\n"; \
 			failed=$$((failed+1)); \
@@ -131,7 +144,7 @@ check-deps:
 
 clean:
 	@echo "$(YELLOW)Pulizia...$(RESET)"
-	rm -f $(LIBVM) $(LIBVM_DAP) $(VERSCRIPT)
+	rm -f $(LIBVM) $(LIBVM_DAP) $(VERSCRIPT) build/test_dap_autonomous
 	rm -rf build/pyinstaller-work build/dist
 	rm -rf $(SRC_DIR)/build $(SRC_DIR)/dist $(SRC_DIR)/__pycache__ $(SRC_DIR)/*.spec
 	rm -f $(SRC_DIR)/parser.out $(SRC_DIR)/parsetab.py
@@ -146,8 +159,9 @@ help:
 	@echo "  $(GREEN)make$(RESET)                         Build release (default)"
 	@echo "  $(GREEN)make build-release$(RESET)           Compila libvm.so (-O2)"
 	@echo "  $(GREEN)make build-dap$(RESET)               Compila libvm_dap.so"
+	@echo "  $(GREEN)make test-dap$(RESET)                Test C debugger (pipe + loop lungo)"
 	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma"
-	@echo "  $(GREEN)make test$(RESET)                    Esegue tutti i test .kairos"
+	@echo "  $(GREEN)make test$(RESET)                    tests/*.kairos + examples/ (vedi KAIROS_EXCLUDE nel makefile)"
 	@echo "  $(GREEN)make release$(RESET)                 Build KairosApp con PyInstaller"
 	@echo "  $(GREEN)make install-deps$(RESET)            Crea venv e installa dipendenze"
 	@echo "  $(GREEN)make clean$(RESET)                   Rimuove artefatti generati"

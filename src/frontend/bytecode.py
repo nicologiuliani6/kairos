@@ -9,6 +9,9 @@ _ASSIGN_OPS = {
     '<=>': 'SWAP'
 }
 
+# Chiamate tipo foo(x) senza `call`: opcode VM diretto, non CALL nome_proc.
+_BUILTIN_CALL_OPCODES = frozenset({'show', 'push', 'pop', 'ssend', 'srecv'})
+
 class ByteCode_Compiler:
     def __init__(self):
         self.queue = Queue()
@@ -95,7 +98,10 @@ class ByteCode_Compiler:
             case 'call_direct':
                 _, name, args, lineno = ast
                 args_str = " ".join(str(a) for a in args)
-                self.emit(f"{name.upper()} {args_str}".rstrip(), lineno)
+                if name.lower() in _BUILTIN_CALL_OPCODES:
+                    self.emit(f"{name.upper()} {args_str}".rstrip(), lineno)
+                else:
+                    self.emit(f"CALL {name} {args_str}".rstrip(), lineno)
 
             case 'if':
                 _, entry_cond, then_body, else_body, fi_cond, lineno = ast

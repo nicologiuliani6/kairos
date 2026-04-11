@@ -1,0 +1,11 @@
+// procedura con due parametri int
+procedure sum(int x, int y)
+    x+=y
+
+procedure main()
+    int a
+    int b
+    b+=5
+    call sum(a, b)
+    show(a)
+    show(b)

@@ -1,0 +1,12 @@
+// stack: push / pop (stesso schema producer/consumer minimale)
+procedure main()
+    local stack buf = nil
+    local int v = 0
+    v += 5
+    push(v, buf)
+    local int w = 0
+    pop(w, buf)
+    show(w)
+    delocal int w = 5
+    delocal int v = 0
+    delocal stack buf = nil
