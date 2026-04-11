@@ -155,14 +155,11 @@ static inline void dbg_hook(VMDebugState *dbg,
     dbg->current_line = line;
     strncpy(dbg->current_frame, frame, VAR_NAME_LENGTH - 1);
 
-    /* Durante l'inversione guidata da step-back non registrare nuova history,
-       altrimenti si reinseriscono record mentre li stiamo consumando. */
     if (dbg->mode != VM_MODE_CONTINUE_INV)
         dbg_record(dbg, line, frame, instr_text);
 
     int should_pause = 0;
     pthread_mutex_lock(&dbg->pause_mtx);
-
     if (dbg->mode == VM_MODE_STEP || dbg->mode == VM_MODE_STEP_BACK)
         should_pause = 1;
     else if (dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) {
@@ -178,15 +175,19 @@ static inline void dbg_hook(VMDebugState *dbg,
         if (dbg->on_pause)
             dbg->on_pause(line, frame, dbg->userdata);
         dbg->first_pause_reached = 1;
-        pthread_cond_broadcast(&dbg->pause_cond);   /* sveglia vm_debug_start */
+        pthread_cond_broadcast(&dbg->pause_cond);
     }
 
-    /* Se qualcuno ha messo in pausa il debugger, tutti i thread si fermano qui. */
     while (dbg->mode == VM_MODE_PAUSE)
         pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+
+    /* FIX: dopo ogni pausa la pipe ha già consegnato tutto l'output
+       prodotto fino a qui. Azzera out_buf così vm_debug_output_ext
+       non lo ri-emette come duplicato a fine esecuzione. */
+    dbg->out_len = 0;
+
     pthread_mutex_unlock(&dbg->pause_mtx);
-}
-/* Sblocca la VM dopo una pausa (chiamato dal controllore esterno) */
+}/* Sblocca la VM dopo una pausa (chiamato dal controllore esterno) */
 static inline void dbg_resume(VMDebugState *dbg, VMExecMode new_mode)
 {
     if (!dbg || !dbg->initialized) return;

@@ -11,25 +11,29 @@
 #ifdef DAP_MODE
 #include <unistd.h>
 extern VM *g_current_vm;
-  /* Accumula su out_buf (per vm_debug_output_ext in pausa) e invia subito sulla
-   * pipe (letta dall'host DAP) così la Debug Console vede gli SHOW senza attendere
-   * breakpoint/fine. La pipe è O_NONBLOCK in vm_debug_start per non bloccare la VM. */
-  #define vm_printf(...) do { \
-      VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL; \
-      if (_d) { \
-          if (_d->suppress_output) break; \
-          int _avail = DBG_OUTPUT_BUF_SIZE - _d->out_len - 1; \
-          if (_avail > 0) { \
-              int _base = _d->out_len; \
-              int _nw = snprintf(_d->out_buf + _base, _avail, __VA_ARGS__); \
-              if (_nw > 0) { \
-                  _d->out_len = _base + _nw; \
-                  if (_d->output_pipe_fd > 0) \
-                      (void)write(_d->output_pipe_fd, _d->out_buf + _base, (size_t)_nw); \
-              } \
-          } \
-      } \
-  } while(0)
+#define vm_printf(...) do { \
+    VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL; \
+    if (_d) { \
+        if (_d->suppress_output) break; \
+        char _tmp[1024]; \
+        int _nw = snprintf(_tmp, sizeof(_tmp), __VA_ARGS__); \
+        if (_nw > 0) { \
+            if (_d->output_pipe_fd > 0) { \
+                /* Canale real-time: scrivi solo sulla pipe, NON su out_buf */ \
+                (void)write(_d->output_pipe_fd, _tmp, (size_t)_nw); \
+            } else { \
+                /* Fallback senza pipe: accumula in out_buf */ \
+                int _avail = DBG_OUTPUT_BUF_SIZE - _d->out_len - 1; \
+                if (_avail > 0) { \
+                    int _copy = _nw < _avail ? _nw : _avail; \
+                    memcpy(_d->out_buf + _d->out_len, _tmp, _copy); \
+                    _d->out_len += _copy; \
+                    _d->out_buf[_d->out_len] = '\0'; \
+                } \
+            } \
+        } \
+    } \
+} while(0)
 #else
   #define vm_printf(...) printf(__VA_ARGS__)
 #endif
