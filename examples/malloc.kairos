@@ -15,43 +15,39 @@ procedure free_pool(channel ch, int n)
     until i == n
     delocal int i = n
 
-procedure collect_pool(channel ch, int n, stack idx_stack)
+// --- API PUBBLICA ---
+
+procedure mem_init(channel ch, int n)
+    call free_pool(ch, n)
+
+procedure mem_alloc(channel ch, stack cell)
+    local int tmp = 0
+        srecv(tmp, ch)
+        local int zero = 0
+            push(tmp, cell)
+            push(zero, cell)
+        delocal int zero = 0
+    delocal int tmp = 0
+
+procedure mem_free(channel ch, stack cell)
+    local int tmp = 0
+        local int zero = 0
+            pop(zero, cell)
+        delocal int zero = 0
+        pop(tmp, cell)
+        ssend(tmp, ch)
+    delocal int tmp = 0
+
+procedure mem_collect(channel ch, stack idx_stack, int n)
     local int i = 0
     from i == 0 loop
         i += 1
         local int index = 0
             srecv(index, ch)
-            show(index)             // debug
             push(index, idx_stack)
         delocal int index = 0
     until i == n
     delocal int i = n
-
-// --- API PUBBLICA ---
-
-procedure mem_init(channel ch, stack idx_stack, int n)
-    call free_pool(ch, n)
-
-procedure mem_alloc(channel ch, stack cell, stack idx_stack)
-    local int tmp = 0
-        srecv(tmp, ch)
-        local int zero = 0
-            push(zero, cell)
-        delocal int zero = 0
-        push(tmp, idx_stack)
-    delocal int tmp = 0
-
-procedure mem_free(channel ch, stack cell, stack idx_stack)
-    local int tmp = 0
-        pop(tmp, idx_stack)
-        local int zero = 0
-            pop(zero, cell)
-        delocal int zero = 0
-        ssend(tmp, ch)
-    delocal int tmp = 0
-
-procedure mem_collect(channel ch, stack idx_stack, int n)
-    call collect_pool(ch, n, idx_stack)
 
 procedure mem_write(stack cell, int value, stack garbage)
     local int tmp = 0
@@ -85,13 +81,13 @@ procedure test_malloc()
     local int n = 3
 
     par
-        call mem_init(ch, idx_stack, n)
+        call mem_init(ch, n)
     and
-        call mem_alloc(ch, cell1, idx_stack)
+        call mem_alloc(ch, cell1)
     and
-        call mem_alloc(ch, cell2, idx_stack)
+        call mem_alloc(ch, cell2)
     and
-        call mem_alloc(ch, cell3, idx_stack)
+        call mem_alloc(ch, cell3)
     rap
 
     call mem_write(cell1, v1, garbage)
@@ -123,11 +119,11 @@ procedure test_malloc()
     par
         call mem_collect(ch, idx_stack, n)
     and
-        call mem_free(ch, cell3, idx_stack)
+        call mem_free(ch, cell3)
     and
-        call mem_free(ch, cell2, idx_stack)
+        call mem_free(ch, cell2)
     and
-        call mem_free(ch, cell1, idx_stack)
+        call mem_free(ch, cell1)
     rap
 
     delocal int n = 3

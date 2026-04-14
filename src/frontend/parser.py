@@ -199,7 +199,112 @@ def _expr_contains_var(expr, var_name):
         return _expr_contains_var(expr[2], var_name) or _expr_contains_var(expr[3], var_name)
     return isinstance(expr, str) and expr == var_name
 
-def _check_stmt_reversibility(stmt):
+def _collect_declared_types(proc):
+    declared = {}
+    if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
+        return declared
+
+    params = proc[2] or []
+    body = proc[3] or []
+    for ptype, pname in params:
+        declared[pname] = ptype
+
+    def walk_stmt(stmt):
+        if not isinstance(stmt, tuple) or not stmt:
+            return
+        tag = stmt[0]
+        if tag in ('decl', 'local', 'delocal'):
+            if len(stmt) >= 4:
+                declared[stmt[2]] = stmt[1]
+            return
+        if tag == 'if':
+            _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
+            for nested in then_body:
+                walk_stmt(nested)
+            for nested in else_body:
+                walk_stmt(nested)
+            return
+        if tag == 'from':
+            _, _entry_cond, body, _until_cond, *_rest = stmt
+            for nested in body:
+                walk_stmt(nested)
+            return
+        if tag == 'par':
+            _, branches, _lineno = stmt
+            for branch in branches:
+                for nested in branch:
+                    walk_stmt(nested)
+
+    for stmt in body:
+        walk_stmt(stmt)
+    return declared
+
+def _collect_stack_endpoints_in_stmt(stmt, out):
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+
+    tag = stmt[0]
+    if tag == 'call_direct':
+        _, name, args, _lineno = stmt
+        lname = name.lower()
+        if lname in ('push', 'pop') and isinstance(args, list) and len(args) >= 2:
+            out.add(args[1])
+        return
+
+    if tag == 'if':
+        _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
+        for nested in then_body:
+            _collect_stack_endpoints_in_stmt(nested, out)
+        for nested in else_body:
+            _collect_stack_endpoints_in_stmt(nested, out)
+        return
+
+    if tag == 'from':
+        _, _entry_cond, body, _until_cond, *_rest = stmt
+        for nested in body:
+            _collect_stack_endpoints_in_stmt(nested, out)
+        return
+
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _collect_stack_endpoints_in_stmt(nested, out)
+
+def _collect_stack_args_from_call(stmt, proc_signatures, out):
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+
+    tag = stmt[0]
+    if tag in ('call', 'uncall'):
+        _, proc_name, args, _lineno = stmt
+        param_types = proc_signatures.get(proc_name, [])
+        for idx, actual in enumerate(args or []):
+            if idx < len(param_types) and param_types[idx] == 'stack' and isinstance(actual, str):
+                out.add(actual)
+        return
+
+    if tag == 'if':
+        _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
+        for nested in then_body:
+            _collect_stack_args_from_call(nested, proc_signatures, out)
+        for nested in else_body:
+            _collect_stack_args_from_call(nested, proc_signatures, out)
+        return
+
+    if tag == 'from':
+        _, _entry_cond, body, _until_cond, *_rest = stmt
+        for nested in body:
+            _collect_stack_args_from_call(nested, proc_signatures, out)
+        return
+
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _collect_stack_args_from_call(nested, proc_signatures, out)
+
+def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
     if not isinstance(stmt, tuple) or not stmt:
         return
 
@@ -219,34 +324,62 @@ def _check_stmt_reversibility(stmt):
     if tag == 'if':
         _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
         for nested in then_body:
-            _check_stmt_reversibility(nested)
+            _check_stmt_reversibility(nested, declared_types, proc_signatures)
         for nested in else_body:
-            _check_stmt_reversibility(nested)
+            _check_stmt_reversibility(nested, declared_types, proc_signatures)
         return
 
     if tag == 'from':
         _, _entry_cond, body, _until_cond, *_rest = stmt
         for nested in body:
-            _check_stmt_reversibility(nested)
+            _check_stmt_reversibility(nested, declared_types, proc_signatures)
         return
 
     if tag == 'par':
-        _, branches, _lineno = stmt
-        for branch in branches:
+        _, branches, lineno = stmt
+        stack_usage_by_var = {}
+        for branch_idx, branch in enumerate(branches):
+            used_in_branch = set()
             for nested in branch:
-                _check_stmt_reversibility(nested)
+                _collect_stack_endpoints_in_stmt(nested, used_in_branch)
+                _collect_stack_args_from_call(nested, proc_signatures, used_in_branch)
+                _check_stmt_reversibility(nested, declared_types, proc_signatures)
+            for var_name in used_in_branch:
+                if declared_types.get(var_name) == 'stack':
+                    stack_usage_by_var.setdefault(var_name, set()).add(branch_idx)
+
+        for var_name, branch_ids in stack_usage_by_var.items():
+            if len(branch_ids) > 1:
+                branches_txt = ", ".join(str(i) for i in sorted(branch_ids))
+                raise KairosCompileError(
+                    "STATIC",
+                    (
+                        f"riga {lineno}: uso non reversibile di stack condiviso '{var_name}' "
+                        f"in blocco PAR (branch: {branches_txt}); "
+                        "usa channel/ssend/srecv o separa le strutture tra i branch"
+                    ),
+                )
 
 def run_static_checks(program_ast):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
         raise KairosCompileError("PARSER", "AST del programma non valido")
 
     procedures = program_ast[1] if len(program_ast) > 1 else []
+    proc_signatures = {}
     for proc in procedures:
         if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
             continue
+        proc_name = proc[1]
+        params = proc[2] or []
+        proc_signatures[proc_name] = [ptype for ptype, _pname in params]
+
+    for proc in procedures:
+        if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
+            continue
+        declared_types = _collect_declared_types(proc)
         body = proc[3] or []
         for stmt in body:
-            _check_stmt_reversibility(stmt)
+            _check_stmt_reversibility(stmt, declared_types, proc_signatures)
 
 
 _nulllog = logging.getLogger('ply.nulllog')

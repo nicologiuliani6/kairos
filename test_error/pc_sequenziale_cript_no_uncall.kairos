@@ -1,5 +1,5 @@
 procedure encrypt(int m, int k)
-    m^=k
+    m ^= k
 
 procedure producer(stack buffer, int n)
     local int pub_key = 17
@@ -30,8 +30,11 @@ procedure consumer(stack buffer, stack result, int n)
     delocal int priv_key = 17
 
 procedure PC(stack buffer, int n, stack result)
-    call producer(buffer, n)
-    call consumer(buffer, result, n)
+    par
+        call producer(buffer, n)
+    and
+        call consumer(buffer, result, n)
+    rap
 
 procedure main()
     int y
@@ -41,10 +44,6 @@ procedure main()
     call PC(buffer, n, result)
     show(result)
     show(buffer)
-    uncall PC(buffer, n, result)
-    show(result)
-    show(buffer)
     delocal int n = 5
     delocal stack result = nil
     delocal stack buffer = nil
-
