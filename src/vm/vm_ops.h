@@ -19,17 +19,18 @@ extern VM *g_current_vm;
         int _nw = snprintf(_tmp, sizeof(_tmp), __VA_ARGS__); \
         if (_nw > 0) { \
             if (_d->output_pipe_fd > 0) { \
-                /* Canale real-time: scrivi solo sulla pipe, NON su out_buf */ \
+                /* Canale real-time */ \
                 (void)write(_d->output_pipe_fd, _tmp, (size_t)_nw); \
-            } else { \
-                /* Fallback senza pipe: accumula in out_buf */ \
-                int _avail = DBG_OUTPUT_BUF_SIZE - _d->out_len - 1; \
-                if (_avail > 0) { \
-                    int _copy = _nw < _avail ? _nw : _avail; \
-                    memcpy(_d->out_buf + _d->out_len, _tmp, _copy); \
-                    _d->out_len += _copy; \
-                    _d->out_buf[_d->out_len] = '\0'; \
-                } \
+            } \
+            /* Mantieni sempre anche il buffer interno come fallback/backup \
+               (alcuni client leggono vm_debug_output_ext invece della pipe \
+               in certi passaggi di stepback/revert). */ \
+            int _avail = DBG_OUTPUT_BUF_SIZE - _d->out_len - 1; \
+            if (_avail > 0) { \
+                int _copy = _nw < _avail ? _nw : _avail; \
+                memcpy(_d->out_buf + _d->out_len, _tmp, _copy); \
+                _d->out_len += _copy; \
+                _d->out_buf[_d->out_len] = '\0'; \
             } \
         } \
     } \

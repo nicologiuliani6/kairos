@@ -319,14 +319,29 @@ void vm_exec(VM *vm, char *buffer)
 void vm_free(VM *vm)
 {
     if (!vm) return;
+    Var *freed[MAX_FRAMES * MAX_VARS];
+    int freed_count = 0;
     for (int i = 0; i <= vm->frame_top; i++) {
         Frame *f = &vm->frames[i];
         for (int j = 0; j < f->var_count; j++) {
-            if (f->vars[j]) {
-                /* Il campo value è allocato da alloc_var (calloc in vm_helpers.h) */
-                if (f->vars[j]->value)
-                    free(f->vars[j]->value);
-                free(f->vars[j]);
+            Var *v = f->vars[j];
+            if (v) {
+                int already_freed = 0;
+                for (int k = 0; k < freed_count; k++) {
+                    if (freed[k] == v) {
+                        already_freed = 1;
+                        break;
+                    }
+                }
+                if (!already_freed) {
+                    Var *to_free = v;
+                    /* Evita double-free quando piu` slot puntano alla stessa Var
+                       (es. alias parametri durante call/uncall in debug rebuild). */
+                    if (to_free->value) free(to_free->value);
+                    free(to_free);
+                    if (freed_count < (MAX_FRAMES * MAX_VARS))
+                        freed[freed_count++] = to_free;
+                }
                 f->vars[j] = NULL;
             }
         }
