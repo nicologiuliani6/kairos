@@ -375,9 +375,6 @@ void vm_run_from_string(const char *bytecode)
         return;
     }
 
-    if (vm_check_if_reversibility(ast) > 0)
-        fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
-
     VM vm; memset(&vm, 0, sizeof(VM));
     vm.dbg = NULL;   /* modalità normale: nessun debugger */
     vm_exec(&vm, ast);

@@ -1,5 +1,6 @@
 import sys
-from src.frontend.parser import parser, lexer
+from src.frontend.parser import parser, lexer, run_static_checks
+from src.frontend.errors import KairosCompileError
 from queue import Queue
 
 _ASSIGN_OPS = {
@@ -81,8 +82,7 @@ class ByteCode_Compiler:
                 _, var, op, expr, lineno = ast
                 opcode = _ASSIGN_OPS.get(op)
                 if opcode is None:
-                    print(f"[BYTECODE] operatore aritmetico non supportato: {op}")
-                    sys.exit(1)
+                    raise KairosCompileError("BYTECODE", f"operatore aritmetico non supportato: {op}")
                 self.emit(f"{opcode} {var} {self.expr_to_str(expr)}", lineno)
 
             case 'call':
@@ -158,8 +158,7 @@ class ByteCode_Compiler:
                 self.emit("PAR_END", lineno)
 
             case _:
-                print(f"[BYTECODE] nodo AST non gestito: {ast[0]}  →  {ast}")
-                sys.exit(1)
+                raise KairosCompileError("BYTECODE", f"nodo AST non gestito: {ast[0]}  ->  {ast}")
 
 
 if __name__ == '__main__':
@@ -170,9 +169,19 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         source = f.read()
 
-    ast = list(parser.parse(source, lexer=lexer))
-    compiler = ByteCode_Compiler()
-    compiler.process(ast)
+    try:
+        ast = parser.parse(source, lexer=lexer)
+        if ast is None:
+            raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+        run_static_checks(ast)
+        compiler = ByteCode_Compiler()
+        compiler.process(ast)
+    except KairosCompileError as exc:
+        print(exc)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"[COMPILER] errore interno: {exc}")
+        sys.exit(1)
 
     with open("bytecode.txt", "w") as f:
         while not compiler.queue.empty():
