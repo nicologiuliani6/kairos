@@ -110,6 +110,7 @@ static inline void dbg_record(VMDebugState *dbg,
     if (!strcmp(op, "EVAL")   || !strcmp(op, "JMPF")  || !strcmp(op, "JMP")   ||
         !strcmp(op, "ASSERT") || !strcmp(op, "LABEL") || !strcmp(op, "DECL")  ||
         !strcmp(op, "PARAM")  || !strcmp(op, "HALT")  || !strcmp(op, "PAR_END") ||
+        !strcmp(op, "PROC")   || !strcmp(op, "END_PROC") || !strcmp(op, "PAR_START") ||
         strncmp(op, "THREAD_", 7) == 0) {
         return;
     }
