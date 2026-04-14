@@ -182,10 +182,8 @@ static inline void dbg_hook(VMDebugState *dbg,
     while (dbg->mode == VM_MODE_PAUSE)
         pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
 
-    /* FIX: dopo ogni pausa la pipe ha già consegnato tutto l'output
-       prodotto fino a qui. Azzera out_buf così vm_debug_output_ext
-       non lo ri-emette come duplicato a fine esecuzione. */
-    dbg->out_len = 0;
+    /* Non azzerare out_buf qui: alcuni client DAP leggono l'output tramite
+       vm_debug_output_ext dopo la pausa; svuotarlo qui fa perdere gli SHOW. */
 
     pthread_mutex_unlock(&dbg->pause_mtx);
 }/* Sblocca la VM dopo una pausa (chiamato dal controllore esterno) */

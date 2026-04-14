@@ -36,7 +36,17 @@ static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
     char *src = strdup(g_debug_src_raw);
     if (!src) return -1;
 
+    /* Mantieni stabile la stessa pipe output durante i rebuild (step-back/revert):
+       il client DAP puo` aver gia` aperto il fd in lettura e non lo ri-chiede. */
+    int keep_rd = dbg->output_pipe_rd;
+    int keep_wr = dbg->output_pipe_fd;
+    dbg->output_pipe_rd = -1;
+    dbg->output_pipe_fd = -1;
+
     vm_debug_stop(dbg);
+
+    dbg->output_pipe_rd = keep_rd;
+    dbg->output_pipe_fd = keep_wr;
 
     dbg->history_top = -1;
     dbg->first_pause_reached = 0;
@@ -121,20 +131,22 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     g_debug_vm  = calloc(1, sizeof(VM));
     g_debug_vm->dbg = dbg;
 
-    int fds[2];
-    if (pipe(fds) == 0) {
-        dbg->output_pipe_rd = fds[0];
-        dbg->output_pipe_fd = fds[1];
-        (void)fcntl(fds[1], F_SETFL, O_NONBLOCK);
-        /* Pipe kernel default ~64 KiB: con migliaia di SHOW si riempie, write()
-         * non bloccanti falliscono e l'output resta solo in out_buf fino alla pausa.
-         * Su Linux alziamo il buffer (es. loop 10k × ~8 B ≈ 80 KiB). */
+    if (!(dbg->output_pipe_rd > 0 && dbg->output_pipe_fd > 0)) {
+        int fds[2];
+        if (pipe(fds) == 0) {
+            dbg->output_pipe_rd = fds[0];
+            dbg->output_pipe_fd = fds[1];
+            (void)fcntl(fds[1], F_SETFL, O_NONBLOCK);
+            /* Pipe kernel default ~64 KiB: con migliaia di SHOW si riempie, write()
+             * non bloccanti falliscono e l'output resta solo in out_buf fino alla pausa.
+             * Su Linux alziamo il buffer (es. loop 10k × ~8 B ≈ 80 KiB). */
 #if defined(__linux__) && defined(F_SETPIPE_SZ)
-        (void)fcntl(fds[1], F_SETPIPE_SZ, 1024 * 1024);
+            (void)fcntl(fds[1], F_SETPIPE_SZ, 1024 * 1024);
 #endif
-    } else {
-        dbg->output_pipe_rd = -1;
-        dbg->output_pipe_fd = -1;
+        } else {
+            dbg->output_pipe_rd = -1;
+            dbg->output_pipe_fd = -1;
+        }
     }
 
     char *normalized = normalize_bytecode_physical_lines(bytecode);
@@ -182,14 +194,39 @@ int vm_debug_step(VMDebugState *dbg)
 int vm_debug_step_back(VMDebugState *dbg)
 {
     if (!dbg || dbg->history_top < 0) return -1;
-    int target_top = dbg->history_top - 1;
-    return vm_debug_rebuild_to_history_top(dbg, target_top);
+    int original_line = dbg->current_line;
+    int target_top = dbg->history_top;
+
+    /* Se la posizione corrente e` gia` l'ultimo record history, vai al
+       precedente. Se invece la riga corrente non e` in history (es. SHOW),
+       il primo step-back deve atterrare sull'ultimo record disponibile. */
+    if (dbg->history[dbg->history_top].line == dbg->current_line) {
+        if (dbg->history_top == 0) return dbg->current_line;
+        target_top = dbg->history_top - 1;
+    }
+
+    int out_line = vm_debug_rebuild_to_history_top(dbg, target_top);
+
+    /* Se il rebuild resta sulla stessa riga (caso frequente quando la riga
+       corrente non e` registrata in history, es. SHOW), prova un passo in piu`
+       indietro per evitare il "secondo stepback non fa nulla". */
+    if (out_line == original_line && target_top > 0)
+        out_line = vm_debug_rebuild_to_history_top(dbg, target_top - 1);
+
+    return (out_line < 0) ? original_line : out_line;
 }
 
 int vm_debug_continue(VMDebugState *dbg)
 {
     if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
     pthread_mutex_lock(&dbg->pause_mtx);
+
+    /* Se siamo fermi su una linea che e` anche breakpoint (es. dopo revert),
+       ignora una sola volta quel breakpoint per eseguire davvero l'istruzione
+       corrente invece di rientrare subito in pausa sulla stessa riga. */
+    if (dbg->mode == VM_MODE_PAUSE && dbg_is_breakpoint(dbg, dbg->current_line))
+        dbg->ignore_breakpoint_once_line = dbg->current_line;
+
     dbg->mode = VM_MODE_CONTINUE;
     pthread_cond_broadcast(&dbg->pause_cond);
 
