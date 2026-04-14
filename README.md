@@ -68,7 +68,6 @@ kairos/
 │   ├── vm_channel.h        ← canali sincroni (rendezvous)
 │   ├── stack.h             ← stack di puntatori a Var
 │   ├── char_id_map.h       ← mappa stringa→indice
-│   └── check_if_reversibility.h ← analisi statica reversibilità
 ├── build/
 │   └── libvm.so            ← generato da make
 ├── tests/

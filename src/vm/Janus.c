@@ -14,7 +14,6 @@
 #include "vm_par.h"      /* deve venire prima: definisce ParBlock, scan_par_block, exec_par_threads */
 #include "vm_invert.h"   /* usa ParBlock e exec_par_threads definiti sopra */
 #include "vm_debug.h"    /* debug hook, dump JSON, breakpoint management  */
-#include "check_if_reversibility.h"
 #include "Kairos_core.h"
 
 
