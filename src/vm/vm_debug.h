@@ -33,6 +33,7 @@ static inline void dbg_init(VMDebugState *dbg)
     memset(dbg, 0, sizeof(VMDebugState));
     dbg->mode        = VM_MODE_RUN;
     dbg->history_top = -1;
+    dbg->rebuild_target_top = -1;
     dbg->ignore_breakpoint_once_line = -1;
     dbg->bp_count    = 0;
     pthread_mutex_init(&dbg->pause_mtx, NULL);
@@ -153,15 +154,21 @@ static inline void dbg_hook(VMDebugState *dbg,
                             int line, const char *frame, const char *instr_text)
 {
     if (!dbg || !dbg->initialized) return;
-    dbg->current_line = line;
-    strncpy(dbg->current_frame, frame, VAR_NAME_LENGTH - 1);
-
-    if (dbg->mode != VM_MODE_CONTINUE_INV)
-        dbg_record(dbg, line, frame, instr_text);
-
-    int should_pause = 0;
     pthread_mutex_lock(&dbg->pause_mtx);
+    int should_pause = 0;
+
+    /* In presenza di thread PAR, quando la VM e` gia` in pausa non permettere
+       ad altri thread di sovrascrivere la posizione mostrata nel debugger. */
+    if (dbg->mode != VM_MODE_PAUSE) {
+        dbg->current_line = line;
+        strncpy(dbg->current_frame, frame, VAR_NAME_LENGTH - 1);
+        if (dbg->mode != VM_MODE_CONTINUE_INV)
+            dbg_record(dbg, line, frame, instr_text);
+    }
+
     if (dbg->mode == VM_MODE_STEP || dbg->mode == VM_MODE_STEP_BACK)
+        should_pause = 1;
+    else if (dbg->rebuild_active && dbg->history_top >= dbg->rebuild_target_top)
         should_pause = 1;
     else if (dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) {
         if (dbg->ignore_breakpoint_once_line == line) {
@@ -172,6 +179,14 @@ static inline void dbg_hook(VMDebugState *dbg,
     }
 
     if (should_pause) {
+        if (current_thread_args && current_thread_args->done_mtx && current_thread_args->done_cond) {
+            /* Se il breakpoint scatta in un thread PAR, sblocca il launcher che
+               sta aspettando finished/blocked per evitare deadlock. */
+            pthread_mutex_lock(current_thread_args->done_mtx);
+            current_thread_args->blocked = 1;
+            pthread_cond_signal(current_thread_args->done_cond);
+            pthread_mutex_unlock(current_thread_args->done_mtx);
+        }
         dbg->mode = VM_MODE_PAUSE;
         if (dbg->on_pause)
             dbg->on_pause(line, frame, dbg->userdata);

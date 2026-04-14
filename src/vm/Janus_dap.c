@@ -15,6 +15,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 void vm_debug_start(const char *bytecode, VMDebugState *dbg);
 void vm_debug_stop(VMDebugState *dbg);
 int vm_debug_step(VMDebugState *dbg);
+int vm_debug_continue(VMDebugState *dbg);
 
 /* Stato globale del debugger (usato dall'API esterna). */
 static VM       *g_debug_vm       = NULL;
@@ -23,6 +24,54 @@ static char     *g_debug_buf      = NULL;
 static char     *g_debug_src_raw  = NULL;
 static char     *g_debug_buf_orig = NULL;
 static pthread_t g_debug_tid;
+
+static int vm_debug_line_inside_par(const char *src, int target_line)
+{
+    if (!src || target_line <= 0) return 0;
+    int in_par = 0;
+    const char *line = src;
+    while (line && *line) {
+        const char *nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl - line) : strlen(line);
+        char row[DBG_INSTR_LEN];
+        size_t cpy = len < sizeof(row) - 1 ? len : sizeof(row) - 1;
+        memcpy(row, line, cpy);
+        row[cpy] = '\0';
+
+        const char *at = strchr(line, '@');
+        int srcline = at ? atoi(at + 1) : 0;
+
+        char *p = skip_lineno(row);
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '@') {
+            while (*p && *p != ' ' && *p != '\t') p++;
+            while (*p == ' ' || *p == '\t') p++;
+        }
+        if (*p == '\0') {
+            line = nl ? (nl + 1) : NULL;
+            continue;
+        }
+
+        char op[32];
+        int oi = 0;
+        while (*p && *p != ' ' && *p != '\t' && oi < (int)sizeof(op) - 1)
+            op[oi++] = *p++;
+        op[oi] = '\0';
+        if (op[0] == '\0') {
+            line = nl ? (nl + 1) : NULL;
+            continue;
+        }
+
+        if (!strcmp(op, "PAR_START")) in_par++;
+        else if (!strcmp(op, "PAR_END") && in_par > 0) in_par--;
+
+        if (srcline == target_line) {
+            return (in_par > 0);
+        }
+        line = nl ? (nl + 1) : NULL;
+    }
+    return 0;
+}
 
 static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
 {
@@ -62,11 +111,19 @@ static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
        non deve produrre output utente (es. SHOW) in Debug Console. */
     dbg->suppress_output = 1;
 
-    int guard = 0;
-    while (dbg->history_top < target_top && guard++ < DBG_MAX_HISTORY * 4) {
-        int line = vm_debug_step(dbg);
-        if (line < 0) break;
-    }
+    /* Rebuild robusto: evita step-by-step (puo` deadlockare su PAR/channels).
+       Corri in CONTINUE senza breakpoints utente e fermati quando history_top
+       raggiunge il target tramite hook (rebuild_active/rebuild_target_top). */
+    dbg->bp_count = 0;
+    dbg->rebuild_active = 1;
+    dbg->rebuild_target_top = target_top;
+    int line = vm_debug_continue(dbg);
+    (void)line;
+    dbg->rebuild_active = 0;
+    dbg->rebuild_target_top = -1;
+    dbg->bp_count = bp_count;
+    for (int i = 0; i < bp_count; i++) dbg->breakpoints[i] = bps[i];
+
     dbg->suppress_output = 0;
     return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
 }
@@ -194,7 +251,26 @@ int vm_debug_step(VMDebugState *dbg)
 int vm_debug_step_back(VMDebugState *dbg)
 {
     if (!dbg || dbg->history_top < 0) return -1;
+    dbg->ignore_breakpoint_once_line = -1;
     int original_line = dbg->current_line;
+    int in_par = vm_debug_line_inside_par(g_debug_src_raw, dbg->current_line);
+
+    /* Fallback sicuro per frame PAR/threaded: il rebuild completo puo` bloccare
+       quando il breakpoint cade dentro un thread del blocco PAR (es. call consumer).
+       In tal caso facciamo uno step-back "logico" sulla history senza rebuild. */
+    if ((strstr(dbg->current_frame, "@t") != NULL) ||
+        (dbg->history_top >= 0 && strstr(dbg->history[dbg->history_top].frame, "@t") != NULL) ||
+        in_par) {
+        int target_top = dbg->history_top;
+        if (dbg->history[target_top].line == dbg->current_line && target_top > 0)
+            target_top--;
+        dbg->history_top = target_top;
+        dbg->current_line = dbg->history[target_top].line;
+        strncpy(dbg->current_frame, dbg->history[target_top].frame, VAR_NAME_LENGTH - 1);
+        dbg->current_frame[VAR_NAME_LENGTH - 1] = '\0';
+        return dbg->current_line;
+    }
+
     int target_top = dbg->history_top;
 
     /* Se la posizione corrente e` gia` l'ultimo record history, vai al
@@ -246,6 +322,7 @@ int vm_debug_continue(VMDebugState *dbg)
 int vm_debug_continue_inverse(VMDebugState *dbg)
 {
     if (!dbg || dbg->history_top < 0) return 0;
+    dbg->ignore_breakpoint_once_line = -1;
     int target_top = -1;
     for (int i = dbg->history_top - 1; i >= 0; i--) {
         if (dbg_is_breakpoint(dbg, dbg->history[i].line)) {
