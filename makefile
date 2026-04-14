@@ -46,7 +46,7 @@ build-dap: check-deps
 # Test C: pipe DAP + continue lungo (tests/fixtures/dap_long_show.kairos)
 test-dap: build-dap
 	@mkdir -p build
-	$(CC) -g -I$(VM_DIR) tests/test_dap_autonomous.c -L build -lvm_dap -lpthread \
+	$(CC) -g -I$(VM_DIR) tests/test-dap/test_dap_autonomous.c -L build -lvm_dap -lpthread \
 	    -Wl,-rpath,'$$ORIGIN' -o build/test_dap_autonomous
 	./build/test_dap_autonomous
 

@@ -3,7 +3,8 @@ import sys
 import ctypes
 from src.frontend.bytecode import ByteCode_Compiler
 from src.frontend.lexer import lexer
-from src.frontend.parser import parser
+from src.frontend.parser import parser, run_static_checks
+from src.frontend.errors import KairosCompileError
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
@@ -15,9 +16,19 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         source = f.read()
 
-    ast = list(parser.parse(source, lexer=lexer))
-    BT_Compiler = ByteCode_Compiler()
-    BT_Compiler.process(ast)
+    try:
+        ast = parser.parse(source, lexer=lexer)
+        if ast is None:
+            raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+        run_static_checks(ast)
+        BT_Compiler = ByteCode_Compiler()
+        BT_Compiler.process(ast)
+    except KairosCompileError as exc:
+        print(exc)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"[COMPILER] errore interno: {exc}")
+        sys.exit(1)
 
     lines = []
     while not BT_Compiler.queue.empty():

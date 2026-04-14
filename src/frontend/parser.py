@@ -1,6 +1,7 @@
 import sys
 import ply.yacc as yacc
 from .lexer import lexer, tokens
+from .errors import KairosCompileError
 import logging
 import tempfile
 
@@ -189,9 +190,63 @@ def p_par(p):
 # ── Errore ───────────────────────────────────────────────────────────────────
 def p_error(p):
     if p:
-        print(f"[PARSER] riga {p.lineno}: token non atteso '{p.value}'")
+        raise KairosCompileError("PARSER", f"riga {p.lineno}: token non atteso '{p.value}'")
     else:
-        print("[PARSER] errore sintattico: fine file inattesa")
+        raise KairosCompileError("PARSER", "errore sintattico: fine file inattesa")
+
+def _expr_contains_var(expr, var_name):
+    if isinstance(expr, tuple) and len(expr) == 4 and expr[0] == 'binop':
+        return _expr_contains_var(expr[2], var_name) or _expr_contains_var(expr[3], var_name)
+    return isinstance(expr, str) and expr == var_name
+
+def _check_stmt_reversibility(stmt):
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+
+    tag = stmt[0]
+    if tag == 'assign':
+        _, var_name, op, expr, lineno = stmt
+        if op in ('+=', '-=', '^=') and _expr_contains_var(expr, var_name):
+            raise KairosCompileError(
+                "STATIC",
+                (
+                    f"riga {lineno}: operazione non reversibile '{var_name} {op} ...' "
+                    f"(la variabile a sinistra compare anche nell'espressione a destra)"
+                ),
+            )
+        return
+
+    if tag == 'if':
+        _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
+        for nested in then_body:
+            _check_stmt_reversibility(nested)
+        for nested in else_body:
+            _check_stmt_reversibility(nested)
+        return
+
+    if tag == 'from':
+        _, _entry_cond, body, _until_cond, *_rest = stmt
+        for nested in body:
+            _check_stmt_reversibility(nested)
+        return
+
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _check_stmt_reversibility(nested)
+
+def run_static_checks(program_ast):
+    if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
+        raise KairosCompileError("PARSER", "AST del programma non valido")
+
+    procedures = program_ast[1] if len(program_ast) > 1 else []
+    for proc in procedures:
+        if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
+            continue
+        body = proc[3] or []
+        for stmt in body:
+            _check_stmt_reversibility(stmt)
 
 
 _nulllog = logging.getLogger('ply.nulllog')

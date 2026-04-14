@@ -12,7 +12,6 @@
 
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop);
-int vm_check_if_reversibility(const char *buffer);
 void vm_debug_start(const char *bytecode, VMDebugState *dbg);
 void vm_debug_stop(VMDebugState *dbg);
 int vm_debug_step(VMDebugState *dbg);
@@ -153,9 +152,6 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     g_debug_buf_orig = malloc(blen);
     memcpy(g_debug_buf_orig, normalized, blen);
     free(normalized);
-
-    if (vm_check_if_reversibility(g_debug_buf) > 0)
-        fprintf(stderr, "Warning: il bytecode potrebbe non essere completamente reversibile.\n");
 
     dbg->mode = VM_MODE_STEP;
     dbg->first_pause_reached = 0;

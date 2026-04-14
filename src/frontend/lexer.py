@@ -4,6 +4,7 @@ Uso: python Jlexer.py <file>
 """
 import sys
 import ply.lex as lex
+from .errors import KairosCompileError
 
 # parole riservate del linguaggio
 reserved = {
@@ -122,9 +123,10 @@ def t_newline(t):
 t_ignore = ' \t'
 
 def t_error(t):
-    print(f"[LEXER] riga {t.lexer.lineno}: carattere non riconosciuto '{t.value[0]}'")
-    t.lexer.skip(1)
-    exit(1)
+    raise KairosCompileError(
+        "LEXER",
+        f"riga {t.lexer.lineno}: carattere non riconosciuto '{t.value[0]}'",
+    )
 
 lexer = lex.lex()
 
