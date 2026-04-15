@@ -178,6 +178,7 @@ static void *thread_entry(void *arg)
             continue;
         }
         else if (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) {
+            vm_if_mark_call();
             /* Quando is_inverse=1, CALL e UNCALL si scambiano di ruolo:
                CALL  → esegue invert_op_to_line  (come UNCALL)
                UNCALL→ esegue vm_run_BT           (come CALL)
