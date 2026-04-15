@@ -31,10 +31,8 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
    - [show](#show)
    - [Commenti](#commenti)
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
-7. [Esempi completi](#esempi-completi)
-8. [Il bytecode Kairos](#il-bytecode-kairos)
-9. [Integrazione VS Code Extension](#integrazione-vs-code-extension)
-10. [Errori comuni](#errori-comuni)
+7. [Il bytecode Kairos](#il-bytecode-kairos)
+8. [Errori comuni](#errori-comuni)
 
 ---
 
