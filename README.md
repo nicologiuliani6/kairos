@@ -11,7 +11,6 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
 2. [Installazione](#installazione)
    - [Requisiti](#requisiti)
    - [Setup da zero](#setup-da-zero)
-   - [Compilazione](#compilazione)
 3. [Toolchain — comandi make](#toolchain--comandi-make)
    - [Pacchetti Linux](#pacchetti-linux)
    - [Integrazione VS Code](#integrazione-vs-code)
