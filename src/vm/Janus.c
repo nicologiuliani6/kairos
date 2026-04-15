@@ -128,6 +128,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             continue;
         }
         else if (!strcmp(fw, "CALL")) {
+            vm_if_mark_call();
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
             char  base[VAR_NAME_LENGTH]; strncpy(base, fname, VAR_NAME_LENGTH - 1);
@@ -178,6 +179,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             continue;
         }
         else if (!strcmp(fw, "UNCALL")) {
+            vm_if_mark_call();
             char *pn  = strtok(NULL, " \t");
             VMLOG("[UNCALL] chiamato per '%s'\n", pn ? pn : "NULL");
             uint  cfi = char_id_map_get(&FrameIndexer, pn);

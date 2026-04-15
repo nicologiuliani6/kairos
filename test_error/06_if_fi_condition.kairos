@@ -1,0 +1,13 @@
+procedure foo(int x)
+    if x == 1 then
+        //skip
+    else
+        x+=1
+    fi x == 1
+
+procedure main()
+    int x
+    call foo(x)
+    show(x)
+    uncall foo(x)
+    show(x)

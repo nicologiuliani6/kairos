@@ -39,6 +39,17 @@ extern VM *g_current_vm;
   #define vm_printf(...) printf(__VA_ARGS__)
 #endif
 
+#define IF_BRANCH_STACK_MAX 256
+static __thread int if_branch_stack[IF_BRANCH_STACK_MAX];
+static __thread int if_branch_has_call_stack[IF_BRANCH_STACK_MAX];
+static __thread int if_branch_top = -1;
+
+static inline void vm_if_mark_call(void)
+{
+    if (if_branch_top >= 0)
+        if_branch_has_call_stack[if_branch_top] = 1;
+}
+
 /* ======================================================================
  *  SWAP
  * ====================================================================== */
@@ -233,6 +244,31 @@ static inline void op_assert(VM *vm, const char *frame_name)
     if (!lhs_tok || !op_tok || rhs[0] == '\0') {
         vm_debug_panic("[VM] ASSERT: formato errato (atteso: ASSERT <lhs> <op> <rhs>)\n");
     }
+
+    /* thread_val_IF contiene il risultato dell'ultimo EVAL, che nel caso IF/ELSE
+       è la condizione FI appena valutata. */
+    int fi_result = (int)thread_val_IF;
+
+    /* Regola runtime richiesta: se abbiamo seguito il ramo ELSE e, a fine IF,
+       la condizione FI risulta vera, segnaliamo errore.
+       Nei casi con call/uncall nel blocco IF (es. ricorsione), manteniamo il
+       comportamento storico per non introdurre regressioni. */
+    if (if_branch_top >= 0) {
+        int took_then = if_branch_stack[if_branch_top--];
+        int has_call  = if_branch_has_call_stack[if_branch_top + 1];
+        if (!has_call && !took_then && fi_result) {
+            vm_debug_panic("[VM] IF/FI non reversibile: ramo else ma condizione fi=vera\n");
+        }
+        return;
+    }
+
+    /* Fallback conservativo fuori dal contesto IF. */
+    uint fi = get_findex(frame_name);
+    int  lval = resolve_value(vm, fi, lhs_tok);
+    int  rval = resolve_value(vm, fi, rhs);
+    if (!eval_cond(lval, op_tok, rval)) {
+        vm_debug_panic("[VM] ASSERT fallita: %s %s %s\n", lhs_tok, op_tok, rhs);
+    }
 }
 
 /* ======================================================================
@@ -252,6 +288,17 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
 static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
 {
     char *lbl = strtok(NULL, " \t");
+
+    /* JMPF con target ELSE_* identifica il branching di IF.
+       Memorizziamo il ramo scelto per validare poi la condizione FI in ASSERT. */
+    if (lbl && !strncmp(lbl, "ELSE_", 5)) {
+        if (if_branch_top + 1 >= IF_BRANCH_STACK_MAX) {
+            vm_debug_panic("[VM] IF stack overflow durante JMPF\n");
+        }
+        if_branch_stack[++if_branch_top] = thread_val_IF ? 1 : 0;
+        if_branch_has_call_stack[if_branch_top] = 0;
+    }
+
     if (thread_val_IF) return NULL;
     uint fi = get_findex(fname);
     if (!char_id_map_exists(&vm->frames[fi].LabelIndexer, lbl)) vm_debug_panic("EXIT_FAILURE");
