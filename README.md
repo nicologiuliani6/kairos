@@ -79,6 +79,7 @@ kairos/
 ---
 
 ## Installazione e compilazione
+Per l'installazione automatica guardare: [Pacchetti Linux](#pacchetti-linux)
 
 ### Requisiti
 
@@ -136,7 +137,8 @@ I target sono definiti nel file `makefile` (minuscolo).
 
 La toolchain packaging vive in `packaging/linux`.
 
-### Build pacchetto Debian/Ubuntu (consigliato su Ubuntu)
+### Build pacchetto Debian/Ubuntu 
+(testato su Ubuntu)
 
 ```bash
 cd packaging/linux
