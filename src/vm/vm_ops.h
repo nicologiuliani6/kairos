@@ -259,6 +259,9 @@ static inline void op_assert(VM *vm, const char *frame_name)
         if (!has_call && !took_then && fi_result) {
             vm_debug_panic("[VM] IF/FI non reversibile: ramo else ma condizione fi=vera\n");
         }
+        if (!has_call && took_then && !fi_result) {
+            vm_debug_panic("[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa\n");
+        }
         return;
     }
 
