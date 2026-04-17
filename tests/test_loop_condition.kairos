@@ -1,0 +1,14 @@
+
+procedure main()
+    int x
+    int y
+    from x == 0 loop
+        if x == 0 then
+            x+=1
+        else 
+            y+=1
+        fi x == 0
+        show(x)
+        show(y)
+    until x == 1
+    int z
