@@ -127,7 +127,8 @@ release: build-release
 		--workpath build/pyinstaller-work \
 		--specpath build \
 		--name KairosApp \
-	    $(SRC_DIR)/kairos.py
+		--add-binary "$(abspath $(LIBVM)):." \
+		$(SRC_DIR)/kairos.py
 	@echo "$(GREEN)Build release OK: $(DIST_DIR)/KairosApp$(RESET)"
 
 install-deps:

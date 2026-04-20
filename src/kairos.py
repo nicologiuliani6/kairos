@@ -50,20 +50,19 @@ if __name__ == '__main__':
 
     # Ricava la root del progetto (da qui cerchiamo build/)
     if getattr(sys, 'frozen', False):
-        exe_dir = os.path.dirname(sys.executable)
-        root_dir = os.path.abspath(os.path.join(exe_dir, '..'))
+        lib_path = os.path.join(sys._MEIPASS, 'libvm.so')
     else:
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-
-    # Percorso corretto della libreria
-    lib_path = os.path.join(root_dir, 'build', 'libvm.so')
-    lib_path = os.path.normpath(lib_path)
+        build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'build'))
+        lib_path = os.path.join(build_dir, 'libvm.so')
 
     if not os.path.exists(lib_path):
-        print(f"Errore: libreria non trovata: {lib_path}")
+        lib_path = '/opt/kairosapp/libvm.so'
+
+    if not os.path.exists(lib_path):
+        print("Errore: libreria non trovata in nessun percorso.")
         sys.exit(1)
 
-    print(f"Caricamento libreria: {lib_path}")
+    #print(f"Caricamento libreria: {lib_path}")
     lib = ctypes.CDLL(lib_path)
     lib.vm_run_from_string.argtypes = [ctypes.c_char_p]
     lib.vm_run_from_string.restype  = None
