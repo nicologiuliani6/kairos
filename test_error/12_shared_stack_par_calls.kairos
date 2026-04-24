@@ -1,0 +1,20 @@
+// Errore STATIC atteso: stesso stack passato a due branch (push nei callee).
+procedure a(stack s)
+    local int v = 0
+        v += 1
+        push(v, s)
+    delocal int v = 1
+
+procedure b(stack s)
+    local int w = 0
+        w += 2
+        push(w, s)
+    delocal int w = 2
+
+procedure main()
+    stack s
+    par
+        a(s)
+    and
+        b(s)
+    rap

@@ -37,7 +37,10 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
 static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 {
     char key[VAR_NAME_LENGTH];
-    make_frame_key(proc, depth, key, sizeof(key));
+    if (current_thread_args)
+        make_frame_key_par_rec(proc, depth, key, sizeof(key));
+    else
+        make_frame_key(proc, depth, key, sizeof(key));
     if (char_id_map_exists(&FrameIndexer, key))
         return char_id_map_get(&FrameIndexer, key);
     uint base_fi  = char_id_map_get(&FrameIndexer, proc);

@@ -293,8 +293,10 @@ def _collect_par_branch_var_uses(stmt, out):
         return
 
 
-def _collect_par_branch_direct_int_writes(stmt, declared_types, out):
-    """Solo scritture dirette su int nel branch (no effetti dentro callee)."""
+def _collect_par_branch_int_writes(
+    stmt, declared_types, proc_param_lists, proc_int_mutated_formals, out
+):
+    """Scritture su int nel branch: dirette + tramite call a procedure che mutano parametri int."""
     if not isinstance(stmt, tuple) or not stmt:
         return
     tag = stmt[0]
@@ -321,29 +323,167 @@ def _collect_par_branch_direct_int_writes(stmt, declared_types, out):
         return
     if tag == 'call_direct':
         _, name, args, _lineno = stmt
-        if name.lower() == 'swap' and isinstance(args, list) and len(args) >= 2:
+        lname = name.lower()
+        if lname == 'swap' and isinstance(args, list) and len(args) >= 2:
             for vid in args[:2]:
                 if isinstance(vid, str) and declared_types.get(vid) == 'int':
                     out.add(vid)
+            return
+        pl = proc_param_lists.get(name)
+        mf = proc_int_mutated_formals.get(name) if pl else None
+        if pl and mf:
+            for i, actual in enumerate(args or []):
+                if i >= len(pl):
+                    break
+                ptype, formal = pl[i]
+                if ptype != 'int' or formal not in mf:
+                    continue
+                if isinstance(actual, str) and declared_types.get(actual) == 'int':
+                    out.add(actual)
+        return
+    if tag in ('call', 'uncall'):
+        _, proc_name, args, _lineno = stmt
+        pl = proc_param_lists.get(proc_name)
+        mf = proc_int_mutated_formals.get(proc_name) if pl else None
+        if pl and mf:
+            for i, actual in enumerate(args or []):
+                if i >= len(pl):
+                    break
+                ptype, formal = pl[i]
+                if ptype != 'int' or formal not in mf:
+                    continue
+                if isinstance(actual, str) and declared_types.get(actual) == 'int':
+                    out.add(actual)
         return
     if tag == 'if':
         _, _ec, then_body, else_body, _fc, _lineno = stmt
         for nested in then_body:
-            _collect_par_branch_direct_int_writes(nested, declared_types, out)
+            _collect_par_branch_int_writes(
+                nested, declared_types, proc_param_lists, proc_int_mutated_formals, out
+            )
         for nested in else_body:
-            _collect_par_branch_direct_int_writes(nested, declared_types, out)
+            _collect_par_branch_int_writes(
+                nested, declared_types, proc_param_lists, proc_int_mutated_formals, out
+            )
         return
     if tag == 'from':
         _, _ec, body, _uc, *_rest = stmt
         for nested in body:
-            _collect_par_branch_direct_int_writes(nested, declared_types, out)
+            _collect_par_branch_int_writes(
+                nested, declared_types, proc_param_lists, proc_int_mutated_formals, out
+            )
         return
     if tag == 'par':
         _, branches, _lineno = stmt
         for branch in branches:
             for nested in branch:
-                _collect_par_branch_direct_int_writes(nested, declared_types, out)
+                _collect_par_branch_int_writes(
+                    nested, declared_types, proc_param_lists, proc_int_mutated_formals, out
+                )
         return
+
+
+def _walk_proc_int_param_mutations_and_calls(stmt, int_formal_set, mutated_out, calls_out):
+    """Raccoglie assegnamenti diretti ai parametri int e le call (per fixpoint)."""
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+    tag = stmt[0]
+    if tag == 'assign':
+        _, var_name, _op, _expr, _lineno = stmt
+        if var_name in int_formal_set:
+            mutated_out.add(var_name)
+        return
+    if tag in ('call', 'uncall'):
+        _, proc_name, args, _lineno = stmt
+        calls_out.append((proc_name, list(args or [])))
+        return
+    if tag == 'call_direct':
+        _, name, args, _lineno = stmt
+        if name.lower() == 'swap':
+            return
+        calls_out.append((name, list(args or [])))
+        return
+    if tag == 'if':
+        _, _ec, then_body, else_body, _fc, _lineno = stmt
+        for nested in then_body:
+            _walk_proc_int_param_mutations_and_calls(
+                nested, int_formal_set, mutated_out, calls_out
+            )
+        for nested in else_body:
+            _walk_proc_int_param_mutations_and_calls(
+                nested, int_formal_set, mutated_out, calls_out
+            )
+        return
+    if tag == 'from':
+        _, _ec, body, _uc, *_rest = stmt
+        for nested in body:
+            _walk_proc_int_param_mutations_and_calls(
+                nested, int_formal_set, mutated_out, calls_out
+            )
+        return
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _walk_proc_int_param_mutations_and_calls(
+                    nested, int_formal_set, mutated_out, calls_out
+                )
+        return
+
+
+def _compute_proc_int_mutated_formals(program_procedures):
+    """
+    Per ogni procedura, insieme dei nomi di parametri int che possono essere mutati
+    (assegnamento diretto nel corpo o tramite call che mutano parametri int).
+    """
+    proc_by_name = {}
+    for proc in program_procedures:
+        if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
+            continue
+        proc_by_name[proc[1]] = proc
+
+    param_lists = {name: (proc_by_name[name][2] or []) for name in proc_by_name}
+    int_formals = {
+        name: {pn for pt, pn in param_lists[name] if pt == 'int'}
+        for name in param_lists
+    }
+
+    mutated = {name: set() for name in param_lists}
+    call_edges = {name: [] for name in param_lists}
+
+    for name, p in proc_by_name.items():
+        body = p[3] or []
+        for stmt in body:
+            _walk_proc_int_param_mutations_and_calls(
+                stmt, int_formals[name], mutated[name], call_edges[name]
+            )
+
+    changed = True
+    while changed:
+        changed = False
+        for p_name in param_lists:
+            for callee, args in call_edges[p_name]:
+                pl = param_lists.get(callee)
+                if not pl:
+                    continue
+                callee_mut = mutated.get(callee)
+                if not callee_mut:
+                    continue
+                for i, actual in enumerate(args):
+                    if i >= len(pl):
+                        break
+                    pt, formal = pl[i]
+                    if pt != 'int' or formal not in callee_mut:
+                        continue
+                    if not isinstance(actual, str):
+                        continue
+                    if actual not in int_formals[p_name]:
+                        continue
+                    if actual not in mutated[p_name]:
+                        mutated[p_name].add(actual)
+                        changed = True
+
+    return param_lists, mutated
 
 
 def _collect_declared_types(proc):
@@ -431,6 +571,17 @@ def _collect_stack_args_from_call(stmt, proc_signatures, out):
                 out.add(actual)
         return
 
+    if tag == 'call_direct':
+        _, proc_name, args, _lineno = stmt
+        lname = proc_name.lower()
+        if lname in ('push', 'pop'):
+            return
+        param_types = proc_signatures.get(proc_name, [])
+        for idx, actual in enumerate(args or []):
+            if idx < len(param_types) and param_types[idx] == 'stack' and isinstance(actual, str):
+                out.add(actual)
+        return
+
     if tag == 'if':
         _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
         for nested in then_body:
@@ -451,7 +602,9 @@ def _collect_stack_args_from_call(stmt, proc_signatures, out):
             for nested in branch:
                 _collect_stack_args_from_call(nested, proc_signatures, out)
 
-def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
+def _check_stmt_reversibility(
+    stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+):
     if not isinstance(stmt, tuple) or not stmt:
         return
 
@@ -468,18 +621,37 @@ def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
             )
         return
 
+    if tag == 'delocal':
+        _, _tipo, name, val, lineno = stmt
+        if isinstance(val, str) and val == name:
+            raise KairosCompileError(
+                "STATIC",
+                (
+                    f"riga {lineno}: DELOCAL non ammesso '{name} = {val}': il valore atteso "
+                    f"non può essere lo stesso identificatore (vincolo banale, inversione non "
+                    f"determinata). Usa un letterale o un altro nome di variabile."
+                ),
+            )
+        return
+
     if tag == 'if':
         _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
         for nested in then_body:
-            _check_stmt_reversibility(nested, declared_types, proc_signatures)
+            _check_stmt_reversibility(
+                nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+            )
         for nested in else_body:
-            _check_stmt_reversibility(nested, declared_types, proc_signatures)
+            _check_stmt_reversibility(
+                nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+            )
         return
 
     if tag == 'from':
         _, _entry_cond, body, _until_cond, *_rest = stmt
         for nested in body:
-            _check_stmt_reversibility(nested, declared_types, proc_signatures)
+            _check_stmt_reversibility(
+                nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+            )
         return
 
     if tag == 'par':
@@ -495,8 +667,12 @@ def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
                 _collect_stack_endpoints_in_stmt(nested, used_in_branch)
                 _collect_stack_args_from_call(nested, proc_signatures, used_in_branch)
                 _collect_par_branch_var_uses(nested, par_ids)
-                _collect_par_branch_direct_int_writes(nested, declared_types, writes)
-                _check_stmt_reversibility(nested, declared_types, proc_signatures)
+                _collect_par_branch_int_writes(
+                    nested, declared_types, proc_param_lists, proc_int_mutated_formals, writes
+                )
+                _check_stmt_reversibility(
+                    nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+                )
             for var_name in used_in_branch:
                 if declared_types.get(var_name) == 'stack':
                     stack_usage_by_var.setdefault(var_name, set()).add(branch_idx)
@@ -531,8 +707,8 @@ def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
                     raise KairosCompileError(
                         "STATIC",
                         (
-                            f"riga {lineno}: race su int nel PAR (scrittura diretta vs accesso): {names} "
-                            "(usa canali o separa le variabili tra i branch)"
+                            f"riga {lineno}: race su int nel PAR (scrittura vs accesso, anche tramite call): "
+                            f"{names} (usa channel/ssend/srecv o variabili distinte per branch)"
                         ),
                     )
 
@@ -549,13 +725,17 @@ def run_static_checks(program_ast):
         params = proc[2] or []
         proc_signatures[proc_name] = [ptype for ptype, _pname in params]
 
+    proc_param_lists, proc_int_mutated_formals = _compute_proc_int_mutated_formals(procedures)
+
     for proc in procedures:
         if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
             continue
         declared_types = _collect_declared_types(proc)
         body = proc[3] or []
         for stmt in body:
-            _check_stmt_reversibility(stmt, declared_types, proc_signatures)
+            _check_stmt_reversibility(
+                stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+            )
 
 
 _nulllog = logging.getLogger('ply.nulllog')
