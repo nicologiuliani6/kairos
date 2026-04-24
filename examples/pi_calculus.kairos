@@ -1,0 +1,65 @@
+// =============================================================================
+// Esempio ispirato al π-calculus (Milner) — NON il numero π.
+//
+// Corrispondenza informale con la notazione classica:
+//   ν c . P          →  local channel c = empty  …  (canale privato / restriction)
+//   P | Q            →  par … and … rap           (composizione parallela)
+//   c̄⟨v⟩ . P         →  ssend(v, c)  poi P         (output sincrono sul nome c)
+//   c(x) . P         →  srecv(x, c)  poi P         (input: il valore si *somma* in x)
+//
+// La VM Kairos realizza un rendezvous sincrono con buffer FIFO sul canale,
+// analogo al handshake di molte presentazioni del π-calcolo asincrono, ma con
+// semantica reversibile sugli interi (ssend azzera, srecv accumula).
+// =============================================================================
+
+// --- (ν c)( c̄⟨m⟩.0 | c(x).0 )  — un solo scambio, poi stop ---
+procedure send_once(int payload, channel c)
+    local int v = 0
+    v += payload
+    ssend(v, c)
+    delocal int v = 0
+
+procedure recv_once(int accum, channel c)
+    srecv(accum, c)
+
+// --- Forwarder F ≈ c(y). d̄⟨y⟩.0  (in sequenza reversibile) ---
+procedure forward(channel cin, channel cout)
+    local int y = 0
+    srecv(y, cin)
+    ssend(y, cout)
+    delocal int y = 0
+
+procedure main()
+    local channel c = empty
+    local channel d = empty
+    local int m = 0
+    m += 42
+    local int got = 0
+
+    par
+        call send_once(m, c)
+    and
+        call recv_once(got, c)
+    rap
+
+    show(got)
+
+    local int m2 = 0
+    m2 += 7
+    local int end = 0
+    par
+        call send_once(m2, c)
+    and
+        call forward(c, d)
+    and
+        call recv_once(end, d)
+    rap
+
+    show(end)
+
+    delocal int end = 7
+    delocal int m2 = 7
+    delocal int got = 42
+    delocal int m = 42
+    delocal channel d = empty
+    delocal channel c = empty

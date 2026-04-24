@@ -74,12 +74,12 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t] = calloc(1, sizeof(ThreadArgs));
         args[t]->vm        = vm;
         args[t]->buffer    = dup_buffer ? strdup(buffer) : buffer;
-        args[t]->start_ptr = pb->starts[t];
-        args[t]->done_mtx  = &done_mtx;
-        args[t]->done_cond = &done_cond;
-        args[t]->is_inverse = is_inverse;
-        //fprintf(stderr, "[EXEC_PAR] t=%d is_inverse=%d ptr=%p\n", t, args[t]->is_inverse, (void*)args[t]);
+        args[t]->start_ptr   = pb->starts[t];
+        args[t]->done_mtx    = &done_mtx;
+        args[t]->done_cond   = &done_cond;
+        args[t]->is_inverse  = is_inverse;
         strncpy(args[t]->frame_name, frame_name, VAR_NAME_LENGTH - 1);
+        args[t]->frame_name[VAR_NAME_LENGTH - 1] = '\0';
     }
 
     /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
@@ -87,7 +87,6 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     for (int t = 0; t < pb->count; t++)
         pthread_create(&args[t]->tid, NULL, thread_entry, args[t]);
 
-    /* Attendi tutti */
     pthread_mutex_lock(&done_mtx);
     for (;;) {
         int done = 0;

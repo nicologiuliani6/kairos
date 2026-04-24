@@ -238,7 +238,7 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
     } else if (strcmp(type, "channel") == 0) {
         v->T         = TYPE_CHANNEL;
         v->stack_len = 0;
-        v->value     = malloc(VAR_CHANNEL_MAX_SIZE * sizeof(int));
+        v->value     = calloc((size_t)VAR_CHANNEL_MAX_SIZE, sizeof(int));
         v->channel   = calloc(1, sizeof(Channel));
         pthread_mutex_init(&v->channel->mtx, NULL);
     } else {

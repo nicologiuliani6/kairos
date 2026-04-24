@@ -137,35 +137,28 @@ static inline void op_pop(VM *vm, const char *frame_name)
     if (sv->T == TYPE_STACK && sv->stack_len == 0)    vm_debug_panic("[VM] POP: stack vuoto!\n");
 
     ThreadArgs *sender_to_wake = NULL;
+    int           popped;
 
     if (sv->T == TYPE_CHANNEL) {
-        pthread_mutex_lock(&sv->channel->mtx);
-        if (sv->channel->send_q_head)
-            sender_to_wake = sv->channel->send_q_head->thread_args;
-        pthread_mutex_unlock(&sv->channel->mtx);
-
+        /* op_wait abbina questo recv al sender giusto e imposta sender_args.
+           Non leggere send_q_head prima: con più SSEND paralleli la coda dei
+           waiter non coincide col FIFO del buffer; notificare il thread
+           sbagliato corrompeva lo stato (es. malloc.kairos intermittente).
+           Leggere sender_args e fare il pop FIFO sotto lo stesso mtx: altrimenti
+           un altro SSEND può intercalare tra le due e far leggere una cella
+           non ancora valorizzata (buffer malloc non azzerato). */
         op_wait(sv->channel, 0);
-
-        if (!sender_to_wake) {
-            pthread_mutex_lock(&sv->channel->mtx);
-            sender_to_wake = sv->channel->sender_args;
-            sv->channel->sender_args = NULL;
-            pthread_mutex_unlock(&sv->channel->mtx);
-        }
-    }
-
-    int popped;
-    if (sv->T == TYPE_STACK) {
-        popped = sv->value[--sv->stack_len];
-        if (sv->stack_len > 0)
-            sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
-    } else {
         pthread_mutex_lock(&sv->channel->mtx);
+        sender_to_wake = sv->channel->sender_args;
+        sv->channel->sender_args = NULL;
+        if (!sender_to_wake) {
+            pthread_mutex_unlock(&sv->channel->mtx);
+            vm_debug_panic("[VM] POP: channel sender_args nullo dopo rendezvous\n");
+        }
         if (sv->stack_len == 0) {
             pthread_mutex_unlock(&sv->channel->mtx);
             vm_debug_panic("[VM] POP: channel vuoto dopo op_wait!\n");
         }
-        /* FIFO: abbinato all'ordine degli append sotto mtx (più SSEND paralleli). */
         popped = sv->value[0];
         sv->stack_len--;
         if (sv->stack_len > 0)
@@ -173,6 +166,10 @@ static inline void op_pop(VM *vm, const char *frame_name)
         if (sv->stack_len > 0)
             sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
         pthread_mutex_unlock(&sv->channel->mtx);
+    } else {
+        popped = sv->value[--sv->stack_len];
+        if (sv->stack_len > 0)
+            sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
     }
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
