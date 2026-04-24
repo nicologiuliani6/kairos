@@ -464,9 +464,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, cur_frame);
         else if (!strcmp(fw, "DELOCAL"))op_local     (vm, cur_frame);
         else if (!strcmp(fw, "SHOW"))   op_show      (vm, cur_frame);
-        else if (!strcmp(fw, "PARAM")   || !strcmp(fw, "LABEL")   || !strcmp(fw, "EVAL")   ||
-                 !strcmp(fw, "JMPF")    || !strcmp(fw, "JMP")     || !strcmp(fw, "ASSERT") ||
-                 !strcmp(fw, "DECL")    || !strcmp(fw, "HALT")    ||
+        else if (!strcmp(fw, "START")   || !strcmp(fw, "PARAM")   || !strcmp(fw, "LABEL")   ||
+                 !strcmp(fw, "EVAL")    || !strcmp(fw, "JMPF")    || !strcmp(fw, "JMP")     ||
+                 !strcmp(fw, "ASSERT")   || !strcmp(fw, "DECL")    || !strcmp(fw, "HALT")    ||
                  strncmp(fw, "THREAD_", 7) == 0) { /* skip */ }
         else { vm_debug_panic("[UNCALL] op sconosciuta: '%s'\n", fw); }
         i--;

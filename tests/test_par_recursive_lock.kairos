@@ -1,0 +1,14 @@
+// Ricorsione sullo stesso param int: stesso thread, lock re-entrante
+
+procedure dec(int n)
+    if n >= 1 then
+        n -= 1
+        call dec(n)
+        n += 1
+    fi n >= 1
+
+procedure main()
+    int k
+    k += 3
+    call dec(k)
+    show(k)

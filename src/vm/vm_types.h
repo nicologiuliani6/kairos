@@ -43,6 +43,9 @@ typedef struct Var {
     int       is_local;
     char      name[VAR_NAME_LENGTH];
     Channel  *channel;
+    /* Lock re-entrante per mutazioni int concorrenti (solo con current_thread_args). */
+    int        ref_lock_depth;
+    pthread_t  ref_lock_owner;
 } Var;
 
 #define MAX_VARS   100

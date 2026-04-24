@@ -224,7 +224,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "JMP")) {
             *nl = '\n'; ptr = op_jmp(vm, fname, orig); continue;
         }
-        else if (!strcmp(fw, "PROC") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") ||
+        else if (!strcmp(fw, "START") ||
+                 !strcmp(fw, "PROC") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "HALT"))  { /* skip */ }
         else { vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw); }
 

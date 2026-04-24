@@ -82,19 +82,10 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         strncpy(args[t]->frame_name, frame_name, VAR_NAME_LENGTH - 1);
     }
 
-    /* Avvia i thread uno alla volta, attendendo che si blocchino o terminino.
-       Stesso ordine (0..count-1) per forward e inverse: la coda FIFO del canale
-       realizza già lo stack LIFO delle comunicazioni per l'undo; avviare i
-       thread in ordine inverso in is_inverse rompeva gli accoppiamenti con
-       3+ thread (es. examples/malloc.kairos). */
-    for (int step = 0; step < pb->count; step++) {
-        int t = step;
+    /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
+       gli accessi condivisi dove serve. */
+    for (int t = 0; t < pb->count; t++)
         pthread_create(&args[t]->tid, NULL, thread_entry, args[t]);
-        pthread_mutex_lock(&done_mtx);
-        while (!args[t]->finished && !args[t]->blocked)
-            pthread_cond_wait(&done_cond, &done_mtx);
-        pthread_mutex_unlock(&done_mtx);
-    }
 
     /* Attendi tutti */
     pthread_mutex_lock(&done_mtx);
@@ -207,7 +198,8 @@ static void *thread_entry(void *arg)
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             vm->frames[cfi].LocalVariables = slv;
         }
-        else if (!strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }
+        else if (!strcmp(fw, "START") ||
+                 !strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }
         else { vm_debug_panic("[THREAD] op sconosciuta: '%s'\n", fw); }
 
         *nl = '\n'; ptr = nl + 1;

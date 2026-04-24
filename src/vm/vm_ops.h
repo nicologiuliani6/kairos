@@ -7,6 +7,7 @@
 #include "vm_types.h"
 #include "vm_helpers.h"
 #include "vm_channel.h"
+#include "vm_ref_lock.h"
 
 #ifdef DAP_MODE
 #include <unistd.h>
@@ -60,9 +61,11 @@ void op_swap(VM *vm, const char *frame_name)
     uint  fi  = get_findex(frame_name);
     Var  *v1  = get_var(vm, fi, ID1, "SWAP");
     Var  *v2  = get_var(vm, fi, ID2, "SWAP");
+    var_par_mut_acquire2(v1, v2);
     int   tmp = *(v1->value);
     *(v1->value) = *(v2->value);
     *(v2->value) = tmp;
+    var_par_mut_release2(v1, v2);
 }
 
 #include "ops_arith.h"
@@ -85,8 +88,10 @@ static inline void op_push(VM *vm, const char *frame_name)
 
     if (char_id_map_exists(&vm->frames[fi].VarIndexer, C_val)) {
         Var *src = get_var(vm, fi, C_val, "PUSH");
+        var_par_mut_acquire(src);
         val = *(src->value);
         *(src->value) = 0;
+        var_par_mut_release(src);
     } else {
         val = (int)strtoul(C_val, NULL, 10);
     }
@@ -99,12 +104,16 @@ static inline void op_push(VM *vm, const char *frame_name)
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] PUSH: destinazione non è stack/channel!\n");
 
-    sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int));
-    if (!sv->value) vm_debug_panic("realloc failed\n");
-    sv->value[sv->stack_len++] = val;
-
-    if (sv->T == TYPE_CHANNEL) {
-        //fprintf(stderr, "[CHANNEL] %s is_send=%d stack_len=%zu\n", sv->name, sv->T==TYPE_CHANNEL?1:0, sv->stack_len);
+    if (sv->T == TYPE_STACK) {
+        sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int));
+        if (!sv->value) vm_debug_panic("realloc failed\n");
+        sv->value[sv->stack_len++] = val;
+    } else {
+        pthread_mutex_lock(&sv->channel->mtx);
+        sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int));
+        if (!sv->value) vm_debug_panic("realloc failed\n");
+        sv->value[sv->stack_len++] = val;
+        pthread_mutex_unlock(&sv->channel->mtx);
         int was_queued = op_wait(sv->channel, 1);
         if (was_queued)
             wait_for_turn_done(current_thread_args);
@@ -145,16 +154,31 @@ static inline void op_pop(VM *vm, const char *frame_name)
         }
     }
 
-    if (sv->T == TYPE_CHANNEL && sv->stack_len == 0) {
-        vm_debug_panic("[VM] POP: channel vuoto dopo op_wait!\n");
+    int popped;
+    if (sv->T == TYPE_STACK) {
+        popped = sv->value[--sv->stack_len];
+        if (sv->stack_len > 0)
+            sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
+    } else {
+        pthread_mutex_lock(&sv->channel->mtx);
+        if (sv->stack_len == 0) {
+            pthread_mutex_unlock(&sv->channel->mtx);
+            vm_debug_panic("[VM] POP: channel vuoto dopo op_wait!\n");
+        }
+        /* FIFO: abbinato all'ordine degli append sotto mtx (più SSEND paralleli). */
+        popped = sv->value[0];
+        sv->stack_len--;
+        if (sv->stack_len > 0)
+            memmove(sv->value, sv->value + 1, sv->stack_len * sizeof(int));
+        if (sv->stack_len > 0)
+            sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
+        pthread_mutex_unlock(&sv->channel->mtx);
     }
 
-    int popped = sv->value[--sv->stack_len];
-    if (sv->stack_len > 0)
-        sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
-
     Var *dest = get_var(vm, fi, C_dest, "POP");
+    var_par_mut_acquire(dest);
     *(dest->value) += popped;
+    var_par_mut_release(dest);
 
     if (sv->T == TYPE_CHANNEL && sender_to_wake && current_thread_args)
         current_thread_args->sender_to_notify = sender_to_wake;
