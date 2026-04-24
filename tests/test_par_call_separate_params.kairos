@@ -1,0 +1,15 @@
+// PAR + call su parametri distinti — lock runtime + static OK
+
+procedure bump(int a)
+    a += 1
+
+procedure main()
+    int x
+    int y
+    par
+        call bump(x)
+    and
+        call bump(y)
+    rap
+    show(x)
+    show(y)

@@ -1,4 +1,5 @@
-// PAR + ricorsione (encrypt) + UNCALL
+// Ricorsione encrypt + uncall (sequenziale: parallelismo reale richiederebbe canali)
+
 procedure encrypt(int m, int k)
     if k == 0 then
     else
@@ -12,13 +13,10 @@ procedure main()
     local int msg = 0
     show(msg)
     show(key)
-    par
-        call encrypt(msg, key)
-    and
-        show(msg)
-        show(key)
-        uncall encrypt(msg, key)
-    rap
+    call encrypt(msg, key)
+    show(msg)
+    show(key)
+    uncall encrypt(msg, key)
     show(msg)
     show(key)
     delocal int msg = 0

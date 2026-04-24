@@ -199,6 +199,153 @@ def _expr_contains_var(expr, var_name):
         return _expr_contains_var(expr[2], var_name) or _expr_contains_var(expr[3], var_name)
     return isinstance(expr, str) and expr == var_name
 
+
+def _is_number_literal(expr_atom):
+    if isinstance(expr_atom, int):
+        return True
+    if not isinstance(expr_atom, str) or not expr_atom:
+        return False
+    s = expr_atom
+    if s[0] == '-':
+        s = s[1:]
+    return bool(s) and s.isdigit()
+
+
+def _collect_ids_in_expr(expr, out):
+    if isinstance(expr, int):
+        return
+    if isinstance(expr, tuple) and expr and expr[0] == 'binop':
+        _collect_ids_in_expr(expr[2], out)
+        _collect_ids_in_expr(expr[3], out)
+        return
+    if isinstance(expr, str):
+        if _is_number_literal(expr):
+            return
+        if expr.lower() in ('nil', 'empty'):
+            return
+        out.add(expr)
+
+
+def _collect_cond_var_ids(cond, out):
+    _, _op, lhs, rhs = cond
+    _collect_ids_in_expr(lhs, out)
+    _collect_ids_in_expr(rhs, out)
+
+
+def _collect_par_branch_var_uses(stmt, out):
+    """Identificatori usati (lettura/scrittura) in un branch PAR, per analisi conflitti."""
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+    tag = stmt[0]
+    if tag == 'decl':
+        return
+    if tag == 'assign':
+        _, var_name, _op, expr, _lineno = stmt
+        out.add(var_name)
+        _collect_ids_in_expr(expr, out)
+        return
+    if tag == 'local':
+        _, _t, name, val, _lineno = stmt
+        out.add(name)
+        if isinstance(val, str) and not _is_number_literal(val) and val.lower() not in ('nil', 'empty'):
+            out.add(val)
+        return
+    if tag == 'delocal':
+        _, _t, name, val, _lineno = stmt
+        out.add(name)
+        if val is not None and isinstance(val, str) and not _is_number_literal(val):
+            if val.lower() not in ('nil', 'empty'):
+                out.add(val)
+        return
+    if tag in ('call', 'uncall'):
+        _, _name, args, _lineno = stmt
+        for a in args or []:
+            if isinstance(a, str):
+                out.add(a)
+        return
+    if tag == 'call_direct':
+        _, _name, args, _lineno = stmt
+        for a in args or []:
+            if isinstance(a, str):
+                out.add(a)
+        return
+    if tag == 'if':
+        _, entry_cond, then_body, else_body, fi_cond, _lineno = stmt
+        _collect_cond_var_ids(entry_cond, out)
+        for nested in then_body:
+            _collect_par_branch_var_uses(nested, out)
+        for nested in else_body:
+            _collect_par_branch_var_uses(nested, out)
+        _collect_cond_var_ids(fi_cond, out)
+        return
+    if tag == 'from':
+        _, entry_cond, body, until_cond, *_rest = stmt
+        _collect_cond_var_ids(entry_cond, out)
+        for nested in body:
+            _collect_par_branch_var_uses(nested, out)
+        _collect_cond_var_ids(until_cond, out)
+        return
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _collect_par_branch_var_uses(nested, out)
+        return
+
+
+def _collect_par_branch_direct_int_writes(stmt, declared_types, out):
+    """Solo scritture dirette su int nel branch (no effetti dentro callee)."""
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+    tag = stmt[0]
+    if tag == 'assign':
+        _, var_name, op, expr, _lineno = stmt
+        if op == '<=>':
+            if declared_types.get(var_name) == 'int':
+                out.add(var_name)
+            if isinstance(expr, str) and declared_types.get(expr) == 'int':
+                out.add(expr)
+            return
+        if declared_types.get(var_name) == 'int':
+            out.add(var_name)
+        return
+    if tag == 'local':
+        _, tipo, name, _val, _lineno = stmt
+        if tipo == 'int':
+            out.add(name)
+        return
+    if tag == 'delocal':
+        _, tipo, name, _val, _lineno = stmt
+        if tipo == 'int':
+            out.add(name)
+        return
+    if tag == 'call_direct':
+        _, name, args, _lineno = stmt
+        if name.lower() == 'swap' and isinstance(args, list) and len(args) >= 2:
+            for vid in args[:2]:
+                if isinstance(vid, str) and declared_types.get(vid) == 'int':
+                    out.add(vid)
+        return
+    if tag == 'if':
+        _, _ec, then_body, else_body, _fc, _lineno = stmt
+        for nested in then_body:
+            _collect_par_branch_direct_int_writes(nested, declared_types, out)
+        for nested in else_body:
+            _collect_par_branch_direct_int_writes(nested, declared_types, out)
+        return
+    if tag == 'from':
+        _, _ec, body, _uc, *_rest = stmt
+        for nested in body:
+            _collect_par_branch_direct_int_writes(nested, declared_types, out)
+        return
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _collect_par_branch_direct_int_writes(nested, declared_types, out)
+        return
+
+
 def _collect_declared_types(proc):
     declared = {}
     if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
@@ -338,15 +485,23 @@ def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
     if tag == 'par':
         _, branches, lineno = stmt
         stack_usage_by_var = {}
+        branch_access = []
+        branch_direct_int_writes = []
         for branch_idx, branch in enumerate(branches):
             used_in_branch = set()
+            par_ids = set()
+            writes = set()
             for nested in branch:
                 _collect_stack_endpoints_in_stmt(nested, used_in_branch)
                 _collect_stack_args_from_call(nested, proc_signatures, used_in_branch)
+                _collect_par_branch_var_uses(nested, par_ids)
+                _collect_par_branch_direct_int_writes(nested, declared_types, writes)
                 _check_stmt_reversibility(nested, declared_types, proc_signatures)
             for var_name in used_in_branch:
                 if declared_types.get(var_name) == 'stack':
                     stack_usage_by_var.setdefault(var_name, set()).add(branch_idx)
+            branch_access.append(par_ids)
+            branch_direct_int_writes.append(writes)
 
         for var_name, branch_ids in stack_usage_by_var.items():
             if len(branch_ids) > 1:
@@ -359,6 +514,27 @@ def _check_stmt_reversibility(stmt, declared_types, proc_signatures):
                         "usa channel/ssend/srecv o separa le strutture tra i branch"
                     ),
                 )
+
+        int_access_sets = [
+            {v for v in acc if declared_types.get(v) == 'int'}
+            for acc in branch_access
+        ]
+        for i in range(len(branch_direct_int_writes)):
+            for j in range(i + 1, len(branch_direct_int_writes)):
+                w_i = branch_direct_int_writes[i]
+                w_j = branch_direct_int_writes[j]
+                acc_i = int_access_sets[i]
+                acc_j = int_access_sets[j]
+                shared = (w_i & acc_j) | (w_j & acc_i)
+                if shared:
+                    names = ", ".join(sorted(shared))
+                    raise KairosCompileError(
+                        "STATIC",
+                        (
+                            f"riga {lineno}: race su int nel PAR (scrittura diretta vs accesso): {names} "
+                            "(usa canali o separa le variabili tra i branch)"
+                        ),
+                    )
 
 def run_static_checks(program_ast):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':

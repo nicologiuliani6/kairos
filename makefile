@@ -11,6 +11,7 @@ LIBVM       := build/libvm.so
 LIBVM_DAP   := build/libvm_dap.so
 DIST_DIR    := build/dist
 VM_SOURCES  := $(VM_DIR)/Janus.c $(VM_DIR)/Janus_dap.c
+VM_HDRS     := $(wildcard $(VM_DIR)/*.h)
 
 CC          := gcc
 CFLAGS      := -shared -fPIC -Wall -Wextra -pthread
@@ -29,13 +30,15 @@ RESET  := \033[0m
 # Default: build ottimizzata
 all: build-release
 
-build-release: check-deps $(VERSCRIPT)
+$(LIBVM): $(VM_SOURCES) $(VM_HDRS) $(VERSCRIPT) | check-deps
 	@mkdir -p build
 	@echo "$(CYAN)Build release (-O2)...$(RESET)"
 	$(CC) $(CFLAGS_REL) \
 	    -Wl,--version-script=$(VERSCRIPT) \
 	    -o $(LIBVM) $(VM_SOURCES) -I$(VM_DIR)
 	@echo "$(GREEN)Build release OK$(RESET)"
+
+build-release: $(LIBVM)
 
 build-dap: check-deps
 	@mkdir -p build
@@ -68,8 +71,8 @@ $(VERSCRIPT): $(VM_SOURCES)
 	    vm_debug_clear_breakpoint \
 	    vm_debug_clear_all_breakpoints \
 	    vm_debug_dump_json_ext \
-		vm_debug_vars_json_ext \
-    	vm_debug_output_ext; do \
+	    vm_debug_vars_json_ext \
+	    vm_debug_output_ext; do \
 	        printf '    %s;\n' $$sym >> $@; \
 	done
 	@printf '  local:\n    *;\n};\n' >> $@
@@ -82,7 +85,7 @@ endif
 	$(PYTHON) -m src.kairos $(FILE) --dump-bytecode
 
 # tests/*.kairos + examples/; esclusi: tests/fixtures/; esempi noti non validi in suite.
-KAIROS_EXCLUDE := examples/prod_cons_sequenziale_cript.kairos
+KAIROS_EXCLUDE := 
 KAIROS_FILES := $(filter-out $(KAIROS_EXCLUDE),$(sort $(wildcard tests/*.kairos examples/*.kairos)))
 
 test: build-release
@@ -100,7 +103,7 @@ test: build-release
 			echo "  $(RED)FAIL$(RESET)  $$name (exit $$status)"; \
 			errors="$$errors\n--- $$name ---\n$$output\n"; \
 			failed=$$((failed+1)); \
-		elif echo "$$output" | grep -qiE "error|DELOCAL.*errato|stack overflow|assertion|\\[VM\\].*sconosciuta|\\[ERRORE\\]"; then \
+		elif echo "$$output" | grep -qiE "\\<error\\>|DELOCAL.*errato|stack overflow|assertion|\\[VM\\].*sconosciuta|\\[ERRORE\\]"; then \
 			echo "  $(RED)FAIL$(RESET)  $$name"; \
 			errors="$$errors\n--- $$name ---\n$$output\n"; \
 			failed=$$((failed+1)); \

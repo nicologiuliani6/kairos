@@ -2,6 +2,35 @@ import os
 import sys
 import ctypes
 from src.frontend.bytecode import ByteCode_Compiler
+
+
+def _warn_if_libvm_stale(lib_path: str, project_root: str) -> None:
+    """Avvisa se si usa una VM vecchia rispetto ai sorgenti C (causa tipica di bug già corretti nel repo)."""
+    vm_dir = os.path.join(project_root, 'src', 'vm')
+    try:
+        if not os.path.isfile(lib_path):
+            return
+        if lib_path.startswith('/opt/') or lib_path.startswith('/usr/'):
+            print(
+                f"[Kairos] VM di sistema: {lib_path}\n"
+                "         Per la build del repository: make build-release",
+                file=sys.stderr,
+            )
+            return
+        if not os.path.isdir(vm_dir):
+            return
+        lib_m = os.path.getmtime(lib_path)
+        for fn in os.listdir(vm_dir):
+            if fn.endswith(('.c', '.h')):
+                p = os.path.join(vm_dir, fn)
+                if os.path.isfile(p) and os.path.getmtime(p) > lib_m:
+                    print(
+                        "[Kairos] build/libvm.so è più vecchio di src/vm — esegui: make build-release",
+                        file=sys.stderr,
+                    )
+                    break
+    except OSError:
+        pass
 from src.frontend.lexer import lexer
 from src.frontend.parser import parser, run_static_checks
 from src.frontend.errors import KairosCompileError
@@ -62,7 +91,9 @@ if __name__ == '__main__':
         print("Errore: libreria non trovata in nessun percorso.")
         sys.exit(1)
 
-    #print(f"Caricamento libreria: {lib_path}")
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    _warn_if_libvm_stale(lib_path, project_root)
+
     lib = ctypes.CDLL(lib_path)
     lib.vm_run_from_string.argtypes = [ctypes.c_char_p]
     lib.vm_run_from_string.restype  = None

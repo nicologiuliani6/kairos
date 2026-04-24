@@ -28,6 +28,7 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
    - [Stack — push e pop](#stack--push-e-pop)
    - [Canali — ssend e srecv](#canali--ssend-e-srecv)
    - [Parallelismo — par/and/rap](#parallelismo--parandarap)
+     - [Analisi statica e lock a runtime](#analisi-statica-e-lock-a-runtime-nei-par)
    - [show](#show)
    - [Commenti](#commenti)
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
@@ -52,8 +53,8 @@ kairos/
 │       ├── ast.py          ← utility: stampa AST
 │       └── bytecode.py     ← compilatore AST → bytecode
 ├── src/vm/
-│   ├── Kairos.c             ← core runtime VM (exec/run/dump)
-│   ├── Kairos_dap.c         ← API debug/DAP (step, continue, JSON/output)
+│   ├── Janus.c              ← core runtime VM (exec/run/dump)
+│   ├── Janus_dap.c          ← API debug/DAP (step, continue, JSON/output)
 │   ├── Kairos_core.h        ← interfaccia condivisa tra core e DAP
 │   ├── vm_types.h          ← strutture dati (VM, Frame, Var, Channel)
 │   ├── vm_helpers.h        ← funzioni di supporto
@@ -61,6 +62,7 @@ kairos/
 │   ├── ops_arith.h         ← operatori aritmetici e loro inversi
 │   ├── vm_invert.h         ← motore di inversione (UNCALL)
 │   ├── vm_par.h            ← parallelismo (PAR, thread_entry)
+│   ├── vm_ref_lock.h       ← lock su mutazioni int nei thread PAR
 │   ├── vm_frames.h         ← gestione frame (ricorsione, thread-clone)
 │   ├── vm_channel.h        ← canali sincroni (rendezvous)
 │   ├── stack.h             ← stack di puntatori a Var
@@ -122,7 +124,9 @@ I target sono definiti nel file `makefile` (minuscolo).
 | `make build-release` | Compila `build/libvm.so` con ottimizzazioni |
 | `make build-dap` | Compila `build/libvm_dap.so` per il debugger DAP |
 | `make run FILE=<f.kairos>` | Esegue un singolo file `.kairos` (con `--dump-bytecode`) |
-| `make test` | Esegue tutti i `.kairos` in `tests/` e `examples/` |
+| `make test` | Esegue i `.kairos` in `tests/` e `examples/` (vedi `KAIROS_EXCLUDE` nel makefile) |
+
+Se invochi direttamente `./venv/bin/python -m src.kairos …` dopo aver modificato i sorgenti C della VM, esegui prima `make build-release`: altrimenti resta in uso un `build/libvm.so` obsoleto (o, se manca, la VM installata in `/opt/kairosapp/`). Il frontend stampa un avviso su *stderr* in questi casi.
 | `make release` | Genera `build/dist/KairosApp` con PyInstaller |
 | `make install-deps` | Crea il venv e installa `ply` e `pyinstaller` |
 | `make clean` | Rimuove `.so`, artefatti PyInstaller e cache Python |
@@ -220,7 +224,7 @@ file.kairos
 [ bytecode.py ] ── visita l'AST e produce il bytecode testuale
     │
     ▼  (stringa in memoria)
-[ Kairos.c + Kairos_dap.c / libvm.so ] ── VM in C che interpreta il bytecode
+[ Janus.c + Janus_dap.c / libvm.so ] ── VM in C che interpreta il bytecode
     │
     ├── vm_exec()      prima passata: raccoglie frame, DECL, PARAM, LABEL
     ├── vm_run_BT()    loop principale di esecuzione forward
@@ -454,6 +458,8 @@ srecv(var, ch)      // riceve dal canale ch e aggiunge il valore a var
 
 Come `push/pop`, `ssend` azzera la sorgente dopo l'invio e `srecv` somma (non sovrascrive) alla destinazione. L'inverso di `ssend` è `srecv` e viceversa.
 
+**Buffer del canale (VM).** A differenza degli stack Kairos, che restano **LIFO** (`push`/`pop`), i valori in transito su un canale sono accodati in ordine di invio e consumati in **FIFO** (primo inviato, primo ricevuto). Con più `ssend` concorrenti sullo stesso canale, l’append e il prelievo dal buffer interno sono serializzati con il mutex del canale, così ogni `srecv` abbinato al rendez-vous legge il messaggio coerente con l’ordine di accodamento. Senza questa disciplina, combinazioni tipo un solo thread che riceve in loop mentre più thread inviano potevano produrre valori errati e fallire le `delocal`.
+
 I canali sono pensati per essere usati esclusivamente all'interno di blocchi `par/rap`.
 
 ---
@@ -470,7 +476,7 @@ and
 rap
 ```
 
-`par/rap` avvia i thread elencati in parallelo. I thread condividono tutte le variabili del frame corrente. La sincronizzazione tra thread avviene esclusivamente tramite canali.
+`par/rap` avvia i thread elencati in **parallelo reale** (un `pthread` per branch: tutti partono insieme). I thread condividono le variabili del frame corrente. La sincronizzazione logica tra thread resta basata sui **canali**; per gli `int` condivisi valgono in più i controlli descritti sotto. Per ogni `call` da un thread, la VM usa una chiave frame del tipo `nomeProc@t<thread_id>` (lunghezza massima 32 caratteri nella mappa interna): evita nomi di procedura troppo lunghi se la procedura è invocata solo da branch `par`.
 
 I blocchi `par` possono essere annidati:
 
@@ -488,6 +494,31 @@ rap
 ```
 
 **Inversione di par:** `uncall` su una procedura contenente `par` inverte l'ordine dei thread e scambia `ssend↔srecv` e `call↔uncall` all'interno di ogni thread.
+
+#### Analisi statica e lock a runtime nei PAR
+
+**Compilatore (`parser.py`).** Per ogni blocco `par` il frontend calcola, per ogni branch:
+
+- gli **accessi** a identificatori (letture, argomenti di `call`/`uncall`, condizioni, `show`, `push`/`pop`, ecc.);
+- le **scritture dirette** su `int` nel branch (assegnamenti `+=`/`-=`/`^=`, `x <=> y`, `local`/`delocal` su `int`).
+
+Se esiste una coppia di branch distinti \(i, j\) tale che una **scrittura diretta** su un `int` in un branch coincide con un **accesso** allo stesso nome nell’altro, la compilazione fallisce. Esempio di errore:
+
+```text
+[STATIC] riga N: race su int nel PAR (scrittura diretta vs accesso): x (usa canali o separa le variabili tra i branch)
+```
+
+Due branch che passano lo stesso `int` a procedure diverse **solo in lettura** (nessuna scrittura diretta su quella variabile nel corpo del branch) restano ammessi, come in producer/consumer che condividono `n`.
+
+**VM (`vm_ref_lock.h`, operazioni su `Var`).** Nei worker PAR (`current_thread_args` attivo), ogni mutazione su una variabile `int` (`PUSHEQ`/`MINEQ`/`XOREQ`, `SWAP`, parte di `PUSH`/`POP` che azzera o somma un int) acquisisce un lock **re-entrante** sullo stesso `pthread`: la ricorsione sullo stesso thread non blocca; due thread che modificano la stessa cella int in conflitto ottengono:
+
+```text
+[VM] mutazione concorrente sulla variabile int 'x' da un altro thread
+```
+
+I parametri non vengono bloccati all’ingresso della `call` (evita falsi positivi quando lo stesso `int` è solo letto da più procedure in parallelo).
+
+**Nota.** L’interleaving tra thread può restare non deterministico dove il programma non fissa un ordine (es. `push` concorrenti sullo stesso `stack`). Sui **canali**, i valori in transito sono ordinati in FIFO rispetto agli invii (vedi sopra). Per escludere file dalla suite `make test`, usare `KAIROS_EXCLUDE` nel `makefile`.
 
 ---
 ### show
@@ -555,7 +586,11 @@ Se il valore finale della variabile non corrisponde a quello dichiarato nella `d
 [VM] DELOCAL: valore finale errato! (var=x, atteso=0, trovato=3)
 ```
 
-### 5. Stack e channel devono essere vuoti alla delocal
+### 5. PAR: race su `int` tra branch
+
+Oltre al vincolo già presente sugli **stack** condivisi tra branch (stesso stack usato in più thread dello stesso `par`), il compilatore vieta **scritture dirette** su un `int` in un branch se un altro branch **accede** allo stesso nome. Vedi [Analisi statica e lock a runtime nei PAR](#analisi-statica-e-lock-a-runtime-nei-par).
+
+### 6. Stack e channel devono essere vuoti alla delocal
 
 ```kairos
 delocal stack s = nil     // s deve essere vuoto
@@ -580,7 +615,7 @@ Le istruzioni principali:
 
 | Istruzione | Descrizione |
 |-----------|-------------|
-| `START` | Inizio programma |
+| `START` | Inizio programma (emesso dal compilatore; in `vm_exec` reinizializza l’indicizzatore dei frame, in esecuzione normale è ignorato) |
 | `HALT` | Fine programma |
 | `PROC name` | Inizio procedura |
 | `END_PROC name` | Fine procedura |
@@ -660,6 +695,14 @@ La VM non è stata compilata. Esegui `make build-release` prima di `make test`.
 ### `[PARSER] token non atteso`
 
 Errore sintattico nel sorgente. La riga indicata contiene un token non riconosciuto dalla grammatica.
+
+### `[STATIC] race su int nel PAR`
+
+Due branch dello stesso `par` effettuano una scrittura diretta su un `int` in uno e un accesso (lettura o altro uso) allo stesso identificatore nell’altro. Usa variabili distinte, oppure sposta i dati tramite canali.
+
+### `[VM] mutazione concorrente sulla variabile int`
+
+Due thread PAR hanno tentato di modificare la stessa variabile `int` in un intervallo non protetto dal modello (il lock a runtime intercetta il conflitto). Rivedi il programma o la suddivisione tra branch.
 
 ### Warning di reversibilità
 
