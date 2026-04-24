@@ -1,0 +1,27 @@
+// Stesso channel in due branch con send/recv — consentito (non è int/stack condiviso).
+procedure send_once(int payload, channel c)
+    local int v = 0
+    v += payload
+    ssend(v, c)
+    delocal int v = 0
+
+procedure recv_once(int accum, channel c)
+    srecv(accum, c)
+
+procedure main()
+    local channel c = empty
+    local int m = 0
+    m += 42
+    local int got = 0
+
+    par
+        call send_once(m, c)
+    and
+        call recv_once(got, c)
+    rap
+
+    show(got)
+
+    delocal int got = 42
+    delocal int m = 42
+    delocal channel c = empty

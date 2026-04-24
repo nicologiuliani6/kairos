@@ -32,6 +32,7 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
    - [show](#show)
    - [Commenti](#commenti)
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
+   - [Controlli statici del compilatore (`parser.py`)](#controlli-statici-del-compilatore-parserpy)
 7. [Il bytecode Kairos](#il-bytecode-kairos)
 8. [Errori comuni](#errori-comuni)
 
@@ -501,18 +502,7 @@ rap
 
 #### Analisi statica e lock a runtime nei PAR
 
-**Compilatore (`parser.py`).** Per ogni blocco `par` il frontend calcola, per ogni branch:
-
-- gli **accessi** a identificatori (letture, argomenti di `call`/`uncall`, condizioni, `show`, `push`/`pop`, ecc.);
-- le **scritture dirette** su `int` nel branch (assegnamenti `+=`/`-=`/`^=`, `x <=> y`, `local`/`delocal` su `int`).
-
-Se esiste una coppia di branch distinti \(i, j\) tale che una **scrittura diretta** su un `int` in un branch coincide con un **accesso** allo stesso nome nell’altro, la compilazione fallisce. Esempio di errore:
-
-```text
-[STATIC] riga N: race su int nel PAR (scrittura diretta vs accesso): x (usa canali o separa le variabili tra i branch)
-```
-
-Due branch che passano lo stesso `int` a procedure diverse **solo in lettura** (nessuna scrittura diretta su quella variabile nel corpo del branch) restano ammessi, come in producer/consumer che condividono `n`.
+**Compilatore.** Su ogni `par` il frontend applica i controlli descritti in [Controlli statici del compilatore (`parser.py`)](#controlli-statici-del-compilatore-parserpy): in sintesi, **vietati** stack condivisi tra branch e **race** tra scrittura e accesso sullo stesso `int` (anche se la scrittura avviene **dentro una procedura** chiamata dal branch). I **canali** possono invece essere usati dallo stesso nome in più branch (handshake `ssend`/`srecv`).
 
 **VM (`vm_ref_lock.h`, operazioni su `Var`).** Nei worker PAR (`current_thread_args` attivo), ogni mutazione su una variabile `int` (`PUSHEQ`/`MINEQ`/`XOREQ`, `SWAP`, parte di `PUSH`/`POP` che azzera o somma un int) acquisisce un lock **re-entrante** sullo stesso `pthread`: la ricorsione sullo stesso thread non blocca; due thread che modificano la stessa cella int in conflitto ottengono:
 
@@ -559,6 +549,48 @@ I commenti si estendono fino alla fine della riga. Non esistono commenti multiri
 
 Kairos garantisce la reversibilità a patto che il programma rispetti alcune regole. Il compilatore effettua un'analisi statica e segnala le violazioni prima dell'esecuzione.
 
+<a id="controlli-statici-del-compilatore-parserpy"></a>
+
+### Controlli statici del compilatore (`parser.py`)
+
+Oltre ai warning di reversibilità su `if-fi` e `local`/`delocal` (variabili di controllo / sorgenti modificate), il frontend rifiuta il programma con prefisso **`[STATIC]`** nei casi seguenti.
+
+#### Assegnamenti `+=`, `-=`, `^=`
+
+La variabile a sinistra **non può comparire** nell’espressione a destra (`x += x` è rifiutato). Messaggio: *operazione non reversibile … (la variabile a sinistra compare anche nell'espressione a destra)*. Esempi: `test_error/03_static_x_minus_eq_x.kairos`, `04_static_x_plus_eq_expr_contains_x.kairos`, `05_static_x_xor_eq_x.kairos`.
+
+#### `delocal` e valore atteso
+
+In `delocal tipo nome = valore`, se `valore` è un identificatore **uguale** a `nome` (`delocal int x = x`), la compilazione fallisce: l’inversione non può fissare un valore atteso non banale. Messaggio: *DELOCAL non ammesso … Usa un letterale o un altro nome di variabile.* Esempio: `test_error/10_static_delocal_self_ref.kairos`.
+
+#### Blocco `par`: stesso `stack` in più branch
+
+Per ogni branch viene raccolto l’insieme degli usi “strutturali” dello stack:
+
+- secondo argomento di `push`/`pop` in sintassi diretta (`push(a, s)`);
+- ogni argomento attuale di tipo `stack` in chiamate a procedure, sia con `call nome(...)` / `uncall nome(...)`, sia con **sintassi diretta** `nome(...)` (equivalente alla `call`).
+
+Se lo **stesso** nome di variabile dichiarato `stack` compare in quella raccolta per **due branch distinti** dello stesso `par`, la compilazione fallisce. I **canali** non sono trattati come stack: passare lo stesso `channel` a più branch per sincronizzarli è consentito dal controllo statico (resta necessario un protocollo corretto di `ssend`/`srecv`). Messaggio: *uso non reversibile di stack condiviso … in blocco PAR*.
+
+Esempio in `test_error/12_shared_stack_par_calls.kairos`.
+
+#### Blocco `par`: race su `int` tra branch
+
+Per ogni branch si calcolano:
+
+- **Accessi** (`int`): tutti gli identificatori usati nel branch (assegnamenti, espressioni, argomenti di chiamate, condizioni, `show`, `push`/`pop`, `local`/`delocal`, ecc.), ristretti ai nomi dichiarati `int` nel frame corrente.
+- **Scritture** (`int`): oltre alle scritture **dirette** (`+=`/`-=`/`^=` su un `int`, `x <=> y` con tipi `int`, `local`/`delocal` su `int`), anche gli **`int` passati come argomenti** a procedure che **mutano** quel parametro (analisi per punto fisso sul grafo delle chiamate: assegnamento al parametro nel corpo della procedura, propagazione attraverso `call` / `uncall` / chiamata diretta, con eccezione documentata per `swap`).
+
+Per ogni coppia di branch distinti \(i, j\), se esiste un nome `int` che è **scritto** in un branch e **acceduto** nell’altro (in entrambe le direzioni: \(W_i \cap A_j\) o \(W_j \cap A_i\)), la compilazione fallisce. Messaggio: *race su int nel PAR (scrittura vs accesso, anche tramite call)*.
+
+Così viene rifiutato sia il caso di due `x += …` in parallelo (`test_error/09_shared_int_par.kairos`), sia il caso in cui due branch chiamano procedure diverse su **`foo(x)`** e **`bar(x)`** con parametri `int` mutati nel callee (`test_error/11_shared_int_par_calls.kairos`). Restano ammessi scenari in cui lo stesso `int` è solo letto o passato a callees che **non** mutano quel parametro (es. limiti condivisi in stile producer/consumer).
+
+#### Sintassi delle chiamate dirette
+
+Nella grammatica attuale, le liste di argomenti delle chiamate `nome(...)` contengono solo **identificatori**, non letterali numerici (`push(1, s)` va scritto con una variabile `int` intermedia, come negli esempi in `tests/`).
+
+---
+
 ### 1. Assegnamento: niente autoriflessività
 
 ```kairos
@@ -590,9 +622,9 @@ Se il valore finale della variabile non corrisponde a quello dichiarato nella `d
 [VM] DELOCAL: valore finale errato! (var=x, atteso=0, trovato=3)
 ```
 
-### 5. PAR: race su `int` tra branch
+### 5. PAR: stack condivisi e race su `int`
 
-Oltre al vincolo già presente sugli **stack** condivisi tra branch (stesso stack usato in più thread dello stesso `par`), il compilatore vieta **scritture dirette** su un `int` in un branch se un altro branch **accede** allo stesso nome. Vedi [Analisi statica e lock a runtime nei PAR](#analisi-statica-par).
+Nel blocco `par` il compilatore vieta **stack** usati in più branch e **race** su `int` (scrittura vs accesso, **anche tramite** chiamate a procedure che mutano parametri). I **canali** condivisi non attivano questi errori statici. Dettaglio formale: [Controlli statici del compilatore (`parser.py`)](#controlli-statici-del-compilatore-parserpy) e [Analisi statica e lock a runtime nei PAR](#analisi-statica-par).
 
 ### 6. Stack e channel devono essere vuoti alla delocal
 
@@ -702,7 +734,15 @@ Errore sintattico nel sorgente. La riga indicata contiene un token non riconosci
 
 ### `[STATIC] race su int nel PAR`
 
-Due branch dello stesso `par` effettuano una scrittura diretta su un `int` in uno e un accesso (lettura o altro uso) allo stesso identificatore nell’altro. Usa variabili distinte, oppure sposta i dati tramite canali.
+Due branch dello stesso `par` hanno un conflitto **scrittura vs accesso** sullo stesso `int`: la scrittura può essere **diretta** nel branch o **indiretta** (es. `foo(x)` con `foo` che muta il parametro `int`). Usa variabili distinte per branch o comunica con `channel` / `ssend` / `srecv`.
+
+### `[STATIC] stack condiviso nel PAR`
+
+Lo stesso `stack` è usato (tramite `push`/`pop` o passaggio a procedure) da più branch dello stesso `par`. Usa stack separati o sposta i dati su canali.
+
+### `[STATIC] DELOCAL … valore atteso = stesso nome`
+
+`delocal int x = x` (o analogo) è rifiutato: il valore atteso non può coincidere con l’identificatore che stai chiudendo.
 
 ### `[VM] mutazione concorrente sulla variabile int`
 

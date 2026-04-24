@@ -16,6 +16,18 @@ static inline void make_frame_key(const char *name, int depth, char *out, size_t
     else            snprintf(out, sz, "%s@%d", name, depth);
 }
 
+/*
+ * Chiave per cloni ricorsivi dentro THREAD_* (par): evita che due worker
+ * condividano lo stesso FrameIndexer di "proc@k" del thread principale.
+ * pthread_self in 8 hex + profondità restano sotto CHAR_ID_MAP_NAME_LEN per
+ * nomi procedura tipici del progetto.
+ */
+static inline void make_frame_key_par_rec(const char *name, int depth, char *out, size_t sz)
+{
+    unsigned tid = (unsigned)(unsigned long)pthread_self();
+    snprintf(out, sz, "%s@w%x_%d", name, tid, depth);
+}
+
 static inline void make_thread_frame_key(const char *proc, char *out, size_t sz)
 {
     snprintf(out, sz, "%s@t%lu", proc, (unsigned long)pthread_self());

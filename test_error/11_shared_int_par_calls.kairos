@@ -1,0 +1,15 @@
+// Errore STATIC atteso: stessa int x passata a due procedure che la mutano in PAR.
+procedure foo(int x)
+    x+=1
+
+procedure fuu(int y)
+    y+=1
+
+procedure main()
+    int x
+    x+=1
+    par
+        foo(x)
+    and
+        fuu(x)
+    rap

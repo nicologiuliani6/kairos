@@ -137,7 +137,15 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             int   new_depth = 0;
             if (is_rec) {
                 char *at2 = strchr(fname, '@');
-                int   cd  = at2 ? atoi(at2 + 1) : 0;
+                int   cd  = 0;
+                if (!at2)
+                    cd = 0;
+                else if (at2[1] >= '0' && at2[1] <= '9')
+                    cd = atoi(at2 + 1);
+                else {
+                    uint cur_fi = get_findex(fname);
+                    cd          = vm->frames[cur_fi].recursion_depth;
+                }
                 new_depth = cd + 1;
             }
             uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
@@ -167,12 +175,25 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn); 
             }
             if (is_rec) {
-                uint bfi = char_id_map_get(&FrameIndexer, pn);
-                vm->frames[bfi].recursion_depth = new_depth;
+                vm->frames[cfi].recursion_depth = new_depth;
+                /* invert_op_to_line spesso riceve solo il nome base (UNCALL): il frame
+                 * template deve riflettere la profondità corrente. Nei worker PAR non
+                 * aggiorniamo il template condiviso (altri thread / altre proc). */
+                if (!current_thread_args) {
+                    uint bfi = char_id_map_get(&FrameIndexer, pn);
+                    vm->frames[bfi].recursion_depth = new_depth;
+                }
             }
             char nfname[VAR_NAME_LENGTH];
-            if (is_rec) make_frame_key(pn, new_depth, nfname, sizeof(nfname));
-            else        strncpy(nfname, pn, VAR_NAME_LENGTH - 1);
+            if (is_rec) {
+                if (current_thread_args)
+                    make_frame_key_par_rec(pn, new_depth, nfname, sizeof(nfname));
+                else
+                    make_frame_key(pn, new_depth, nfname, sizeof(nfname));
+            } else {
+                strncpy(nfname, pn, VAR_NAME_LENGTH - 1);
+                nfname[VAR_NAME_LENGTH - 1] = '\0';
+            }
             strncpy(fname, nfname, VAR_NAME_LENGTH - 1);
             ptr = go_to_line(orig, vm->frames[cfi].addr + 1);
             if (!ptr) vm_debug_panic("[VM] CALL: indirizzo non trovato!\n");

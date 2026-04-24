@@ -1,0 +1,50 @@
+// fib_ricorsivo come fib.kairos; in main un solo par: f(k-1) e f(k-2), poi somma in x1/x2.
+
+procedure fib_ricorsivo(int x1, int x2, int n)
+    if n == 0 then
+        x1 += 1
+        x2 += 1
+    else
+        n -= 1
+        call fib_ricorsivo(x1, x2, n)
+        n += 1
+        x1 += x2
+        x1 <=> x2
+    fi n == 0
+
+procedure main()
+    local int k = 5
+    local int n1 = k
+    n1 -= 1
+    local int n2 = n1
+    n2 -= 1
+
+    local int x1a = 0
+    local int x2a = 0
+    local int x1b = 0
+    local int x2b = 0
+
+    par
+        call fib_ricorsivo(x1a, x2a, n1)
+    and
+        call fib_ricorsivo(x1b, x2b, n2)
+    rap
+
+    local int x1 = 0
+    local int x2 = 0
+    x1 += x2a
+    x2 += x2a
+    x2 += x2b
+
+    show(k)
+    show(x2)
+
+    delocal int x2 = 13
+    delocal int x1 = 8
+    delocal int x2b = 5
+    delocal int x1b = 3
+    delocal int x2a = 8
+    delocal int x1a = 5
+    delocal int n2 = 3
+    delocal int n1 = 4
+    delocal int k = 5
