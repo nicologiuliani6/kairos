@@ -1,0 +1,30 @@
+// Due pthread in PAR: ogni branch ha il proprio frame (procedure separate) così
+// local/delocal non condividono lo stack LIFO del chiamante tra thread.
+// Stampa ripetuta show(side): side è 0 in un thread e 1 nell'altro.
+// Esegui più volte: se l'ordine delle righe cambia, c'è interleaving non deterministico.
+procedure loop0()
+    local int side = 0
+    local int k = 0
+    from k == 0 loop
+        show(side)
+        k += 1
+    until k == 120
+    delocal int k = 120
+    delocal int side = 0
+
+procedure loop1()
+    local int side = 1
+    local int k = 0
+    from k == 0 loop
+        show(side)
+        k += 1
+    until k == 120
+    delocal int k = 120
+    delocal int side = 1
+
+procedure main()
+    par
+        loop0()
+    and
+        loop1()
+    rap
