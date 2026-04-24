@@ -27,8 +27,8 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
    - [Ciclo from-loop-until](#ciclo-from-loop-until)
    - [Stack — push e pop](#stack--push-e-pop)
    - [Canali — ssend e srecv](#canali--ssend-e-srecv)
-   - [Parallelismo — par/and/rap](#parallelismo--parandarap)
-     - [Analisi statica e lock a runtime](#analisi-statica-e-lock-a-runtime-nei-par)
+   - [Parallelismo — par/and/rap](#parallelismo-par-and-rap)
+     - [Analisi statica e lock a runtime](#analisi-statica-par)
    - [show](#show)
    - [Commenti](#commenti)
 6. [Reversibilità — regole e vincoli](#reversibilità--regole-e-vincoli)
@@ -464,6 +464,8 @@ I canali sono pensati per essere usati esclusivamente all'interno di blocchi `pa
 
 ---
 
+<a id="parallelismo-par-and-rap"></a>
+
 ### Parallelismo — par/and/rap
 
 ```kairos
@@ -494,6 +496,8 @@ rap
 ```
 
 **Inversione di par:** `uncall` su una procedura contenente `par` inverte l'ordine dei thread e scambia `ssend↔srecv` e `call↔uncall` all'interno di ogni thread.
+
+<a id="analisi-statica-par"></a>
 
 #### Analisi statica e lock a runtime nei PAR
 
@@ -588,7 +592,7 @@ Se il valore finale della variabile non corrisponde a quello dichiarato nella `d
 
 ### 5. PAR: race su `int` tra branch
 
-Oltre al vincolo già presente sugli **stack** condivisi tra branch (stesso stack usato in più thread dello stesso `par`), il compilatore vieta **scritture dirette** su un `int` in un branch se un altro branch **accede** allo stesso nome. Vedi [Analisi statica e lock a runtime nei PAR](#analisi-statica-e-lock-a-runtime-nei-par).
+Oltre al vincolo già presente sugli **stack** condivisi tra branch (stesso stack usato in più thread dello stesso `par`), il compilatore vieta **scritture dirette** su un `int` in un branch se un altro branch **accede** allo stesso nome. Vedi [Analisi statica e lock a runtime nei PAR](#analisi-statica-par).
 
 ### 6. Stack e channel devono essere vuoti alla delocal
 

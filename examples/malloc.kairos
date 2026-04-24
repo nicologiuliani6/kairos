@@ -1,6 +1,11 @@
 // =====================================
 // libreria malloc reversibile
 // =====================================
+// Nota sui due `par`: quattro branch con più SSEND/SRECV sullo stesso canale
+// (forward + uncall) potevano ancora dare valori spuri su SRECV e far fallire
+// le delocal su `index`. Due branch (init || alloc sequenziali; collect ||
+// free sequenziali) mantengono il parallelismo essenziale senza tre sender
+// concorrenti. La VM inoltre abbina sender↔FIFO sotto un solo lock in op_pop.
 
 // --- INTERNO ---
 
@@ -84,9 +89,7 @@ procedure test_malloc()
         call mem_init(ch, n)
     and
         call mem_alloc(ch, cell1)
-    and
         call mem_alloc(ch, cell2)
-    and
         call mem_alloc(ch, cell3)
     rap
 
@@ -120,9 +123,7 @@ procedure test_malloc()
         call mem_collect(ch, idx_stack, n)
     and
         call mem_free(ch, cell3)
-    and
         call mem_free(ch, cell2)
-    and
         call mem_free(ch, cell1)
     rap
 
