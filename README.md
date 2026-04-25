@@ -454,13 +454,24 @@ I canali sono code sincrone (rendezvous): `ssend` blocca finché un `srecv` non 
 
 ```kairos
 ssend(<v1, v2, ...>, ch)   // invia payload tipizzato, azzera/svuota le sorgenti
-srecv(<d1, d2, ...>, ch)   // riceve payload: int fa +=, stack/channel append in coda
+srecv(<d1, d2, ...>, ch)   // riceve payload tipizzato sulle destinazioni
 ```
 
 Per i payload:
 - `int`: `ssend` azzera la sorgente, `srecv` fa `+=` sulla destinazione `int`.
-- `stack` / `channel`: `ssend` svuota la sorgente, `srecv` concatena in coda alla destinazione.
+- `stack`: `ssend` svuota la sorgente, `srecv` concatena in coda alla destinazione.
+- `channel`: `ssend` passa il riferimento dell'endpoint; `srecv` collega la destinazione allo stesso endpoint condiviso (stile pi-calculus, channel passing).
 L'inverso di `ssend` è `srecv` e viceversa.
+
+Esempio di channel passing:
+
+```kairos
+procedure client(channel req, int msg)
+    local channel resp = empty
+    ssend(<msg, resp>, req)   // passo il canale di risposta nel payload
+    srecv(<msg>, resp)
+    delocal channel resp = empty
+```
 
 **Buffer del canale (VM).** A differenza degli stack Kairos, che restano **LIFO** (`push`/`pop`), i valori in transito su un canale sono accodati in ordine di invio e consumati in **FIFO** (primo inviato, primo ricevuto). Con più `ssend` concorrenti sullo stesso canale, l’append e il prelievo dal buffer interno sono serializzati con il mutex del canale, così ogni `srecv` abbinato al rendez-vous legge il messaggio coerente con l’ordine di accodamento. Senza questa disciplina, combinazioni tipo un solo thread che riceve in loop mentre più thread inviano potevano produrre valori errati e fallire le `delocal`.
 
@@ -482,7 +493,7 @@ and
 rap
 ```
 
-`par/rap` avvia i thread elencati in **parallelo reale** (un `pthread` per branch: tutti partono insieme). I thread condividono le variabili del frame corrente. La sincronizzazione logica tra thread resta basata sui **canali**; per gli `int` condivisi valgono in più i controlli descritti sotto. Per ogni `call` da un thread, la VM usa una chiave frame del tipo `nomeProc@t<thread_id>` (lunghezza massima 32 caratteri nella mappa interna): evita nomi di procedura troppo lunghi se la procedura è invocata solo da branch `par`.
+`par/rap` avvia i thread elencati in **parallelo reale** (un `pthread` per branch: tutti partono insieme). I thread condividono le variabili del frame corrente. La sincronizzazione logica tra thread resta basata sui **canali**; per gli `int` condivisi valgono in più i controlli descritti sotto. Per ogni `call` da un thread, la VM usa una chiave frame del tipo `nomeProc@t<thread_id>` (nomi frame interni fino a 128 caratteri).
 
 I blocchi `par` possono essere annidati:
 
