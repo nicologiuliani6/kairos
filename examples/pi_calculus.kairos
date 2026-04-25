@@ -1,24 +1,30 @@
-procedure client(channel ch, int msg)
-    local channel risposta = empty
-    ssend(<msg, risposta>, ch) //riporta a 0 msg
-    srecv(msg, risposta) //fa += su msg 
-    delocal channel risposta = empty
+procedure client(channel req, int msg)
+    local channel resp = empty
+    ssend(<msg, resp>, req)
+    srecv(<msg>, resp)
+    delocal channel resp = empty
 
-procedure server(channel ch)
-    local channel reply = empty
+procedure server(channel req)
+    local channel resp = empty
     local int msg = 0
-    srecv(<msg, reply>, ch)
-    msg+=1 //risposta
-    ssend(msg, reply)
+    srecv(<msg, resp>, req)
+    msg += 1
+    ssend(<msg>, resp)
     delocal int msg = 0
-    delocal channel reply = empty
+    delocal channel resp = empty
 
-procedure main()
-    int channel ch
+
+procedure pi_calculus()
+    local channel req = empty
     local int msg = 10
     par
-        client(ch, msg)
+        client(req, msg)
     and
-        server(ch)
+        server(req)
     rap
     delocal int msg = 11
+    delocal channel req = empty
+
+procedure main()
+    call pi_calculus()
+    uncall pi_calculus()

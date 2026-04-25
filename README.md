@@ -453,11 +453,14 @@ L'inverso di `push` è `pop` e viceversa.
 I canali sono code sincrone (rendezvous): `ssend` blocca finché un `srecv` non è pronto a ricevere, e viceversa.
 
 ```kairos
-ssend(var, ch)      // invia var sul canale ch, azzera var
-srecv(var, ch)      // riceve dal canale ch e aggiunge il valore a var
+ssend(<v1, v2, ...>, ch)   // invia payload tipizzato, azzera/svuota le sorgenti
+srecv(<d1, d2, ...>, ch)   // riceve payload: int fa +=, stack/channel append in coda
 ```
 
-Come `push/pop`, `ssend` azzera la sorgente dopo l'invio e `srecv` somma (non sovrascrive) alla destinazione. L'inverso di `ssend` è `srecv` e viceversa.
+Per i payload:
+- `int`: `ssend` azzera la sorgente, `srecv` fa `+=` sulla destinazione `int`.
+- `stack` / `channel`: `ssend` svuota la sorgente, `srecv` concatena in coda alla destinazione.
+L'inverso di `ssend` è `srecv` e viceversa.
 
 **Buffer del canale (VM).** A differenza degli stack Kairos, che restano **LIFO** (`push`/`pop`), i valori in transito su un canale sono accodati in ordine di invio e consumati in **FIFO** (primo inviato, primo ricevuto). Con più `ssend` concorrenti sullo stesso canale, l’append e il prelievo dal buffer interno sono serializzati con il mutex del canale, così ogni `srecv` abbinato al rendez-vous legge il messaggio coerente con l’ordine di accodamento. Senza questa disciplina, combinazioni tipo un solo thread che riceve in loop mentre più thread inviano potevano produrre valori errati e fallire le `delocal`.
 
@@ -485,13 +488,13 @@ I blocchi `par` possono essere annidati:
 
 ```kairos
 par
-    ssend(x, c)
+    ssend(<x>, c)
 and
     par
-        ssend(y, c)
+        ssend(<y>, c)
     and
-        srecv(a, c)
-        srecv(b, c)
+        srecv(<a>, c)
+        srecv(<b>, c)
     rap
 rap
 ```

@@ -127,6 +127,10 @@ def p_arg_list(p):
                 | arg_list COMMA ID'''
     p[0] = [p[1]] if len(p) == 2 else p[1] + [p[3]]
 
+def p_sendrecv_payload(p):
+    '''sendrecv_payload : LT arg_list GT'''
+    p[0] = p[2]
+
 # ── Call / Uncall ───────────────────────────────────────────────────────────
 def p_call(p):
     '''statement : CALL ID LPAREN RPAREN
@@ -140,13 +144,24 @@ def p_call(p):
 
 def p_call_direct(p):
     '''statement : ID LPAREN RPAREN
-                 | ID LPAREN arg_list RPAREN'''
+                 | ID LPAREN arg_list RPAREN
+                 | ID LPAREN sendrecv_payload COMMA ID RPAREN'''
     if len(p) == 4:
         p[0] = ('call_direct', p[1], [], p.lineno(1))
         if VERBOSE: print(f"call diretto: {p[1]}()")
-    else:
+    elif len(p) == 5:
         p[0] = ('call_direct', p[1], p[3], p.lineno(1))
         if VERBOSE: print(f"call diretto: {p[1]}({p[3]})")
+    else:
+        name = p[1]
+        if name.lower() not in ('ssend', 'srecv'):
+            raise KairosCompileError(
+                "PARSER",
+                f"riga {p.lineno(1)}: sintassi '<...>' supportata solo per ssend/srecv",
+            )
+        args = p[3] + [p[5]]
+        p[0] = ('call_direct', name, args, p.lineno(1))
+        if VERBOSE: print(f"call diretto: {name}(<...>, {p[5]})")
 
 def p_uncall(p):
     '''statement : UNCALL ID LPAREN RPAREN

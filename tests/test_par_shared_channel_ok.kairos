@@ -2,11 +2,11 @@
 procedure send_once(int payload, channel c)
     local int v = 0
     v += payload
-    ssend(v, c)
+    ssend(<v>, c)
     delocal int v = 0
 
 procedure recv_once(int accum, channel c)
-    srecv(accum, c)
+    srecv(<accum>, c)
 
 procedure main()
     local channel c = empty

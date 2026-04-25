@@ -398,7 +398,25 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
-            uint cfi  = char_id_map_get(&FrameIndexer, pn);
+            char base_cur[VAR_NAME_LENGTH];
+            strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
+            base_cur[VAR_NAME_LENGTH - 1] = '\0';
+            char *at_cur = strchr(base_cur, '@');
+            if (at_cur) *at_cur = '\0';
+            int is_rec = (strcmp(pn, base_cur) == 0);
+            int new_depth = 0;
+            if (is_rec) {
+                const char *atf = strchr(frame_name, '@');
+                if (atf) {
+                    const char *us = strrchr(frame_name, '_');
+                    if (us && us > atf) new_depth = atoi(us + 1);
+                    else new_depth = atoi(atf + 1);
+                }
+                new_depth++;
+            }
+            uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
+                              : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                     : char_id_map_get(&FrameIndexer, pn));
             uint curi = char_id_map_get(&FrameIndexer, frame_name);
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
@@ -407,7 +425,18 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
                 vm->frames[cfi].vars[pi[j++]] = vm->frames[curi].vars[si];
             }
-            invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            char target[VAR_NAME_LENGTH];
+            if (is_rec && current_thread_args) {
+                make_frame_key_par_rec(pn, new_depth, target, sizeof(target));
+            } else if (is_rec) {
+                make_frame_key(pn, new_depth, target, sizeof(target));
+            } else if (current_thread_args) {
+                make_thread_frame_key(pn, target, sizeof(target));
+            } else {
+                strncpy(target, pn, sizeof(target) - 1);
+                target[sizeof(target) - 1] = '\0';
+            }
+            invert_op_to_line(vm, target, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
         }
@@ -415,7 +444,25 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
-            uint cfi  = char_id_map_get(&FrameIndexer, pn);
+            char base_cur[VAR_NAME_LENGTH];
+            strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
+            base_cur[VAR_NAME_LENGTH - 1] = '\0';
+            char *at_cur = strchr(base_cur, '@');
+            if (at_cur) *at_cur = '\0';
+            int is_rec = (strcmp(pn, base_cur) == 0);
+            int new_depth = 0;
+            if (is_rec) {
+                const char *atf = strchr(frame_name, '@');
+                if (atf) {
+                    const char *us = strrchr(frame_name, '_');
+                    if (us && us > atf) new_depth = atoi(us + 1);
+                    else new_depth = atoi(atf + 1);
+                }
+                new_depth++;
+            }
+            uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
+                              : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                     : char_id_map_get(&FrameIndexer, pn));
             uint curi = fi;
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
@@ -424,7 +471,17 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
                 vm->frames[cfi].vars[pi[j++]] = vm->frames[curi].vars[si];
             }
-            char cn[VAR_NAME_LENGTH]; strncpy(cn, pn, VAR_NAME_LENGTH - 1);
+            char cn[VAR_NAME_LENGTH];
+            if (is_rec && current_thread_args) {
+                make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
+            } else if (is_rec) {
+                make_frame_key(pn, new_depth, cn, sizeof(cn));
+            } else if (current_thread_args) {
+                make_thread_frame_key(pn, cn, sizeof(cn));
+            } else {
+                strncpy(cn, pn, sizeof(cn) - 1);
+                cn[sizeof(cn) - 1] = '\0';
+            }
             vm_run_BT(vm, orig, cn);
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
@@ -459,8 +516,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, cur_frame);
         else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, cur_frame);
         else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, cur_frame);
-        else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND")) op_pop (vm, cur_frame);
-        else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV")) op_push(vm, cur_frame);
+        else if (!strcmp(fw, "PUSH"))  op_pop  (vm, cur_frame);
+        else if (!strcmp(fw, "POP"))   op_push (vm, cur_frame);
+        else if (!strcmp(fw, "SSEND")) op_srecv(vm, cur_frame);
+        else if (!strcmp(fw, "SRECV")) op_ssend(vm, cur_frame);
         else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, cur_frame);
         else if (!strcmp(fw, "DELOCAL"))op_local     (vm, cur_frame);
         else if (!strcmp(fw, "SHOW"))   op_show      (vm, cur_frame);

@@ -35,10 +35,15 @@ static inline void make_thread_frame_key(const char *proc, char *out, size_t sz)
 
 static inline uint get_findex(const char *name)
 {
-    if (!char_id_map_exists(&FrameIndexer, name)) {
+    pthread_mutex_lock(&var_indexer_mtx);
+    int exists = char_id_map_exists(&FrameIndexer, name);
+    if (!exists) {
+        pthread_mutex_unlock(&var_indexer_mtx);
         vm_debug_panic("[VM] get_findex: frame '%s' non trovato!\n", name);
     }
-    return char_id_map_get(&FrameIndexer, name);
+    uint idx = char_id_map_get(&FrameIndexer, name);
+    pthread_mutex_unlock(&var_indexer_mtx);
+    return idx;
 }
 
 /* ======================================================================
@@ -225,8 +230,21 @@ static inline char *normalize_bytecode_physical_lines(const char *input)
 static inline void delete_var(Var *vars[], int *size, int n)
 {
     if (n < 0 || n >= *size) { printf("Indice fuori range!\n"); return; }
-    free(vars[n]->value);
-    free(vars[n]);
+    Var *v = vars[n];
+    if (v->T == TYPE_CHANNEL && v->channel) {
+        pthread_mutex_lock(&v->channel->mtx);
+        v->channel->refcount--;
+        int do_free = (v->channel->refcount <= 0);
+        pthread_mutex_unlock(&v->channel->mtx);
+        if (do_free) {
+            pthread_mutex_destroy(&v->channel->mtx);
+            free(v->channel->buf);
+            free(v->channel);
+        }
+    } else {
+        free(v->value);
+    }
+    free(v);
     vars[n] = NULL;
 }
 
@@ -250,9 +268,12 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
     } else if (strcmp(type, "channel") == 0) {
         v->T         = TYPE_CHANNEL;
         v->stack_len = 0;
-        v->value     = calloc((size_t)VAR_CHANNEL_MAX_SIZE, sizeof(int));
+        v->value     = NULL;
         v->channel   = calloc(1, sizeof(Channel));
         pthread_mutex_init(&v->channel->mtx, NULL);
+        v->channel->buf = calloc((size_t)VAR_CHANNEL_MAX_SIZE, sizeof(int));
+        v->channel->buf_len = 0;
+        v->channel->refcount = 1;
     } else {
         vm_debug_panic("[VM] tipo non supportato\n");
     }

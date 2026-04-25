@@ -50,9 +50,19 @@ def t_ID(t):
     return t
 
 def t_NUMBER(t):
-    r'\d+'
+    r'\d+(?![a-zA-Z_])'
     t.value = int(t.value)
     return t
+
+def t_INVALID_NUMBER_SUFFIX(t):
+    r'\d+[a-zA-Z_][a-zA-Z0-9_]*'
+    raise KairosCompileError(
+        "LEXER",
+        (
+            f"riga {t.lexer.lineno}: numero non valido '{t.value}' "
+            "(rimuovi il suffisso o separa con spazi/operatori)"
+        ),
+    )
 
 # ── Operatori composti: DEVONO stare PRIMA di quelli semplici ──────────────
 # Il lexer PLY usa la lunghezza della stringa per ordinare le funzioni-regex,

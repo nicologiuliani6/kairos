@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "vm_types.h"
 #include "vm_helpers.h"
 #include "vm_channel.h"
@@ -51,6 +52,101 @@ static inline void vm_if_mark_call(void)
         if_branch_has_call_stack[if_branch_top] = 1;
 }
 
+#define CHANNEL_REF_MARKER (-1001)
+
+typedef struct {
+    char proc[VAR_NAME_LENGTH];
+    char var[VAR_NAME_LENGTH];
+    Channel *channel;
+} ChannelRestoreEntry;
+
+#define CHANNEL_RESTORE_MAX 4096
+static ChannelRestoreEntry g_channel_restore[CHANNEL_RESTORE_MAX];
+static int g_channel_restore_top = 0;
+static pthread_mutex_t g_channel_restore_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static inline void frame_base_name(const char *frame_name, char *out, size_t out_sz)
+{
+    size_t i = 0;
+    while (frame_name[i] && frame_name[i] != '@' && i + 1 < out_sz) {
+        out[i] = frame_name[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
+static inline void channel_restore_push(const char *frame_name, const char *var_name, Channel *ch)
+{
+    if (!ch) return;
+    char proc[VAR_NAME_LENGTH];
+    frame_base_name(frame_name, proc, sizeof(proc));
+    pthread_mutex_lock(&g_channel_restore_mtx);
+    if (g_channel_restore_top < CHANNEL_RESTORE_MAX) {
+        strncpy(g_channel_restore[g_channel_restore_top].proc, proc, VAR_NAME_LENGTH - 1);
+        g_channel_restore[g_channel_restore_top].proc[VAR_NAME_LENGTH - 1] = '\0';
+        strncpy(g_channel_restore[g_channel_restore_top].var, var_name, VAR_NAME_LENGTH - 1);
+        g_channel_restore[g_channel_restore_top].var[VAR_NAME_LENGTH - 1] = '\0';
+        g_channel_restore[g_channel_restore_top].channel = ch;
+        g_channel_restore_top++;
+    }
+    pthread_mutex_unlock(&g_channel_restore_mtx);
+}
+
+static inline Channel *channel_restore_pop(const char *frame_name, const char *var_name)
+{
+    char proc[VAR_NAME_LENGTH];
+    frame_base_name(frame_name, proc, sizeof(proc));
+    pthread_mutex_lock(&g_channel_restore_mtx);
+    for (int i = g_channel_restore_top - 1; i >= 0; i--) {
+        if (strcmp(g_channel_restore[i].proc, proc) == 0 &&
+            strcmp(g_channel_restore[i].var, var_name) == 0) {
+            Channel *ch = g_channel_restore[i].channel;
+            g_channel_restore[i] = g_channel_restore[g_channel_restore_top - 1];
+            g_channel_restore_top--;
+            pthread_mutex_unlock(&g_channel_restore_mtx);
+            return ch;
+        }
+    }
+    pthread_mutex_unlock(&g_channel_restore_mtx);
+    return NULL;
+}
+
+static inline void lock_channel_pair(Channel *a, Channel *b)
+{
+    if (!a && !b) return;
+    if (a == b) {
+        if (a) pthread_mutex_lock(&a->mtx);
+        return;
+    }
+    if (!a) { pthread_mutex_lock(&b->mtx); return; }
+    if (!b) { pthread_mutex_lock(&a->mtx); return; }
+    if ((uintptr_t)a < (uintptr_t)b) {
+        pthread_mutex_lock(&a->mtx);
+        pthread_mutex_lock(&b->mtx);
+    } else {
+        pthread_mutex_lock(&b->mtx);
+        pthread_mutex_lock(&a->mtx);
+    }
+}
+
+static inline void unlock_channel_pair(Channel *a, Channel *b)
+{
+    if (!a && !b) return;
+    if (a == b) {
+        if (a) pthread_mutex_unlock(&a->mtx);
+        return;
+    }
+    if (!a) { pthread_mutex_unlock(&b->mtx); return; }
+    if (!b) { pthread_mutex_unlock(&a->mtx); return; }
+    if ((uintptr_t)a < (uintptr_t)b) {
+        pthread_mutex_unlock(&b->mtx);
+        pthread_mutex_unlock(&a->mtx);
+    } else {
+        pthread_mutex_unlock(&a->mtx);
+        pthread_mutex_unlock(&b->mtx);
+    }
+}
+
 /* ======================================================================
  *  SWAP
  * ====================================================================== */
@@ -76,6 +172,8 @@ void op_swap(VM *vm, const char *frame_name)
 
 static inline void op_push(VM *vm, const char *frame_name);
 static inline void op_pop (VM *vm, const char *frame_name);
+static inline void op_ssend(VM *vm, const char *frame_name);
+static inline void op_srecv(VM *vm, const char *frame_name);
 
 static inline void op_push(VM *vm, const char *frame_name)
 {
@@ -110,9 +208,9 @@ static inline void op_push(VM *vm, const char *frame_name)
         sv->value[sv->stack_len++] = val;
     } else {
         pthread_mutex_lock(&sv->channel->mtx);
-        sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int));
-        if (!sv->value) vm_debug_panic("realloc failed\n");
-        sv->value[sv->stack_len++] = val;
+        sv->channel->buf = realloc(sv->channel->buf, (sv->channel->buf_len + 1) * sizeof(int));
+        if (!sv->channel->buf) vm_debug_panic("realloc failed\n");
+        sv->channel->buf[sv->channel->buf_len++] = val;
         pthread_mutex_unlock(&sv->channel->mtx);
         int was_queued = op_wait(sv->channel, 1);
         if (was_queued)
@@ -155,16 +253,16 @@ static inline void op_pop(VM *vm, const char *frame_name)
             pthread_mutex_unlock(&sv->channel->mtx);
             vm_debug_panic("[VM] POP: channel sender_args nullo dopo rendezvous\n");
         }
-        if (sv->stack_len == 0) {
+        if (sv->channel->buf_len == 0) {
             pthread_mutex_unlock(&sv->channel->mtx);
             vm_debug_panic("[VM] POP: channel vuoto dopo op_wait!\n");
         }
-        popped = sv->value[0];
-        sv->stack_len--;
-        if (sv->stack_len > 0)
-            memmove(sv->value, sv->value + 1, sv->stack_len * sizeof(int));
-        if (sv->stack_len > 0)
-            sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
+        popped = sv->channel->buf[0];
+        sv->channel->buf_len--;
+        if (sv->channel->buf_len > 0)
+            memmove(sv->channel->buf, sv->channel->buf + 1, sv->channel->buf_len * sizeof(int));
+        if (sv->channel->buf_len > 0)
+            sv->channel->buf = realloc(sv->channel->buf, sv->channel->buf_len * sizeof(int));
         pthread_mutex_unlock(&sv->channel->mtx);
     } else {
         popped = sv->value[--sv->stack_len];
@@ -177,8 +275,235 @@ static inline void op_pop(VM *vm, const char *frame_name)
     *(dest->value) += popped;
     var_par_mut_release(dest);
 
-    if (sv->T == TYPE_CHANNEL && sender_to_wake && current_thread_args)
-        current_thread_args->sender_to_notify = sender_to_wake;
+    if (sv->T == TYPE_CHANNEL && sender_to_wake)
+        notify_sender_turn_done(sender_to_wake);
+}
+
+static inline void op_ssend(VM *vm, const char *frame_name)
+{
+    char *tokv[64];
+    int ntok = 0;
+    char *tok = NULL;
+    while ((tok = strtok(NULL, " \t")) && ntok < 64)
+        tokv[ntok++] = tok;
+
+    if (ntok < 2)
+        vm_debug_panic("[VM] SSEND: formato errato (atteso SSEND <v1 ...> <channel>)\n");
+
+    char *ch_name = tokv[ntok - 1];
+    int payload_count = ntok - 1;
+    uint fi = get_findex(frame_name);
+
+    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, ch_name))
+        vm_debug_panic("[VM] SSEND: canale non trovato!\n");
+    uint chi = char_id_map_get(&vm->frames[fi].VarIndexer, ch_name);
+    Var *chv = vm->frames[fi].vars[chi];
+    if (!chv || chv->T != TYPE_CHANNEL)
+        vm_debug_panic("[VM] SSEND: destinazione non è channel!\n");
+
+    int encoded_len = 0;
+    int encoded_cap = 16;
+    int *encoded = malloc((size_t)encoded_cap * sizeof(int));
+    if (!encoded)
+        vm_debug_panic("[VM] SSEND: malloc fallita\n");
+
+#define ENC_PUSH(_v) do { \
+        if (encoded_len >= encoded_cap) { \
+            encoded_cap *= 2; \
+            int *tmp = realloc(encoded, (size_t)encoded_cap * sizeof(int)); \
+            if (!tmp) { free(encoded); vm_debug_panic("realloc failed\n"); } \
+            encoded = tmp; \
+        } \
+        encoded[encoded_len++] = (_v); \
+    } while (0)
+
+    for (int i = 0; i < payload_count; i++) {
+        char *src_tok = tokv[i];
+        if (char_id_map_exists(&vm->frames[fi].VarIndexer, src_tok)) {
+            Var *src = get_var(vm, fi, src_tok, "SSEND");
+            if (src == chv) {
+                free(encoded);
+                vm_debug_panic("[VM] SSEND: non puoi inviare il canale su se stesso\n");
+            }
+            if (src->T == TYPE_INT) {
+                int val;
+                var_par_mut_acquire(src);
+                val = *(src->value);
+                *(src->value) = 0;
+                var_par_mut_release(src);
+                ENC_PUSH((int)TYPE_INT);
+                ENC_PUSH(val);
+            } else if (src->T == TYPE_STACK) {
+                size_t n = src->stack_len;
+                ENC_PUSH((int)TYPE_STACK);
+                ENC_PUSH((int)n);
+                for (size_t k = 0; k < n; k++)
+                    ENC_PUSH(src->value[k]);
+                src->stack_len = 0;
+            } else if (src->T == TYPE_CHANNEL) {
+                uintptr_t p = (uintptr_t)src->channel;
+                ENC_PUSH(CHANNEL_REF_MARKER);
+                ENC_PUSH((int)(uint32_t)(p & 0xffffffffu));
+                ENC_PUSH((int)(uint32_t)((p >> 32) & 0xffffffffu));
+            } else {
+                free(encoded);
+                vm_debug_panic("[VM] SSEND: parametro non linkato\n");
+            }
+        } else {
+            ENC_PUSH((int)TYPE_INT);
+            ENC_PUSH((int)strtoul(src_tok, NULL, 10));
+        }
+    }
+
+    pthread_mutex_lock(&chv->channel->mtx);
+    if (encoded_len > 0) {
+        chv->channel->buf = realloc(chv->channel->buf, (chv->channel->buf_len + (size_t)encoded_len) * sizeof(int));
+        if (!chv->channel->buf) {
+            pthread_mutex_unlock(&chv->channel->mtx);
+            free(encoded);
+            vm_debug_panic("realloc failed\n");
+        }
+        memcpy(chv->channel->buf + chv->channel->buf_len, encoded, (size_t)encoded_len * sizeof(int));
+        chv->channel->buf_len += (size_t)encoded_len;
+    }
+    pthread_mutex_unlock(&chv->channel->mtx);
+    free(encoded);
+
+#undef ENC_PUSH
+
+    int was_queued = op_wait(chv->channel, 1);
+    if (was_queued)
+        wait_for_turn_done(current_thread_args);
+}
+
+static inline void op_srecv(VM *vm, const char *frame_name)
+{
+    char *tokv[64];
+    int ntok = 0;
+    char *tok = NULL;
+    while ((tok = strtok(NULL, " \t")) && ntok < 64)
+        tokv[ntok++] = tok;
+
+    if (ntok < 2)
+        vm_debug_panic("[VM] SRECV: formato errato (atteso SRECV <v1 ...> <channel>)\n");
+
+    char *ch_name = tokv[ntok - 1];
+    int recv_count = ntok - 1;
+    uint fi = get_findex(frame_name);
+
+    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, ch_name))
+        vm_debug_panic("[VM] SRECV: channel non trovato!\n");
+    uint chi = char_id_map_get(&vm->frames[fi].VarIndexer, ch_name);
+    Var *chv = vm->frames[fi].vars[chi];
+    if (!chv || chv->T != TYPE_CHANNEL)
+        vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
+
+    op_wait(chv->channel, 0);
+
+    pthread_mutex_lock(&chv->channel->mtx);
+    ThreadArgs *sender_to_wake = chv->channel->sender_args;
+    chv->channel->sender_args = NULL;
+    if (!sender_to_wake) {
+        pthread_mutex_unlock(&chv->channel->mtx);
+        vm_debug_panic("[VM] SRECV: sender_args nullo dopo rendezvous\n");
+    }
+    size_t read_idx = 0;
+    for (int i = 0; i < recv_count; i++) {
+        Var *dest = get_var(vm, fi, tokv[i], "SRECV");
+        if (read_idx >= chv->channel->buf_len) {
+            pthread_mutex_unlock(&chv->channel->mtx);
+            vm_debug_panic("[VM] SRECV: payload insufficiente sul channel\n");
+        }
+        int marker = chv->channel->buf[read_idx++];
+        if (marker == (int)TYPE_INT) {
+            if (read_idx >= chv->channel->buf_len) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: payload int incompleto\n");
+            }
+            int popped = chv->channel->buf[read_idx++];
+            if (dest->T != TYPE_INT) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
+            }
+            var_par_mut_acquire(dest);
+            *(dest->value) += popped;
+            var_par_mut_release(dest);
+        } else if (marker == CHANNEL_REF_MARKER) {
+            if (read_idx + 1 >= chv->channel->buf_len) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: payload channel-ref incompleto\n");
+            }
+            uint32_t lo = (uint32_t)chv->channel->buf[read_idx++];
+            uint32_t hi = (uint32_t)chv->channel->buf[read_idx++];
+            uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
+            Channel *shared = (Channel *)p;
+            if (dest->T != TYPE_CHANNEL || !shared) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
+            }
+            if (dest->channel != shared) {
+                Channel *old = dest->channel;
+                lock_channel_pair(old, shared);
+                if (old) old->refcount--;
+                shared->refcount++;
+                unlock_channel_pair(old, shared);
+                dest->channel = shared;
+                if (old) {
+                    int do_free = 0;
+                    pthread_mutex_lock(&old->mtx);
+                    do_free = (old->refcount <= 0);
+                    pthread_mutex_unlock(&old->mtx);
+                    if (do_free) {
+                        pthread_mutex_destroy(&old->mtx);
+                        free(old->buf);
+                        free(old);
+                    }
+                }
+            }
+        } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
+            if (read_idx >= chv->channel->buf_len) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
+            }
+            int n = chv->channel->buf[read_idx++];
+            if (n < 0 || read_idx + (size_t)n > chv->channel->buf_len) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
+            }
+            if (dest->T != TYPE_STACK && dest->T != TYPE_CHANNEL) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
+            }
+            if (n > 0) {
+                dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int));
+                if (!dest->value) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("realloc failed\n");
+                }
+                memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int));
+                dest->stack_len += (size_t)n;
+            }
+            read_idx += (size_t)n;
+        } else {
+            pthread_mutex_unlock(&chv->channel->mtx);
+            vm_debug_panic("[VM] SRECV: marker payload sconosciuto\n");
+        }
+    }
+
+    size_t remaining = chv->channel->buf_len - read_idx;
+    if (remaining > 0)
+        memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int));
+    chv->channel->buf_len = remaining;
+    if (remaining > 0) {
+        chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int));
+        if (!chv->channel->buf) {
+            pthread_mutex_unlock(&chv->channel->mtx);
+            vm_debug_panic("realloc failed\n");
+        }
+    }
+    pthread_mutex_unlock(&chv->channel->mtx);
+
+    notify_sender_turn_done(sender_to_wake);
 }
 
 /* ======================================================================
@@ -194,7 +519,7 @@ static inline void op_show(VM *vm, const char *frame_name)
 
     if (v->T == TYPE_INT) {
         vm_printf("%s: %d\n", ID, *(v->value));
-    } else if (v->T == TYPE_STACK || v->T == TYPE_CHANNEL) {
+    } else if (v->T == TYPE_STACK) {
         char open = (v->T == TYPE_STACK) ? '[' : '<';
         char clos = (v->T == TYPE_STACK) ? ']' : '>';
         vm_printf("%s: %c", ID, open);
@@ -203,6 +528,15 @@ static inline void op_show(VM *vm, const char *frame_name)
             if (k + 1 < v->stack_len) vm_printf(", ");
         }
         vm_printf("%c\n", clos);
+    } else if (v->T == TYPE_CHANNEL) {
+        vm_printf("%s: <", ID);
+        pthread_mutex_lock(&v->channel->mtx);
+        for (size_t k = 0; k < v->channel->buf_len; k++) {
+            vm_printf("%d", v->channel->buf[k]);
+            if (k + 1 < v->channel->buf_len) vm_printf(", ");
+        }
+        pthread_mutex_unlock(&v->channel->mtx);
+        vm_printf(">\n");
     } else {
         vm_debug_panic("[VM] SHOW su variabile PARAM non linkata!\n");
     }
@@ -349,15 +683,8 @@ static inline void op_local(VM *vm, const char *frame_name)
 
     /* Se vm_exec ha già allocato questa variabile tramite DECL, la
        liberiamo: LOCAL è l'allocazione runtime autorevole. */
-    if (vm->frames[fi].vars[vi]) {
-        free(vm->frames[fi].vars[vi]->value);
-        if (vm->frames[fi].vars[vi]->channel) {
-            pthread_mutex_destroy(&vm->frames[fi].vars[vi]->channel->mtx);
-            free(vm->frames[fi].vars[vi]->channel);
-        }
-        free(vm->frames[fi].vars[vi]);
-        vm->frames[fi].vars[vi] = NULL;
-    }
+    if (vm->frames[fi].vars[vi])
+        delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count, (int)vi);
 
     vm->frames[fi].vars[vi] = malloc(sizeof(Var));
     if (!vm->frames[fi].vars[vi]) vm_debug_panic("[VM] LOCAL: malloc fallita\n");
@@ -367,6 +694,16 @@ static inline void op_local(VM *vm, const char *frame_name)
         vm->frames[fi].var_count = vi + 1;
 
     Var *dst = vm->frames[fi].vars[vi];
+
+    if (dst->T == TYPE_CHANNEL && vm->inversion_depth > 0) {
+        Channel *restored = channel_restore_pop(frame_name, Vname);
+        if (restored) {
+            pthread_mutex_destroy(&dst->channel->mtx);
+            free(dst->channel->buf);
+            free(dst->channel);
+            dst->channel = restored;
+        }
+    }
 
     if (c_val && char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
         uint  si  = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
@@ -432,7 +769,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     int ok = 0;
     if      (V->T == TYPE_INT)     ok = (*(V->value) == Vvalue);
     else if (V->T == TYPE_STACK)   ok = (V->stack_len == 0 && c_val && strcmp(c_val, "nil")   == 0);
-    else if (V->T == TYPE_CHANNEL) ok = (V->stack_len == 0 && c_val && strcmp(c_val, "empty") == 0);
+    else if (V->T == TYPE_CHANNEL) ok = (V->channel->buf_len == 0 && c_val && strcmp(c_val, "empty") == 0);
 
     if (!ok) {
         if (V->T == TYPE_INT)
@@ -446,6 +783,18 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     pthread_mutex_lock(&var_indexer_mtx);
     uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
     pthread_mutex_unlock(&var_indexer_mtx);
+
+    if (V->T == TYPE_CHANNEL && vm->inversion_depth == 0) {
+        int should_track = 0;
+        pthread_mutex_lock(&V->channel->mtx);
+        if (V->channel->refcount > 1) {
+            V->channel->refcount++;
+            should_track = 1;
+        }
+        pthread_mutex_unlock(&V->channel->mtx);
+        if (should_track)
+            channel_restore_push(frame_name, Vname, V->channel);
+    }
 
     delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count, (int)vi);
 }

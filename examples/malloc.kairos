@@ -15,7 +15,7 @@ procedure free_pool(channel ch, int n)
         i += 1
         local int index = 0
             index += i
-            ssend(index, ch)
+            ssend(<index>, ch)
         delocal int index = 0
     until i == n
     delocal int i = n
@@ -27,7 +27,7 @@ procedure mem_init(channel ch, int n)
 
 procedure mem_alloc(channel ch, stack cell)
     local int tmp = 0
-        srecv(tmp, ch)
+        srecv(<tmp>, ch)
         local int zero = 0
             push(tmp, cell)
             push(zero, cell)
@@ -40,7 +40,7 @@ procedure mem_free(channel ch, stack cell)
             pop(zero, cell)
         delocal int zero = 0
         pop(tmp, cell)
-        ssend(tmp, ch)
+        ssend(<tmp>, ch)
     delocal int tmp = 0
 
 procedure mem_collect(channel ch, stack idx_stack, int n)
@@ -48,7 +48,7 @@ procedure mem_collect(channel ch, stack idx_stack, int n)
     from i == 0 loop
         i += 1
         local int index = 0
-            srecv(index, ch)
+            srecv(<index>, ch)
             push(index, idx_stack)
         delocal int index = 0
     until i == n
