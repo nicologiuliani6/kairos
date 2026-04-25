@@ -27,7 +27,7 @@ procedure auth_server(channel req, int expected_msg)
 //  login_pipeline: riceve expected_ok e expected_code già pronti,
 //  NON chiama login_to_db internamente.
 // ----------------------------------------------------------------
-procedure login_pipeline(channel auth_req, int auth_code, int login_ok, int expected_ok, int expected_code)
+procedure login_pipeline(channel auth_req, int auth_code, int login_ok, stack garbage)
     local channel auth_resp = empty
     local int auth_req_msg = 0
         auth_req_msg += auth_code
@@ -42,14 +42,15 @@ procedure login_pipeline(channel auth_req, int auth_code, int login_ok, int expe
         //show(auth_ok)
         show(auth_reply_code)
         login_ok += auth_ok
-        auth_reply_code -= expected_code
-        auth_ok -= expected_ok
+        push(auth_reply_code, garbage)
+        push(auth_ok, garbage)
     delocal int auth_reply_code = 0
     delocal int auth_ok = 0
     delocal int auth_req_msg = 0
     delocal channel auth_resp = empty
 
 procedure main()
+    stack garbage
     local channel auth_ch = empty
     local int login_ok = 0
     int auth_code
@@ -57,16 +58,11 @@ procedure main()
         show(auth_code)
         local int expected_ok = 0
         local int expected_code = 0
-        call login_to_db(auth_code, expected_ok, expected_code)
-        call login_pipeline(auth_ch, auth_code, login_ok, expected_ok, expected_code)
+        call login_pipeline(auth_ch, auth_code, login_ok, garbage)
         if login_ok == 0 then
-            uncall login_pipeline(auth_ch, auth_code, login_ok, expected_ok, expected_code)
-            uncall login_to_db(auth_code, expected_ok, expected_code)
+            uncall login_pipeline(auth_ch, auth_code, login_ok, garbage) //ottimizzazione per svuotare il garbage!
             auth_code += 1
         fi login_ok == 0
-        if login_ok == 1 then
-            uncall login_to_db(auth_code, expected_ok, expected_code) //serve per deallocare correttamente
-        fi login_ok == 1
         delocal int expected_code = 0
         delocal int expected_ok = 0
     until login_ok == 1
