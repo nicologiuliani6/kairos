@@ -30,7 +30,7 @@ procedure auth_server(channel req, int expected_msg)
 procedure login_pipeline(channel auth_req, int auth_code, int login_ok, stack garbage)
     local channel auth_resp = empty
     local int auth_req_msg = 0
-        auth_req_msg += auth_code
+        auth_req_msg += auth_code //copia per il secondo thread
     local int auth_ok = 0
     local int auth_reply_code = 0
     par
