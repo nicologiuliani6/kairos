@@ -45,8 +45,9 @@ static inline ParBlock scan_par_block(char *par_ptr)
         char *nl = strchr(scan, '\n');
         if (!nl) break;
         *nl = '\0';
-        char tmp[512];
+        char tmp[2048];
         strncpy(tmp, scan, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw) {
             if      (strcmp(fw, "PAR_START") == 0) depth++;
@@ -74,7 +75,12 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t] = calloc(1, sizeof(ThreadArgs));
         args[t]->vm        = vm;
         args[t]->buffer    = dup_buffer ? strdup(buffer) : buffer;
-        args[t]->start_ptr   = pb->starts[t];
+        if (dup_buffer) {
+            ptrdiff_t off = pb->starts[t] - buffer;
+            args[t]->start_ptr = args[t]->buffer + off;
+        } else {
+            args[t]->start_ptr = pb->starts[t];
+        }
         args[t]->done_mtx    = &done_mtx;
         args[t]->done_cond   = &done_cond;
         args[t]->is_inverse  = is_inverse;
@@ -118,15 +124,70 @@ static void *thread_entry(void *arg)
     current_thread_args = args;
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
 
+    if (args->is_inverse) {
+        char lines[512][2048];
+        int nlines = 0;
+        int has_complex = 0;
+        char *scan = args->start_ptr;
+        while (scan && *scan && nlines < 512) {
+            char *nl = strchr(scan, '\n');
+            if (!nl) break;
+            *nl = '\0';
+            strncpy(lines[nlines], scan, sizeof(lines[nlines]) - 1);
+            lines[nlines][sizeof(lines[nlines]) - 1] = '\0';
+            char lb[2048];
+            strncpy(lb, scan, sizeof(lb) - 1);
+            lb[sizeof(lb) - 1] = '\0';
+            char *fw = strtok(skip_lineno(lb), " \t");
+            *nl = '\n';
+            if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) break;
+            if (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL") ||
+                !strcmp(fw, "JMP") || !strcmp(fw, "JMPF") ||
+                !strcmp(fw, "EVAL") || !strcmp(fw, "ASSERT") ||
+                !strcmp(fw, "PAR_START")) {
+                has_complex = 1;
+            }
+            nlines++;
+            scan = nl + 1;
+        }
+
+        if (!has_complex) {
+            for (int i = nlines - 1; i >= 0; i--) {
+                char lb[2048];
+                strncpy(lb, lines[i], sizeof(lb) - 1);
+                lb[sizeof(lb) - 1] = '\0';
+                char *fw = strtok(skip_lineno(lb), " \t");
+                if (!fw) continue;
+                if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, fname);
+                else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, fname);
+                else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, fname);
+                else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, fname);
+                else if (!strcmp(fw, "PUSH"))   op_pop       (vm, fname);
+                else if (!strcmp(fw, "POP"))    op_push      (vm, fname);
+                else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, fname);
+                else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, fname);
+                else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, fname);
+                else if (!strcmp(fw, "DELOCAL"))op_local     (vm, fname);
+                else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
+                else if (!strcmp(fw, "START") || !strcmp(fw, "PARAM") ||
+                         !strcmp(fw, "LABEL") || !strcmp(fw, "DECL")) { /* skip */ }
+                else { vm_debug_panic("[THREAD-INV] op sconosciuta: '%s'\n", fw); }
+            }
+            goto thread_exit;
+        }
+    }
+
     char *ptr = args->start_ptr;
 
     while (ptr && *ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[512]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        lb[sizeof(lb) - 1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
 
         if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END"))
             { *nl = '\n'; break; }
+
         if (vm->dbg && vm->dbg->initialized) {
             if (!strcmp(fw, "DECL") || !strcmp(fw, "LABEL")) {
                 vm->dbg->current_line = par_extract_srcline(ptr);
@@ -143,7 +204,7 @@ static void *thread_entry(void *arg)
             ptr = pb.after_end ? pb.after_end : nl + 1;
             continue;
         }
-        else if (!strcmp(fw, "SHOW"))   op_show   (vm, fname);
+        else if (!strcmp(fw, "SHOW"))   { if (!args->is_inverse) op_show(vm, fname); }
         else if (!strcmp(fw, "PUSHEQ")) op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))  op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))  op_xoreq  (vm, fname);
@@ -156,8 +217,10 @@ static void *thread_entry(void *arg)
             { if (args->is_inverse) op_srecv(vm, fname); else op_ssend(vm, fname); }
         else if (!strcmp(fw, "SRECV"))
             { if (args->is_inverse) op_ssend(vm, fname); else op_srecv(vm, fname); }
-        else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
-        else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
+        else if (!strcmp(fw, "LOCAL"))
+            { if (args->is_inverse) op_delocal(vm, fname); else op_local(vm, fname); }
+        else if (!strcmp(fw, "DELOCAL"))
+            { if (args->is_inverse) op_local(vm, fname); else op_delocal(vm, fname); }
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
@@ -207,7 +270,7 @@ static void *thread_entry(void *arg)
 
         *nl = '\n'; ptr = nl + 1;
     }
-
+thread_exit:
     /* Sveglia sender pendente prima di terminare */
     if (args->sender_to_notify) {
         ThreadArgs *s = args->sender_to_notify;

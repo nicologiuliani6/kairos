@@ -68,7 +68,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
 
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[512]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        lb[sizeof(lb) - 1] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
@@ -120,12 +121,23 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
 
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[512]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        lb[sizeof(lb) - 1] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
 
-        if (!strcmp(fw, "EVAL")) {
+        if (!strcmp(fw, "EVAL") && in_if) {
+            /* Chiusura IF nel bytecode corrente: dopo FI viene emesso EVAL di uscita
+               (non ASSERT). */
+            out[n].eval_exit_line = cur;
+            char *a = strtok(NULL, " \t");  /* lhs */
+            strtok(NULL, " \t");            /* op  */
+            char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
+            strncpy(out[n].eval_exit_id,  a   ? a   : "", 63);
+            strncpy(out[n].eval_exit_val, rhs,             63);
+            out[n].assert_line = cur; in_if = 0; n++;
+        } else if (!strcmp(fw, "EVAL")) {
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
             strtok(NULL, " \t");            /* op  */
@@ -226,7 +238,8 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= proc_end) { *nl = '\n'; break; }
-        char tmp[512]; strncpy(tmp, ptr, sizeof(tmp) - 1);
+        char tmp[2048]; strncpy(tmp, ptr, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "PAR_START")) {
             out[n].start_line = cur;
@@ -235,7 +248,8 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
             *nl = '\n';
             while (scan && *scan && depth > 0) {
                 char *nl2 = strchr(scan, '\n'); if (!nl2) break; *nl2 = '\0';
-                char tmp2[512]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
+                char tmp2[2048]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
+                tmp2[sizeof(tmp2) - 1] = '\0';
                 char *fw2  = strtok(skip_lineno(tmp2), " \t");
                 uint  cur2 = (uint)atoi(scan);
                 if (fw2) {
@@ -305,7 +319,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     IfDescriptor   ifs  [MAX_IFS];   int nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
 
     char cur_frame[VAR_NAME_LENGTH]; strncpy(cur_frame, frame_name, VAR_NAME_LENGTH - 1);
-    uint fi       = char_id_map_get(&FrameIndexer, cur_frame);
+    uint fi       = get_findex(cur_frame);
     uint start_ln = vm->frames[fi_reset].addr + 1;
 
     /* Raccoglie i range PAR della procedura per skippare le istruzioni
@@ -319,7 +333,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         char *newline = strchr(ptr, '\n'); if (!newline) break;
         *newline = '\0';
         uint cur_ln = (uint)atoi(ptr);
-        char tmp[512]; strncpy(tmp, ptr, sizeof(tmp) - 1);
+        char tmp[2048]; strncpy(tmp, ptr, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "END_PROC")) { *newline = '\n'; break; }
         if (cur_ln <= start && cur_ln > stop) {   // ← già corretto
@@ -331,7 +346,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
     int i = nl - 1;
     while (i >= 0) {
-        char ob[512]; strncpy(ob, lp[i], sizeof(ob) - 1);
+        char ob[2048]; strncpy(ob, lp[i], sizeof(ob) - 1);
+        ob[sizeof(ob) - 1] = '\0';
         uint  cur   = ln[i];
         char *clean = skip_lineno(ob);
         char *fw    = strtok(clean, " \t");
@@ -372,14 +388,49 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if (iz == IF_ZONE_JMPF_ELSE) {
             int depth = vm->frames[fi_reset].recursion_depth;
-            for (int d = 0; d < depth; d++) {
-                Stack sv = vm->frames[fi].LocalVariables; stack_init(&vm->frames[fi].LocalVariables);
-                exec_branch_inverse(vm, orig, cur_frame, ifs[ii].else_label_line + 1, ifs[ii].fi_label_line, fi);
+            if (depth > 0) {
+                /* Recursive procedure: the entry guard can be overwritten by nested calls.
+                   Use recorded recursion depth to replay ELSE inversions, then base THEN. */
+                for (int d = 0; d < depth; d++) {
+                    uint else_from = ifs[ii].else_label_line + 1;
+                    uint else_to = ifs[ii].fi_label_line;
+                    if (else_from >= else_to) break;
+                    Stack sv = vm->frames[fi].LocalVariables;
+                    stack_init(&vm->frames[fi].LocalVariables);
+                    exec_branch_inverse(vm, orig, cur_frame, else_from, else_to, fi);
+                    vm->frames[fi].LocalVariables = sv;
+                }
+                uint then_from = ifs[ii].jmpf_else_line + 1;
+                uint then_to = ifs[ii].jmp_fi_line;
+                if (then_from < then_to) {
+                    Stack sv = vm->frames[fi].LocalVariables;
+                    stack_init(&vm->frames[fi].LocalVariables);
+                    exec_branch_inverse(vm, orig, cur_frame, then_from, then_to, fi);
+                    vm->frames[fi].LocalVariables = sv;
+                }
+            } else {
+                do_eval(vm, fi, ifs[ii].eval_entry_id, ifs[ii].eval_entry_val);
+                uint branch_from = 0, branch_to = 0;
+                if (thread_val_IF) {
+                    /* Forward IF condition true: invert only THEN branch. */
+                    branch_from = ifs[ii].jmpf_else_line + 1;
+                    branch_to = ifs[ii].jmp_fi_line;
+                } else {
+                    /* Forward IF condition false: invert only ELSE branch. */
+                    branch_from = ifs[ii].else_label_line + 1;
+                    branch_to = ifs[ii].fi_label_line;
+                }
+                if (branch_from >= branch_to) {
+                    int t = -1;
+                    for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
+                    i = (t >= 0) ? t - 1 : i - 1;
+                    continue;
+                }
+                Stack sv = vm->frames[fi].LocalVariables;
+                stack_init(&vm->frames[fi].LocalVariables);
+                exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
                 vm->frames[fi].LocalVariables = sv;
             }
-            { Stack sv = vm->frames[fi].LocalVariables; stack_init(&vm->frames[fi].LocalVariables);
-              exec_branch_inverse(vm, orig, cur_frame, ifs[ii].jmpf_else_line + 1, ifs[ii].jmp_fi_line, fi);
-              vm->frames[fi].LocalVariables = sv; }
             int t = -1;
             for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
             i = (t >= 0) ? t - 1 : i - 1;
@@ -417,7 +468,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
                               : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                      : char_id_map_get(&FrameIndexer, pn));
-            uint curi = char_id_map_get(&FrameIndexer, frame_name);
+            uint curi = get_findex(frame_name);
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
             char *p = NULL; int j = 0;
@@ -522,7 +573,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         else if (!strcmp(fw, "SRECV")) op_ssend(vm, cur_frame);
         else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, cur_frame);
         else if (!strcmp(fw, "DELOCAL"))op_local     (vm, cur_frame);
-        else if (!strcmp(fw, "SHOW"))   op_show      (vm, cur_frame);
+        else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
         else if (!strcmp(fw, "START")   || !strcmp(fw, "PARAM")   || !strcmp(fw, "LABEL")   ||
                  !strcmp(fw, "EVAL")    || !strcmp(fw, "JMPF")    || !strcmp(fw, "JMP")     ||
                  !strcmp(fw, "ASSERT")   || !strcmp(fw, "DECL")    || !strcmp(fw, "HALT")    ||
@@ -560,7 +611,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         *nl = '\n'; ptr = nl + 1;
     }
 
-    uint cfi = char_id_map_get(&FrameIndexer, frame_name);
+    uint cfi = get_findex(frame_name);
     Var *saved[MAX_VARS]; memcpy(saved, vm->frames[cfi].vars, sizeof(Var *) * MAX_VARS);
     Stack saved_lv = vm->frames[cfi].LocalVariables;
     stack_init(&vm->frames[cfi].LocalVariables);
@@ -586,7 +637,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     }
 
     for (int i = count - 1; i >= 0; i--) {
-        char ob[512]; strncpy(ob, lines[i], sizeof(ob) - 1);
+        char ob[2048]; strncpy(ob, lines[i], sizeof(ob) - 1);
+        ob[sizeof(ob) - 1] = '\0';
         char *fw = strtok(skip_lineno(ob), " \t");
         if (!fw || !strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) continue;
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
@@ -597,7 +649,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
         else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
         else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
-        else if (!strcmp(fw, "SHOW"))   op_show      (vm, frame_name);
+        else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
     }
 
     for (int v = 0; v < vm->frames[cfi].var_count; v++)

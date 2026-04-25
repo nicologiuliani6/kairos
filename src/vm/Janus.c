@@ -85,7 +85,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         Stack saved_local_vars;
         int   is_recursive_clone;
     } CallRecord;
-
     CallRecord cs[MAX_FRAMES]; int cs_top = -1;
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si].addr + 1);
@@ -93,7 +92,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[512]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
         lb[sizeof(lb)-1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
 
@@ -213,10 +212,15 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             uint  curi = get_findex(fname);
             int   pc  = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             Var  *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            Stack slv = vm->frames[cfi].LocalVariables;
+            stack_init(&vm->frames[cfi].LocalVariables);
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
                 int src = char_id_map_get(&vm->frames[curi].VarIndexer, p);
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[curi].vars[src];
+            }
+            if (ii != pc) {
+                vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn);
             }
             VMLOG("[UNCALL] param linkati: %d, end_addr=%u addr=%u\n",
                     ii, vm->frames[cfi].end_addr, vm->frames[cfi].addr);
@@ -230,6 +234,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
+            vm->frames[cfi].LocalVariables = slv;
             *nl = '\n'; ptr = nl + 1; continue;
         }
         else if (!strcmp(fw, "PAR_START")) {

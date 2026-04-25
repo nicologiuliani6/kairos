@@ -1,0 +1,74 @@
+// ================================================================
+//  LOGIN PIPELINE - CHANNEL PASSING (pi-calculus style)
+// ================================================================
+
+procedure login_to_db(int auth_code, int expected_ok, int expected_code)
+    if auth_code == 12 then
+        expected_ok += 1
+        expected_code += 200
+    else
+        expected_code += 401
+    fi auth_code == 12
+
+procedure auth_server(channel req, int expected_msg)
+    local int msg = 0
+    local channel reply = empty
+        srecv(<msg, reply>, req)
+    local int out_status = 0
+    local int out_code = 0
+        call login_to_db(msg, out_status, out_code)
+        ssend(<out_status, out_code>, reply)
+    delocal int out_code = 0
+    delocal int out_status = 0
+    delocal channel reply = empty
+    delocal int msg = expected_msg
+
+// ----------------------------------------------------------------
+//  login_pipeline: riceve expected_ok e expected_code già pronti,
+//  NON chiama login_to_db internamente.
+// ----------------------------------------------------------------
+procedure login_pipeline(channel auth_req, int auth_code, int login_ok, int expected_ok, int expected_code)
+    local channel auth_resp = empty
+    local int auth_req_msg = 0
+        auth_req_msg += auth_code
+    local int auth_ok = 0
+    local int auth_reply_code = 0
+    par
+        auth_server(auth_req, auth_code)
+    and
+        ssend(<auth_req_msg, auth_resp>, auth_req)
+        srecv(<auth_ok, auth_reply_code>, auth_resp)
+    rap
+        //show(auth_ok)
+        show(auth_reply_code)
+        login_ok += auth_ok
+        auth_reply_code -= expected_code
+        auth_ok -= expected_ok
+    delocal int auth_reply_code = 0
+    delocal int auth_ok = 0
+    delocal int auth_req_msg = 0
+    delocal channel auth_resp = empty
+
+procedure main()
+    local channel auth_ch = empty
+    local int login_ok = 0
+    int auth_code
+    from auth_code == 0 loop
+        show(auth_code)
+        local int expected_ok = 0
+        local int expected_code = 0
+        call login_to_db(auth_code, expected_ok, expected_code)
+        call login_pipeline(auth_ch, auth_code, login_ok, expected_ok, expected_code)
+        if login_ok == 0 then
+            uncall login_pipeline(auth_ch, auth_code, login_ok, expected_ok, expected_code)
+            uncall login_to_db(auth_code, expected_ok, expected_code)
+            auth_code += 1
+        fi login_ok == 0
+        if login_ok == 1 then
+            uncall login_to_db(auth_code, expected_ok, expected_code) //serve per deallocare correttamente
+        fi login_ok == 1
+        delocal int expected_code = 0
+        delocal int expected_ok = 0
+    until login_ok == 1
+    delocal int login_ok = 1
+    delocal channel auth_ch = empty
