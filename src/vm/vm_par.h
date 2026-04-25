@@ -148,10 +148,14 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "MINEQ"))  op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))  op_xoreq  (vm, fname);
         else if (!strcmp(fw, "SWAP"))   op_swap   (vm, fname);
-        else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND"))
+        else if (!strcmp(fw, "PUSH"))
             { if (args->is_inverse) op_pop(vm, fname); else op_push(vm, fname); }
-        else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV"))
+        else if (!strcmp(fw, "POP"))
             { if (args->is_inverse) op_push(vm, fname); else op_pop(vm, fname); }
+        else if (!strcmp(fw, "SSEND"))
+            { if (args->is_inverse) op_srecv(vm, fname); else op_ssend(vm, fname); }
+        else if (!strcmp(fw, "SRECV"))
+            { if (args->is_inverse) op_ssend(vm, fname); else op_srecv(vm, fname); }
         else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
         else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);

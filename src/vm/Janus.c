@@ -149,7 +149,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 new_depth = cd + 1;
             }
             uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
-                              : char_id_map_get(&FrameIndexer, pn);
+                              : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                     : char_id_map_get(&FrameIndexer, pn));
             if (cs_top + 1 >= MAX_FRAMES) vm_debug_panic("[VM] CALL: stack overflow!\n");
             cs_top++;
             *nl = '\n';
@@ -191,8 +192,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 else
                     make_frame_key(pn, new_depth, nfname, sizeof(nfname));
             } else {
-                strncpy(nfname, pn, VAR_NAME_LENGTH - 1);
-                nfname[VAR_NAME_LENGTH - 1] = '\0';
+                if (current_thread_args)
+                    make_thread_frame_key(pn, nfname, sizeof(nfname));
+                else {
+                    strncpy(nfname, pn, VAR_NAME_LENGTH - 1);
+                    nfname[VAR_NAME_LENGTH - 1] = '\0';
+                }
             }
             strncpy(fname, nfname, VAR_NAME_LENGTH - 1);
             ptr = go_to_line(orig, vm->frames[cfi].addr + 1);
@@ -203,7 +208,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             vm_if_mark_call();
             char *pn  = strtok(NULL, " \t");
             VMLOG("[UNCALL] chiamato per '%s'\n", pn ? pn : "NULL");
-            uint  cfi = char_id_map_get(&FrameIndexer, pn);
+            uint  cfi = current_thread_args ? clone_frame_for_thread(vm, pn)
+                                            : char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
             int   pc  = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             Var  *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
@@ -214,7 +220,14 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             VMLOG("[UNCALL] param linkati: %d, end_addr=%u addr=%u\n",
                     ii, vm->frames[cfi].end_addr, vm->frames[cfi].addr);
-            invert_op_to_line(vm, pn, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            char inv_name[VAR_NAME_LENGTH];
+            if (current_thread_args)
+                make_thread_frame_key(pn, inv_name, sizeof(inv_name));
+            else {
+                strncpy(inv_name, pn, sizeof(inv_name) - 1);
+                inv_name[sizeof(inv_name) - 1] = '\0';
+            }
+            invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             *nl = '\n'; ptr = nl + 1; continue;
@@ -233,8 +246,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
         else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
-        else if (!strcmp(fw, "PUSH") || !strcmp(fw, "SSEND")) op_push(vm, fname);
-        else if (!strcmp(fw, "POP")  || !strcmp(fw, "SRECV")) op_pop (vm, fname);
+        else if (!strcmp(fw, "PUSH"))  op_push (vm, fname);
+        else if (!strcmp(fw, "POP"))   op_pop  (vm, fname);
+        else if (!strcmp(fw, "SSEND")) op_ssend(vm, fname);
+        else if (!strcmp(fw, "SRECV")) op_srecv(vm, fname);
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
@@ -361,7 +376,19 @@ void vm_free(VM *vm)
                     Var *to_free = v;
                     /* Evita double-free quando piu` slot puntano alla stessa Var
                        (es. alias parametri durante call/uncall in debug rebuild). */
-                    if (to_free->value) free(to_free->value);
+                    if (to_free->T == TYPE_CHANNEL && to_free->channel) {
+                        pthread_mutex_lock(&to_free->channel->mtx);
+                        to_free->channel->refcount--;
+                        int do_free = (to_free->channel->refcount <= 0);
+                        pthread_mutex_unlock(&to_free->channel->mtx);
+                        if (do_free) {
+                            pthread_mutex_destroy(&to_free->channel->mtx);
+                            if (to_free->channel->buf) free(to_free->channel->buf);
+                            free(to_free->channel);
+                        }
+                    } else if (to_free->value) {
+                        free(to_free->value);
+                    }
                     free(to_free);
                     if (freed_count < (MAX_FRAMES * MAX_VARS))
                         freed[freed_count++] = to_free;
@@ -390,9 +417,11 @@ void vm_dump(VM *vm)
                 vm_printf("%d", *(v->value));
             } else {
                 vm_printf("[");
-                for (size_t k = 0; k < v->stack_len; k++) {
-                    vm_printf("%d", v->value[k]);
-                    if (k + 1 < v->stack_len) vm_printf(", ");
+                size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
+                int *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
+                for (size_t k = 0; k < n; k++) {
+                    vm_printf("%d", arr[k]);
+                    if (k + 1 < n) vm_printf(", ");
                 }
                 vm_printf("]");
             }

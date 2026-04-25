@@ -1,0 +1,34 @@
+procedure sender(channel transport, int x, stack s, channel aux)
+    ssend(<x, s, aux>, transport)
+
+procedure receiver(channel transport, int y, stack t, channel dst)
+    srecv(<y, t, dst>, transport)
+
+procedure main()
+    channel transport
+    local int x = 7
+    local stack s = nil
+    local int seed = 3
+    push(seed, s)
+    delocal int seed = 0
+
+    local int y = 0
+    local stack t = nil
+    local channel aux = empty
+    local channel dst = empty
+
+    par
+        sender(transport, x, s, aux)
+    and
+        receiver(transport, y, t, dst)
+    rap
+
+    local int chk = 0
+    pop(chk, t)
+    delocal int chk = 3
+    delocal channel dst = empty
+    delocal channel aux = empty
+    delocal stack t = nil
+    delocal int y = 7
+    delocal stack s = nil
+    delocal int x = 0

@@ -30,6 +30,9 @@ typedef struct {
     Waiter *send_q_head, *send_q_tail;
     Waiter *recv_q_head, *recv_q_tail;
     ThreadArgs *sender_args;
+    int *buf;
+    size_t buf_len;
+    int refcount;
 } Channel;
 
 #define VAR_NAME_LENGTH      100

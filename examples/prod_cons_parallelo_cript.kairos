@@ -9,7 +9,7 @@ procedure producer(channel ch, int n)
         local int item = 0
             item += i
             call encrypt(item, pub_key)
-            ssend(item, ch) 
+            ssend(<item>, ch) 
         delocal int item = 0
     until i == n
     delocal int i = n
@@ -20,7 +20,7 @@ procedure consumer(channel ch, stack result, int n)
     local int i = 0
     from i == 0 loop
         local int item = 0
-            srecv(item, ch) 
+            srecv(<item>, ch) 
             uncall encrypt(item, priv_key)
             push(item, result)
         delocal int item = 0

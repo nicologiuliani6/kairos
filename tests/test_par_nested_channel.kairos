@@ -9,19 +9,19 @@ procedure main()
     int x22
     par
         show(x11)
-        ssend(x11, c)
+        ssend(<x11>, c)
         show(x11)
     and
         par
             show(x12)
-            ssend(x12, c)
+            ssend(<x12>, c)
             show(x12)
         and
             show(x21)
-            srecv(x21, c)
+            srecv(<x21>, c)
             show(x21)
             show(x22)
-            srecv(x22, c)
+            srecv(<x22>, c)
             show(x22)
         rap
     rap

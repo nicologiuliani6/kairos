@@ -3,9 +3,11 @@
 
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define CHAR_ID_MAP_SIZE 256
-#define CHAR_ID_MAP_NAME_LEN 32
+#define CHAR_ID_MAP_NAME_LEN 128
 
 typedef struct {
     char names[CHAR_ID_MAP_SIZE][CHAR_ID_MAP_NAME_LEN];
@@ -30,6 +32,10 @@ static inline int char_id_map_get(CharIdMap *m, const char *name) {
     for (int i = 0; i < m->count; i++) {
         if (strcmp(m->names[i], name) == 0)
             return i;
+    }
+    if (m->count >= CHAR_ID_MAP_SIZE) {
+        fprintf(stderr, "[VM] CHAR_ID_MAP overflow (%d) on '%s'\n", CHAR_ID_MAP_SIZE, name);
+        exit(1);
     }
     int id = m->count++;
     strncpy(m->names[id], name, CHAR_ID_MAP_NAME_LEN - 1);
