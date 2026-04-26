@@ -268,6 +268,16 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "START") ||
                  !strcmp(fw, "PROC") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "HALT"))  { /* skip */ }
+        /* Dopo END_PROC il return_ptr può cadere su THREAD_* o PAR_END: è la fine
+         * del branch fisico nel bytecode. thread_entry salta così; qui vm_run_BT
+         * annidato (CALL da worker) deve terminare allo stesso modo. */
+        else if (strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) {
+            *nl = '\n';
+            if (current_thread_args) {
+                goto done;
+            }
+            vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw);
+        }
         else { vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw); }
 
         *nl = '\n'; ptr = nl + 1;

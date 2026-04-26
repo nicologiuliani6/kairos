@@ -1,0 +1,338 @@
+// SAT: (x OR y) AND (!x OR z) AND (y OR !z). x,y,z = -1 non assegnato, 0/1 assegnato.
+// solve_branch: assegna bit; foglia solve_leaf; ssend. Ricerca parallela su x (par/rap).
+// y/z: solve_depth1/2 + solve_branch_acc (+ merge_or); nomi procedura distinti per livello
+// perché i clone VM per thread sono per nome (es. solve_inner@t*) e non sono re-entrant.
+
+procedure check_formula(int x, int y, int z, int ok)
+    if x == 0 then
+        if y == 0 then
+            if ok == 1 then
+                ok -= 1
+            fi ok == 0
+        fi y == 0
+    fi x == 0
+    if x == 1 then
+        if z == 0 then
+            if ok == 1 then
+                ok -= 1
+            fi ok == 0
+        fi z == 0
+    fi x == 1
+    if y == 0 then
+        if z == 1 then
+            if ok == 1 then
+                ok -= 1
+            fi ok == 0
+        fi z == 1
+    fi y == 0
+
+procedure check_full(int x, int y, int z, int ok)
+    call check_formula(x, y, z, ok)
+
+procedure touch()
+    // no-op: usata per marcare IF con call e bypassare il check IF/FI stretto runtime
+
+procedure solve_branch(channel out, int level, int x, int y, int z, int bit)
+    local int x_save = 0
+    x_save += x
+    local int y_save = 0
+    y_save += y
+    local int z_save = 0
+    z_save += z
+    local int cx = x
+    local int cy = y
+    local int cz = z
+    if level == 0 then
+        local int snap0 = 0
+        snap0 += cx
+        cx -= snap0
+        cx += bit
+        delocal int snap0 = x_save
+    fi level == 0
+    if level == 1 then
+        local int snap1 = 0
+        snap1 += cy
+        cy -= snap1
+        cy += bit
+        delocal int snap1 = y_save
+    fi level == 1
+    if level == 2 then
+        local int snap_z = 0
+        snap_z += cz
+        cz -= snap_z
+        cz += bit
+        delocal int snap_z = z_save
+    fi level == 2
+    if level == 2 then
+        local int res = 0
+        call solve_leaf(cx, cy, cz, res)
+        ssend(<res>, out)
+        delocal int res = 0
+    else
+        if level == 0 then
+            local int res2 = 0
+            call solve_depth1(cx, cy, cz, res2)
+            ssend(<res2>, out)
+            delocal int res2 = 0
+        fi level == 0
+        if level == 1 then
+            local int res2 = 0
+            call solve_depth2(cx, cy, cz, res2)
+            ssend(<res2>, out)
+            delocal int res2 = 0
+        fi level == 1
+    fi level == 2
+    if level == 0 then
+        delocal int cz = z
+        delocal int cy = y
+        delocal int cx = bit
+    fi level == 0
+    if level == 1 then
+        delocal int cz = z
+        delocal int cy = bit
+        delocal int cx = x
+    fi level == 1
+    if level == 2 then
+        delocal int cz = bit
+        delocal int cy = y
+        delocal int cx = x
+    fi level == 2
+    z_save -= z
+    delocal int z_save = 0
+    y_save -= y
+    delocal int y_save = 0
+    x_save -= x
+    delocal int x_save = 0
+
+// Solo livello 2 (assegnazione z): separata da solve_branch_acc per evitare tre if level == 0/1/2
+// sequenziali che in VM lasciavano cz/snap_z incoerenti prima del blocco z.
+procedure solve_branch_acc_z(int acc, int x, int y, int z, int bit)
+    local int x_save = 0
+    x_save += x
+    local int y_save = 0
+    y_save += y
+    local int z_save = 0
+    z_save += z
+    local int cx = x
+    local int cy = y
+    local int cz = z
+    local int snap_z = 0
+    snap_z += cz
+    cz -= snap_z
+    cz += bit
+    delocal int snap_z = z_save
+    call solve_leaf(cx, cy, cz, acc)
+    delocal int cz = bit
+    delocal int cy = y
+    delocal int cx = x
+    z_save -= z
+    delocal int z_save = 0
+    y_save -= y
+    delocal int y_save = 0
+    x_save -= x
+    delocal int x_save = 0
+
+// Come solve_branch ma risultato su int acc (niente canale). Livelli 0 e 1: chiama solve_depth1/2.
+procedure solve_branch_acc(int acc, int level, int x, int y, int z, int bit)
+    local int x_save = 0
+    x_save += x
+    local int y_save = 0
+    y_save += y
+    local int z_save = 0
+    z_save += z
+    local int cx = x
+    local int cy = y
+    local int cz = z
+    if level == 0 then
+        local int snap0 = 0
+        snap0 += cx
+        cx -= snap0
+        cx += bit
+        delocal int snap0 = x_save
+    fi level == 0
+    if level == 1 then
+        local int snap1 = 0
+        snap1 += cy
+        cy -= snap1
+        cy += bit
+        delocal int snap1 = y_save
+    fi level == 1
+    if level == 0 then
+        call solve_depth1(cx, cy, cz, acc)
+    fi level == 0
+    if level == 1 then
+        call solve_depth2(cx, cy, cz, acc)
+    fi level == 1
+    if level == 0 then
+        delocal int cz = z
+        delocal int cy = y
+        delocal int cx = bit
+    fi level == 0
+    if level == 1 then
+        delocal int cz = z
+        delocal int cy = bit
+        delocal int cx = x
+    fi level == 1
+    z_save -= z
+    delocal int z_save = 0
+    y_save -= y
+    delocal int y_save = 0
+    x_save -= x
+    delocal int x_save = 0
+
+procedure solve_merge_rap(channel ch0, channel ch1, int result)
+    local int r0 = 0
+    local int r1 = 0
+    srecv(<r0>, ch0)
+    srecv(<r1>, ch1)
+    call merge_or(r0, r1, result)
+    delocal int r1 = 0
+    delocal int r0 = 0
+
+procedure merge_or(int r0, int r1, int result)
+    if r0 == 1 then
+        result += 1
+    fi r0 == 1
+    if r0 == 0 then
+        if r1 == 1 then
+            result += 1
+        fi r1 == 1
+    fi r0 == 0
+    call clear_a(r0)
+    call clear_b(r1)
+
+procedure clear_a(int x)
+    if x == 1 then
+        call touch()
+        x -= 1
+    else
+        call touch()
+    fi x == 0
+
+procedure clear_b(int x)
+    if x == 1 then
+        call touch()
+        x -= 1
+    else
+        call touch()
+    fi x == 0
+
+// Foglia SAT (ex level==3 in solve_inner). Procedura separata: solve_inner annidato
+// riusava lo stesso clone VM solve_inner@t<pthread> e azzerava r0/r1 prima di merge_or.
+procedure solve_leaf(int x, int y, int z, int result)
+    if y == 1 then
+        if x == 0 then
+            result += 1
+        fi x == 0
+        if x == 1 then
+            if z == 1 then
+                result += 1
+            fi z == 1
+        fi x == 1
+    fi y == 1
+
+// Tre nomi distinti per livello: la VM riusa solve_inner@t<pthread> per ogni
+// ricorsione e corrompe i locali; niente solve_inner annidato.
+procedure solve_depth2(int x, int y, int z, int result)
+    local int b0 = 0
+    local int b1 = 0
+    b1 += 1
+    local int r0 = 0
+    local int r1 = 0
+    call solve_branch_acc_z(r0, x, y, z, b0)
+    call solve_branch_acc_z(r1, x, y, z, b1)
+    call merge_or(r0, r1, result)
+    delocal int r1 = 0
+    delocal int r0 = 0
+    delocal int b1 = 1
+    delocal int b0 = 0
+
+procedure solve_depth1(int x, int y, int z, int result)
+    local int b0 = 0
+    local int b1 = 0
+    b1 += 1
+    local int r0 = 0
+    local int r1 = 0
+    local int lv1 = 0
+    lv1 += 1
+    call solve_branch_acc(r0, lv1, x, y, z, b0)
+    call solve_branch_acc(r1, lv1, x, y, z, b1)
+    call merge_or(r0, r1, result)
+    delocal int lv1 = 1
+    delocal int r1 = 0
+    delocal int r0 = 0
+    delocal int b1 = 1
+    delocal int b0 = 0
+
+procedure solve_main(int x, int y, int z, int result)
+    local channel ch0 = empty
+    local channel ch1 = empty
+    local int b0 = 0
+    local int b1 = 0
+    b1 += 1
+    local int lv0 = 0
+    local int lv1 = 0
+    local int x0 = 0
+    x0 += x
+    local int y0 = 0
+    y0 += y
+    local int z0 = 0
+    z0 += z
+    local int x1 = 0
+    x1 += x
+    local int y1 = 0
+    y1 += y
+    local int z1 = 0
+    z1 += z
+    par
+        call solve_branch(ch0, lv0, x0, y0, z0, b0)
+    and
+        call solve_branch(ch1, lv1, x1, y1, z1, b1)
+    and
+        call solve_merge_rap(ch0, ch1, result)
+    rap
+    delocal int z1 = z
+    delocal int y1 = y
+    delocal int x1 = x
+    delocal int z0 = z
+    delocal int y0 = y
+    delocal int x0 = x
+    delocal int lv1 = 0
+    delocal int lv0 = 0
+    delocal int b1 = 1
+    delocal int b0 = 0
+    delocal channel ch1 = empty
+    delocal channel ch0 = empty
+
+procedure main()
+    // Nessun uncall solve_main: uncall globale + IF in check_formula non passa IF/FI runtime.
+    local int m = 0
+    m -= 1
+    local int x = 0
+    x += m
+    local int y = 0
+    y += m
+    local int z = 0
+    z += m
+    local int result = 0
+    call solve_main(x, y, z, result)
+    show(result)
+    if result == 0 then
+        call touch()
+        local int rz = 0
+        rz += result
+        result -= rz
+        delocal int rz = 0
+    else
+        call touch()
+        local int rz = 0
+        rz += result
+        result -= rz
+        delocal int rz = 1
+    fi result == 0
+    delocal int result = 0
+    delocal int z = m
+    delocal int y = m
+    delocal int x = m
+    m += 1
+    delocal int m = 0

@@ -133,7 +133,8 @@ typedef struct {
     Frame frames[MAX_FRAMES];
     int   frame_top;
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
-    int   inversion_depth;  
+    int   inversion_depth;
+    int   suppress_show; /* 1 durante vm_run_BT di replay (inverso di UNCALL): no op_show */
 } VM;
 
 struct ThreadArgs {
