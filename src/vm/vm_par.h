@@ -244,9 +244,7 @@ static void *thread_entry(void *arg)
                              (!strcmp(fw, "UNCALL")  && !args->is_inverse));
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
-            pthread_mutex_lock(&var_indexer_mtx);
             uint cfi = clone_frame_for_thread(vm, pn);
-            pthread_mutex_unlock(&var_indexer_mtx);
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
             Stack slv = vm->frames[cfi].LocalVariables; stack_init(&vm->frames[cfi].LocalVariables);
@@ -259,8 +257,12 @@ static void *thread_entry(void *arg)
             if (do_invert)
                 invert_op_to_line(vm, thread_key, args->buffer,
                                   vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
-            else
+            else {
+                int ss = vm->suppress_show;
+                if (args->is_inverse) vm->suppress_show = 1;
                 vm_run_BT(vm, args->buffer, thread_key);
+                vm->suppress_show = ss;
+            }
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             vm->frames[cfi].LocalVariables = slv;
         }

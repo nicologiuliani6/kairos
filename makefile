@@ -79,7 +79,7 @@ $(VERSCRIPT): $(VM_SOURCES)
 
 run: build-release
 ifndef FILE
-	$(error Specifica il file: make run FILE=tests/test_from_local_show.kairos)
+	$(error Specifica il file senza spazi intorno a = — es.: make run FILE=examples/example_login.kairos — non "FILE = ...")
 endif
 	@echo "$(CYAN)Esecuzione: $(FILE)$(RESET)"
 	$(PYTHON) -m src.kairos $(FILE) --dump-bytecode
@@ -164,7 +164,7 @@ help:
 	@echo "  $(GREEN)make build-release$(RESET)           Compila libvm.so (-O2)"
 	@echo "  $(GREEN)make build-dap$(RESET)               Compila libvm_dap.so"
 	@echo "  $(GREEN)make test-dap$(RESET)                Test C debugger (pipe + loop lungo)"
-	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma"
+	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma (FILE=... attaccato, no spazi)"
 	@echo "  $(GREEN)make test$(RESET)                    tests/*.kairos + examples/ (vedi KAIROS_EXCLUDE nel makefile)"
 	@echo "  $(GREEN)make release$(RESET)                 Build KairosApp con PyInstaller"
 	@echo "  $(GREEN)make install-deps$(RESET)            Crea venv e installa dipendenze"

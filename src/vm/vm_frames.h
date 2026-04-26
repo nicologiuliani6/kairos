@@ -36,28 +36,38 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
 
 static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 {
+    pthread_mutex_lock(&var_indexer_mtx);
     char key[VAR_NAME_LENGTH];
     if (current_thread_args)
         make_frame_key_par_rec(proc, depth, key, sizeof(key));
     else
         make_frame_key(proc, depth, key, sizeof(key));
-    if (char_id_map_exists(&FrameIndexer, key))
-        return char_id_map_get(&FrameIndexer, key);
-    uint base_fi  = char_id_map_get(&FrameIndexer, proc);
-    uint clone_fi = char_id_map_get(&FrameIndexer, key);
+    if (char_id_map_exists(&FrameIndexer, key)) {
+        uint r = (uint)char_id_map_get(&FrameIndexer, key);
+        pthread_mutex_unlock(&var_indexer_mtx);
+        return r;
+    }
+    uint base_fi  = (uint)char_id_map_get(&FrameIndexer, proc);
+    uint clone_fi = (uint)char_id_map_get(&FrameIndexer, key);
     init_clone_frame(vm, clone_fi, base_fi, key);
+    pthread_mutex_unlock(&var_indexer_mtx);
     return clone_fi;
 }
 
 static inline uint clone_frame_for_thread(VM *vm, const char *proc)
 {
+    pthread_mutex_lock(&var_indexer_mtx);
     char key[VAR_NAME_LENGTH];
     make_thread_frame_key(proc, key, sizeof(key));
-    if (char_id_map_exists(&FrameIndexer, key))
-        return char_id_map_get(&FrameIndexer, key);
-    uint base_fi  = char_id_map_get(&FrameIndexer, proc);
-    uint clone_fi = char_id_map_get(&FrameIndexer, key);
+    if (char_id_map_exists(&FrameIndexer, key)) {
+        uint r = (uint)char_id_map_get(&FrameIndexer, key);
+        pthread_mutex_unlock(&var_indexer_mtx);
+        return r;
+    }
+    uint base_fi  = (uint)char_id_map_get(&FrameIndexer, proc);
+    uint clone_fi = (uint)char_id_map_get(&FrameIndexer, key);
     init_clone_frame(vm, clone_fi, base_fi, key);
+    pthread_mutex_unlock(&var_indexer_mtx);
     return clone_fi;
 }
 

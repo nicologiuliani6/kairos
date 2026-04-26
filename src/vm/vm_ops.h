@@ -46,6 +46,11 @@ static __thread int if_branch_stack[IF_BRANCH_STACK_MAX];
 static __thread int if_branch_has_call_stack[IF_BRANCH_STACK_MAX];
 static __thread int if_branch_top = -1;
 
+static inline void vm_if_reset_branch_stack(void)
+{
+    if_branch_top = -1;
+}
+
 static inline void vm_if_mark_call(void)
 {
     if (if_branch_top >= 0)
@@ -512,6 +517,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
 
 static inline void op_show(VM *vm, const char *frame_name)
 {
+    if (vm->suppress_show) return;
     char *ID = strtok(NULL, " \t");
     if (strtok(NULL, " \t")) vm_debug_panic("[VM] SHOW: troppi parametri!\n");
     uint fi = get_findex(frame_name);
@@ -612,10 +618,14 @@ static inline void op_assert(VM *vm, const char *frame_name)
         int took_then = if_branch_stack[if_branch_top--];
         int has_call  = if_branch_has_call_stack[if_branch_top + 1];
         if (!has_call && !took_then && fi_result) {
-            vm_debug_panic("[VM] IF/FI non reversibile: ramo else ma condizione fi=vera\n");
+            vm_debug_panic(
+                "[VM] IF/FI non reversibile: ramo else ma condizione fi=vera (frame=%s lhs=%s op=%s rhs=%s fi=%d call=%d)\n",
+                frame_name, lhs_tok, op_tok, rhs, fi_result, has_call);
         }
         if (!has_call && took_then && !fi_result) {
-            vm_debug_panic("[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa\n");
+            vm_debug_panic(
+                "[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa (frame=%s lhs=%s op=%s rhs=%s fi=%d call=%d)\n",
+                frame_name, lhs_tok, op_tok, rhs, fi_result, has_call);
         }
         return;
     }
@@ -740,9 +750,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     int Vvalue = 0;
     if (c_val) {
         if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
-            uint src_vi = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
-            Var *src    = vm->frames[fi].vars[src_vi];
-            Vvalue = (src && src->T == TYPE_INT) ? *(src->value) : 0;
+            Vvalue = resolve_value(vm, fi, c_val);
         } else {
             Vvalue = (int)strtol(c_val, NULL, 10);
         }
@@ -773,7 +781,9 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     if (!ok) {
         if (V->T == TYPE_INT)
-            vm_debug_panic( "[VM] DELOCAL: valore finale errato! (var=%s, atteso=%d, trovato=%d)\n",Vname, Vvalue, *(V->value));
+            vm_debug_panic(
+                "[VM] DELOCAL: valore finale errato! (frame=%s var=%s, atteso=%d, trovato=%d, c_val=%s)\n",
+                frame_name, Vname, Vvalue, *(V->value), c_val ? c_val : "NULL");
         else
             vm_debug_panic("[VM] DELOCAL: %s non è nil/empty!\n", Vname);
         

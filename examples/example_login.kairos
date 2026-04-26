@@ -49,11 +49,9 @@ procedure login_pipeline(channel auth_req, int auth_code, int login_ok, stack ga
     delocal int auth_req_msg = 0
     delocal channel auth_resp = empty
 
-procedure main()
-    stack garbage
+procedure bruteforce(int auth_code, stack garbage)
     local channel auth_ch = empty
     local int login_ok = 0
-    int auth_code
     from auth_code == 0 loop
         show(auth_code)
         local int expected_ok = 0
@@ -68,3 +66,13 @@ procedure main()
     until login_ok == 1
     delocal int login_ok = 1
     delocal channel auth_ch = empty
+
+procedure main()
+    local stack garbage = nil
+    local int PASSWORD = 0
+    call bruteforce(PASSWORD, garbage)
+    //show(garbage)
+    show(PASSWORD)
+    uncall bruteforce(PASSWORD, garbage)
+    delocal int PASSWORD = 0
+    delocal stack garbage = nil

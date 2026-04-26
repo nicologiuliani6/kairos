@@ -244,20 +244,22 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
         if (fw && !strcmp(fw, "PAR_START")) {
             out[n].start_line = cur;
             int   depth = 1;
+            uint  max_inner = cur;
             char *scan  = nl + 1;
             *nl = '\n';
             while (scan && *scan && depth > 0) {
                 char *nl2 = strchr(scan, '\n'); if (!nl2) break; *nl2 = '\0';
+                uint  cur2 = (uint)atoi(scan);
+                if (cur2 > max_inner) max_inner = cur2;
                 char tmp2[2048]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
                 tmp2[sizeof(tmp2) - 1] = '\0';
                 char *fw2  = strtok(skip_lineno(tmp2), " \t");
-                uint  cur2 = (uint)atoi(scan);
                 if (fw2) {
                     if      (!strcmp(fw2, "PAR_START")) depth++;
                     else if (!strcmp(fw2, "PAR_END")) {
                         depth--;
                         if (depth == 0) {
-                            out[n].end_line = cur2;
+                            out[n].end_line = max_inner;
                             n++;
                             *nl2 = '\n';
                             ptr = nl2 + 1;
@@ -278,7 +280,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
 static inline int line_is_inside_par(uint line, ParRange *pars, int npars)
 {
     for (int i = 0; i < npars; i++)
-        if (line > pars[i].start_line && line < pars[i].end_line) return 1;
+        if (line > pars[i].start_line && line <= pars[i].end_line) return 1;
     return 0;
 }
 
@@ -533,7 +535,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 strncpy(cn, pn, sizeof(cn) - 1);
                 cn[sizeof(cn) - 1] = '\0';
             }
+            int ss = vm->suppress_show;
+            vm->suppress_show = 1;
             vm_run_BT(vm, orig, cn);
+            vm->suppress_show = ss;
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
         }
@@ -639,14 +644,78 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     for (int i = count - 1; i >= 0; i--) {
         char ob[2048]; strncpy(ob, lines[i], sizeof(ob) - 1);
         ob[sizeof(ob) - 1] = '\0';
-        char *fw = strtok(skip_lineno(ob), " \t");
-        if (!fw || !strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) continue;
+        char *clean = skip_lineno(ob);
+        char *fw = strtok(clean, " \t");
+        if (!fw) continue;
+
+        /* CALL resta nel loop principale di invert_op_to_line (spesso è fuori dal ramo IF).
+           Gestire CALL qui romperebbe la logica depth>0 su procedure ricorsive (es. cript). */
+        if (!strcmp(fw, "CALL")) continue;
+
+        if (!strcmp(fw, "UNCALL")) {
+            vm_if_mark_call();
+            char *pn = strtok(NULL, " \t");
+            char base_cur[VAR_NAME_LENGTH];
+            strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
+            base_cur[VAR_NAME_LENGTH - 1] = '\0';
+            char *at_cur = strchr(base_cur, '@');
+            if (at_cur) *at_cur = '\0';
+            int is_rec = (strcmp(pn, base_cur) == 0);
+            int new_depth = 0;
+            if (is_rec) {
+                const char *atf = strchr(frame_name, '@');
+                if (atf) {
+                    const char *us = strrchr(frame_name, '_');
+                    if (us && us > atf) new_depth = atoi(us + 1);
+                    else new_depth = atoi(atf + 1);
+                }
+                new_depth++;
+            }
+            uint callee_fi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
+                                    : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                           : char_id_map_get(&FrameIndexer, pn));
+            int  pc = vm->frames[callee_fi].param_count, *pi = vm->frames[callee_fi].param_indices;
+            Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi].vars[pi[k]];
+            Stack slv = vm->frames[callee_fi].LocalVariables;
+            stack_init(&vm->frames[callee_fi].LocalVariables);
+            char *p = NULL; int jj = 0;
+            while ((p = strtok(NULL, " \t")) && jj < pc) {
+                int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p);
+                vm->frames[callee_fi].vars[pi[jj++]] = vm->frames[cfi].vars[si];
+            }
+            char cn[VAR_NAME_LENGTH];
+            if (is_rec && current_thread_args) {
+                make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
+            } else if (is_rec) {
+                make_frame_key(pn, new_depth, cn, sizeof(cn));
+            } else if (current_thread_args) {
+                make_thread_frame_key(pn, cn, sizeof(cn));
+            } else {
+                strncpy(cn, pn, sizeof(cn) - 1);
+                cn[sizeof(cn) - 1] = '\0';
+            }
+            /* Riesecuzione avanti: inversion_depth>0 altera LOCAL/DELOCAL sui channel
+               (channel_restore_*); va azzerato per questa vm_run_BT. */
+            int saved_inv = vm->inversion_depth;
+            int ss = vm->suppress_show;
+            vm->inversion_depth = 0;
+            vm->suppress_show = 1;
+            vm_run_BT(vm, original_buffer, cn);
+            vm->inversion_depth = saved_inv;
+            vm->suppress_show = ss;
+            for (int k = 0; k < pc; k++) vm->frames[callee_fi].vars[pi[k]] = sv[k];
+            vm->frames[callee_fi].LocalVariables = slv;
+            continue;
+        }
+
         if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
         else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
         else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
         else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
         else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
         else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
+        else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
+        else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
         else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
         else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
         else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
