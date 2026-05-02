@@ -25,7 +25,7 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 RESET  := \033[0m
 
-.PHONY: all build-release build-dap test-dap run test release install-deps check-deps clean help
+.PHONY: all build-release build-dap test-dap run test mnemo-test mnemo-run release install-deps check-deps clean help
 
 # Default: build ottimizzata
 all: build-release
@@ -120,6 +120,24 @@ test: build-release
 		printf "$$errors"; \
 		exit 1; \
 	fi
+	@if [ -x mnemo/.venv/bin/python ]; then \
+		echo ""; \
+		echo "$(CYAN)=== Mnemo (c_examples/*.c → .kairos) ===$(RESET)"; \
+		$(MAKE) mnemo-test || exit 1; \
+	else \
+		echo ""; \
+		echo "$(YELLOW)Mnemo: salto (nessun mnemo/.venv; cd mnemo && python3 -m venv .venv && pip install -e .)$(RESET)"; \
+	fi
+
+mnemo-test:
+	@$(MAKE) -C mnemo test
+
+# Esegue un singolo esempio Mnemo: FILE è relativo a mnemo/ (es. c_examples/ex01_mul_small.c)
+mnemo-run:
+ifndef FILE
+	$(error Usa: make mnemo-run FILE=c_examples/ex01_mul_small.c — path relativo a mnemo/, senza spazi attorno a =)
+endif
+	@$(MAKE) -C mnemo run FILE=$(FILE)
 
 release: build-release
 	@echo "$(CYAN)Build release KairosApp...$(RESET)"
@@ -164,8 +182,10 @@ help:
 	@echo "  $(GREEN)make build-release$(RESET)           Compila libvm.so (-O2)"
 	@echo "  $(GREEN)make build-dap$(RESET)               Compila libvm_dap.so"
 	@echo "  $(GREEN)make test-dap$(RESET)                Test C debugger (pipe + loop lungo)"
-	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma (FILE=... attaccato, no spazi)"
-	@echo "  $(GREEN)make test$(RESET)                    tests/*.kairos + examples/ (vedi KAIROS_EXCLUDE nel makefile)"
+	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
+	@echo "  $(GREEN)make mnemo-run FILE=<path>$(RESET)     Un solo esempio Mnemo: FILE relativo a mnemo/ (es. c_examples/ex01_mul_small.c)"
+	@echo "  $(GREEN)make test$(RESET)                    tests/*.kairos + examples/ + Mnemo c_examples (se mnemo/.venv esiste)"
+	@echo "  $(GREEN)make mnemo-test$(RESET)              Solo Mnemo: compila ed esegue mnemo/c_examples/*.c"
 	@echo "  $(GREEN)make release$(RESET)                 Build KairosApp con PyInstaller"
 	@echo "  $(GREEN)make install-deps$(RESET)            Crea venv e installa dipendenze"
 	@echo "  $(GREEN)make clean$(RESET)                   Rimuove artefatti generati"

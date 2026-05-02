@@ -7,6 +7,13 @@ import tempfile
 
 VERBOSE = False
 
+
+class _ParStaticConfig:
+    """Controlli statici su `par` (modificato da `run_static_checks`)."""
+
+    check_int_race: bool = True
+
+
 # ── Precedenza operatori ────────────────────────────────────────────────────
 precedence = (
     ('left', 'PLUS', 'MINUS'),
@@ -710,27 +717,37 @@ def _check_stmt_reversibility(
             {v for v in acc if declared_types.get(v) == 'int'}
             for acc in branch_access
         ]
-        for i in range(len(branch_direct_int_writes)):
-            for j in range(i + 1, len(branch_direct_int_writes)):
-                w_i = branch_direct_int_writes[i]
-                w_j = branch_direct_int_writes[j]
-                acc_i = int_access_sets[i]
-                acc_j = int_access_sets[j]
-                shared = (w_i & acc_j) | (w_j & acc_i)
-                if shared:
-                    names = ", ".join(sorted(shared))
-                    raise KairosCompileError(
-                        "STATIC",
-                        (
-                            f"riga {lineno}: race su int nel PAR (scrittura vs accesso, anche tramite call): "
-                            f"{names} (usa channel/ssend/srecv o variabili distinte per branch)"
-                        ),
-                    )
+        if _ParStaticConfig.check_int_race:
+            for i in range(len(branch_direct_int_writes)):
+                for j in range(i + 1, len(branch_direct_int_writes)):
+                    w_i = branch_direct_int_writes[i]
+                    w_j = branch_direct_int_writes[j]
+                    acc_i = int_access_sets[i]
+                    acc_j = int_access_sets[j]
+                    shared = (w_i & acc_j) | (w_j & acc_i)
+                    if shared:
+                        names = ", ".join(sorted(shared))
+                        raise KairosCompileError(
+                            "STATIC",
+                            (
+                                f"riga {lineno}: race su int nel PAR (scrittura vs accesso, anche tramite call): "
+                                f"{names} (usa channel/ssend/srecv o variabili distinte per branch)"
+                            ),
+                        )
 
-def run_static_checks(program_ast):
+def run_static_checks(program_ast, *, check_par_int_race: bool = True):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
         raise KairosCompileError("PARSER", "AST del programma non valido")
 
+    prev_race = _ParStaticConfig.check_int_race
+    _ParStaticConfig.check_int_race = check_par_int_race
+    try:
+        _run_static_checks_body(program_ast)
+    finally:
+        _ParStaticConfig.check_int_race = prev_race
+
+
+def _run_static_checks_body(program_ast):
     procedures = program_ast[1] if len(program_ast) > 1 else []
     proc_signatures = {}
     for proc in procedures:

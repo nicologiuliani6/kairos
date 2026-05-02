@@ -1,4 +1,5 @@
 #pragma once
+#include <string.h>
 #include "vm_panic.h"
 /* ======================================================================
  *  ops_arith.h — Operazioni aritmetiche e di confronto della VM

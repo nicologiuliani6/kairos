@@ -114,14 +114,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
                     vm->frames[cfi].vars[vm->frames[cfi].param_indices[k]] = cs[cs_top].saved_params[k];
                 vm->frames[cfi].LocalVariables = cs[cs_top].saved_local_vars;
-                if (cs[cs_top].is_recursive_clone)
-                    for (int k = 0; k < vm->frames[cfi].param_count; k++) {
-                        int pidx = vm->frames[cfi].param_indices[k];
-                        free(vm->frames[cfi].vars[pidx]);
-                        vm->frames[cfi].vars[pidx] = NULL;
-                    }
+                /* Non liberare i Var PARAM dei cloni ricorsivi qui: sono guscio allocato
+                 * in init_clone_frame; free() tra restore e ripresa del chiamante può
+                 * corrompere l'heap o interferire con alias ancora attivi. vm_free() a
+                 * fine esecuzione deduplica i Var* condivisi. */
                 ptr = cs[cs_top].return_ptr;
                 strncpy(fname, cs[cs_top].caller_frame, VAR_NAME_LENGTH - 1);
+                fname[VAR_NAME_LENGTH - 1] = '\0';
                 cs_top--;
             } else break;
             continue;
@@ -157,6 +156,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             cs[cs_top].is_recursive_clone = is_rec;
             cs[cs_top].callee_findex      = cfi;
             strncpy(cs[cs_top].caller_frame, fname, VAR_NAME_LENGTH - 1);
+            cs[cs_top].caller_frame[VAR_NAME_LENGTH - 1] = '\0';
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
             cs[cs_top].saved_param_count = pc;
             cs[cs_top].saved_local_vars  = vm->frames[cfi].LocalVariables;
