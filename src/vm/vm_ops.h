@@ -217,8 +217,8 @@ static inline void op_push(VM *vm, const char *frame_name)
         if (!sv->channel->buf) vm_debug_panic("realloc failed\n");
         sv->channel->buf[sv->channel->buf_len++] = val;
         pthread_mutex_unlock(&sv->channel->mtx);
-        int was_queued = op_wait(sv->channel, 1);
-        if (was_queued)
+        int w = op_wait(sv->channel, 1, 0);
+        if (w == 1)
             wait_for_turn_done(current_thread_args);
     }
 }
@@ -250,7 +250,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
            Leggere sender_args e fare il pop FIFO sotto lo stesso mtx: altrimenti
            un altro SSEND può intercalare tra le due e far leggere una cella
            non ancora valorizzata (buffer malloc non azzerato). */
-        op_wait(sv->channel, 0);
+        op_wait(sv->channel, 0, 0);
         pthread_mutex_lock(&sv->channel->mtx);
         sender_to_wake = sv->channel->sender_args;
         sv->channel->sender_args = NULL;
@@ -360,6 +360,12 @@ static inline void op_ssend(VM *vm, const char *frame_name)
         }
     }
 
+    /* Solo canali mutex Mnemo (`__mn_mtx_*`): mailbox; altrimenti rendezvous stretto (π-calculus). */
+    int mailbox_eligible = (
+        encoded_len == 2 && encoded[0] == (int)TYPE_INT
+        && strncmp(ch_name, "__mn_mtx_", (size_t)9) == 0
+    );
+
     pthread_mutex_lock(&chv->channel->mtx);
     if (encoded_len > 0) {
         chv->channel->buf = realloc(chv->channel->buf, (chv->channel->buf_len + (size_t)encoded_len) * sizeof(int));
@@ -376,9 +382,44 @@ static inline void op_ssend(VM *vm, const char *frame_name)
 
 #undef ENC_PUSH
 
-    int was_queued = op_wait(chv->channel, 1);
-    if (was_queued)
+    int w = op_wait(chv->channel, 1, mailbox_eligible);
+    if (w == 1)
         wait_for_turn_done(current_thread_args);
+}
+
+/*
+ * Verifica se buf contiene un messaggio ssend completo per recv_count destinazioni.
+ * Ritorna la lunghezza in parole int consumate, o 0 se incompleto.
+ */
+static inline size_t peek_ssend_payload_words(Channel *ch, int recv_count)
+{
+    size_t read_idx = 0;
+    size_t buf_len = ch->buf_len;
+
+    for (int i = 0; i < recv_count; i++) {
+        if (read_idx >= buf_len)
+            return 0;
+        int marker = ch->buf[read_idx++];
+        if (marker == (int)TYPE_INT) {
+            if (read_idx >= buf_len)
+                return 0;
+            read_idx++;
+        } else if (marker == CHANNEL_REF_MARKER) {
+            if (read_idx + 1 >= buf_len)
+                return 0;
+            read_idx += 2;
+        } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
+            if (read_idx >= buf_len)
+                return 0;
+            int n = ch->buf[read_idx++];
+            if (n < 0 || read_idx + (size_t)n > buf_len)
+                return 0;
+            read_idx += (size_t)n;
+        } else {
+            return 0;
+        }
+    }
+    return read_idx;
 }
 
 static inline void op_srecv(VM *vm, const char *frame_name)
@@ -403,7 +444,110 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
 
-    op_wait(chv->channel, 0);
+    pthread_mutex_lock(&chv->channel->mtx);
+    size_t msg_words = 0;
+    if (strncmp(ch_name, "__mn_mtx_", (size_t)9) == 0)
+        msg_words = peek_ssend_payload_words(chv->channel, recv_count);
+    if (msg_words > 0) {
+        size_t read_idx = 0;
+        for (int i = 0; i < recv_count; i++) {
+            Var *dest = get_var(vm, fi, tokv[i], "SRECV");
+            if (read_idx >= chv->channel->buf_len) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: payload insufficiente sul channel\n");
+            }
+            int marker = chv->channel->buf[read_idx++];
+            if (marker == (int)TYPE_INT) {
+                if (read_idx >= chv->channel->buf_len) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: payload int incompleto\n");
+                }
+                int popped = chv->channel->buf[read_idx++];
+                if (dest->T != TYPE_INT) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
+                }
+                var_par_mut_acquire(dest);
+                *(dest->value) += popped;
+                var_par_mut_release(dest);
+            } else if (marker == CHANNEL_REF_MARKER) {
+                if (read_idx + 1 >= chv->channel->buf_len) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: payload channel-ref incompleto\n");
+                }
+                uint32_t lo = (uint32_t)chv->channel->buf[read_idx++];
+                uint32_t hi = (uint32_t)chv->channel->buf[read_idx++];
+                uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
+                Channel *shared = (Channel *)p;
+                if (dest->T != TYPE_CHANNEL || !shared) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
+                }
+                if (dest->channel != shared) {
+                    Channel *old = dest->channel;
+                    lock_channel_pair(old, shared);
+                    if (old) old->refcount--;
+                    shared->refcount++;
+                    unlock_channel_pair(old, shared);
+                    dest->channel = shared;
+                    if (old) {
+                        int do_free = 0;
+                        pthread_mutex_lock(&old->mtx);
+                        do_free = (old->refcount <= 0);
+                        pthread_mutex_unlock(&old->mtx);
+                        if (do_free) {
+                            pthread_mutex_destroy(&old->mtx);
+                            free(old->buf);
+                            free(old);
+                        }
+                    }
+                }
+            } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
+                if (read_idx >= chv->channel->buf_len) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
+                }
+                int n = chv->channel->buf[read_idx++];
+                if (n < 0 || read_idx + (size_t)n > chv->channel->buf_len) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
+                }
+                if (dest->T != TYPE_STACK && dest->T != TYPE_CHANNEL) {
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
+                }
+                if (n > 0) {
+                    dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int));
+                    if (!dest->value) {
+                        pthread_mutex_unlock(&chv->channel->mtx);
+                        vm_debug_panic("realloc failed\n");
+                    }
+                    memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int));
+                    dest->stack_len += (size_t)n;
+                }
+                read_idx += (size_t)n;
+            } else {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: marker payload sconosciuto\n");
+            }
+        }
+        size_t remaining = chv->channel->buf_len - read_idx;
+        if (remaining > 0)
+            memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int));
+        chv->channel->buf_len = remaining;
+        if (remaining > 0) {
+            chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int));
+            if (!chv->channel->buf) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("realloc failed\n");
+            }
+        }
+        pthread_mutex_unlock(&chv->channel->mtx);
+        return;
+    }
+    pthread_mutex_unlock(&chv->channel->mtx);
+
+    op_wait(chv->channel, 0, 0);
 
     pthread_mutex_lock(&chv->channel->mtx);
     ThreadArgs *sender_to_wake = chv->channel->sender_args;

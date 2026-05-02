@@ -1,7 +1,18 @@
 import sys
-from src.frontend.parser import parser, lexer, run_static_checks
-from src.frontend.errors import KairosCompileError
 from queue import Queue
+
+from src.frontend.errors import KairosCompileError
+from src.frontend.parser import lexer, parser, run_static_checks
+
+_KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
+
+
+def _strip_mnemo_par_shared_pragma(source: str) -> tuple[str, bool]:
+    lines = source.splitlines()
+    if lines and lines[0].strip() == _KAIROS_ALLOW_PAR_SHARED_INT:
+        body = lines[1:]
+        return ("\n".join(body) + ("\n" if body else ""), True)
+    return source, False
 
 _ASSIGN_OPS = {
     '+=':  'PUSHEQ',
@@ -169,11 +180,13 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         source = f.read()
 
+    source, skip_par_int_race = _strip_mnemo_par_shared_pragma(source)
+
     try:
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
             raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
-        run_static_checks(ast)
+        run_static_checks(ast, check_par_int_race=not skip_par_int_race)
         compiler = ByteCode_Compiler()
         compiler.process(ast)
     except KairosCompileError as exc:

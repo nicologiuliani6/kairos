@@ -35,6 +35,21 @@ from src.frontend.lexer import lexer
 from src.frontend.parser import parser, run_static_checks
 from src.frontend.errors import KairosCompileError
 
+_KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
+
+
+def _strip_mnemo_par_shared_pragma(source: str) -> tuple[str, bool]:
+    """
+    Mnemo può premettere questa riga: disattiva il check STATIC «race su int nel PAR»
+    (variabili file-scope condivise + mutex nel modello C).
+    """
+    lines = source.splitlines()
+    if lines and lines[0].strip() == _KAIROS_ALLOW_PAR_SHARED_INT:
+        body = lines[1:]
+        return ("\n".join(body) + ("\n" if body else ""), True)
+    return source, False
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("Uso: python Kairos.py <file> [--dump-bytecode] [--dap]")
@@ -45,11 +60,13 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         source = f.read()
 
+    source, skip_par_int_race = _strip_mnemo_par_shared_pragma(source)
+
     try:
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
             raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
-        run_static_checks(ast)
+        run_static_checks(ast, check_par_int_race=not skip_par_int_race)
         BT_Compiler = ByteCode_Compiler()
         BT_Compiler.process(ast)
     except KairosCompileError as exc:
