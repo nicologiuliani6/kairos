@@ -360,10 +360,11 @@ static inline void op_ssend(VM *vm, const char *frame_name)
         }
     }
 
-    /* Solo canali mutex Mnemo (`__mn_mtx_*`): mailbox; altrimenti rendezvous stretto (π-calculus). */
+    /* Solo canali mutex Mnemo (`__mn_mtx*` es. `__mn_mtx_g_cs`, `__mn_mtx_g_xfer`): mailbox;
+     * prefisso 8 char `__mn_mtx` — non `__mn_mtx_` (9) perché dopo `__mn_mtx` c'è `g_`. */
     int mailbox_eligible = (
         encoded_len == 2 && encoded[0] == (int)TYPE_INT
-        && strncmp(ch_name, "__mn_mtx_", (size_t)9) == 0
+        && strncmp(ch_name, "__mn_mtx", (size_t)8) == 0
     );
 
     pthread_mutex_lock(&chv->channel->mtx);
@@ -376,6 +377,15 @@ static inline void op_ssend(VM *vm, const char *frame_name)
         }
         memcpy(chv->channel->buf + chv->channel->buf_len, encoded, (size_t)encoded_len * sizeof(int));
         chv->channel->buf_len += (size_t)encoded_len;
+    }
+    /* Un SRECV su __mn_mtx_* può essere già in op_wait(recv) con buffer vuoto; dopo
+       l’append del token svegliamo il primo in coda (handshake PAR / Mnemo). */
+    if (mailbox_eligible && chv->channel->recv_q_head) {
+        Waiter *w = chv->channel->recv_q_head;
+        chv->channel->recv_q_head = w->next;
+        if (!chv->channel->recv_q_head) chv->channel->recv_q_tail = NULL;
+        w->ready = 1;
+        pthread_cond_signal(&w->cond);
     }
     pthread_mutex_unlock(&chv->channel->mtx);
     free(encoded);
@@ -444,9 +454,10 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
 
+mutex_mailbox_retry:
     pthread_mutex_lock(&chv->channel->mtx);
     size_t msg_words = 0;
-    if (strncmp(ch_name, "__mn_mtx_", (size_t)9) == 0)
+    if (strncmp(ch_name, "__mn_mtx", (size_t)8) == 0)
         msg_words = peek_ssend_payload_words(chv->channel, recv_count);
     if (msg_words > 0) {
         size_t read_idx = 0;
@@ -531,6 +542,14 @@ static inline void op_srecv(VM *vm, const char *frame_name)
                 vm_debug_panic("[VM] SRECV: marker payload sconosciuto\n");
             }
         }
+        /* Se SSEND non era mailbox-eligible, il sender può aver fatto rendezvous in
+         * op_wait(send) e attendere turn_done; il consumo dal buffer qui equivale al
+         * path rendezvous (notify in coda). */
+        ThreadArgs *sender_to_wake = NULL;
+        if (strncmp(ch_name, "__mn_mtx", (size_t)8) == 0) {
+            sender_to_wake = chv->channel->sender_args;
+            chv->channel->sender_args = NULL;
+        }
         size_t remaining = chv->channel->buf_len - read_idx;
         if (remaining > 0)
             memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int));
@@ -543,9 +562,15 @@ static inline void op_srecv(VM *vm, const char *frame_name)
             }
         }
         pthread_mutex_unlock(&chv->channel->mtx);
+        notify_sender_turn_done(sender_to_wake);
         return;
     }
     pthread_mutex_unlock(&chv->channel->mtx);
+
+    if (strncmp(ch_name, "__mn_mtx", (size_t)8) == 0) {
+        op_wait(chv->channel, 0, 0);
+        goto mutex_mailbox_retry;
+    }
 
     op_wait(chv->channel, 0, 0);
 
@@ -706,6 +731,7 @@ static inline int eval_cond(int lval, const char *op, int rval)
     if (!strcmp(op, ">"))  return lval >  rval;
     if (!strcmp(op, "<"))  return lval <  rval;
     vm_debug_panic("[VM] operatore di confronto sconosciuto: '%s'\n", op);
+    return 0;
 }
 
 /* ======================================================================
@@ -757,16 +783,21 @@ static inline void op_assert(VM *vm, const char *frame_name)
     /* Regola runtime richiesta: se abbiamo seguito il ramo ELSE e, a fine IF,
        la condizione FI risulta vera, segnaliamo errore.
        Nei casi con call/uncall nel blocco IF (es. ricorsione), manteniamo il
-       comportamento storico per non introdurre regressioni. */
+       comportamento storico per non introdurre regressioni.
+       Nei thread worker di PAR_START, altri pthread possono mutare i PARAM/int
+       condivisi tra i rami: la condizione può cambiare tra JMPF e ASSERT (race
+       legittima con KAIROS_ALLOW_PAR_SHARED_INT / busy-wait). Non imporre
+       allora il vincolo IF/FI single-thread. */
     if (if_branch_top >= 0) {
         int took_then = if_branch_stack[if_branch_top--];
         int has_call  = if_branch_has_call_stack[if_branch_top + 1];
-        if (!has_call && !took_then && fi_result) {
+        int par_worker = (current_thread_args != NULL);
+        if (!has_call && !took_then && fi_result && !par_worker) {
             vm_debug_panic(
                 "[VM] IF/FI non reversibile: ramo else ma condizione fi=vera (frame=%s lhs=%s op=%s rhs=%s fi=%d call=%d)\n",
                 frame_name, lhs_tok, op_tok, rhs, fi_result, has_call);
         }
-        if (!has_call && took_then && !fi_result) {
+        if (!has_call && took_then && !fi_result && !par_worker) {
             vm_debug_panic(
                 "[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa (frame=%s lhs=%s op=%s rhs=%s fi=%d call=%d)\n",
                 frame_name, lhs_tok, op_tok, rhs, fi_result, has_call);
@@ -915,6 +946,34 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     if (strcmp(Vtype, actual_type) != 0) {
         vm_debug_panic("[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n",
                 actual_type, Vtype);
+    }
+
+    /*
+     * Mutex Mnemo (`__mn_mtx_*`): SSEND accoda token nella mailbox; con PAR reale
+     * più ssend possono precedere una srecv — il buffer può contenere più messaggi
+     * compatibile-int dopo pthread_mutex_destroy (Mnemo emette un solo SRECV).
+     * Svuotiamo tutti i token INT codificati come in SSEND prima di validare empty.
+     */
+    if (V->T == TYPE_CHANNEL && V->channel && strncmp(Vname, "__mn_mtx", (size_t)8) == 0
+        && vm->inversion_depth == 0 && c_val && strcmp(c_val, "empty") == 0) {
+        pthread_mutex_lock(&V->channel->mtx);
+        size_t ri = 0;
+        while (ri + 2 <= V->channel->buf_len && V->channel->buf[ri] == (int)TYPE_INT)
+            ri += 2;
+        if (ri != V->channel->buf_len) {
+            size_t bl = V->channel->buf_len;
+            pthread_mutex_unlock(&V->channel->mtx);
+            vm_debug_panic(
+                "[VM] DELOCAL: mutex %s mailbox malformato (buf_len=%zu, aligned=%zu)\n",
+                Vname, bl, ri
+            );
+        }
+        if (V->channel->buf) {
+            free(V->channel->buf);
+            V->channel->buf = NULL;
+        }
+        V->channel->buf_len = 0;
+        pthread_mutex_unlock(&V->channel->mtx);
     }
 
     /* ── 5. Valore finale ── */
