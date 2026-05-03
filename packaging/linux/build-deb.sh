@@ -35,7 +35,8 @@ PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
 STAGE_DIR="${BUILD_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
 DEBIAN_DIR="${STAGE_DIR}/DEBIAN"
 
-APP_SRC="${PROJECT_ROOT}/build/dist/KairosApp"
+# make release: PyInstaller --onefile → build/dist/KairosApp (file eseguibile).
+# Se passi a --onedir, l'eseguibile è build/dist/KairosApp/KairosApp.
 DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
 
 echo "Project root: ${PROJECT_ROOT}"
@@ -43,9 +44,16 @@ echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
 (cd "${PROJECT_ROOT}" && make release && make build-dap)
 
-if [[ ! -f "${APP_SRC}" ]]; then
-  echo "Missing file after build: ${APP_SRC}"
-  echo "Check make release output."
+APP_ONEFILE="${PROJECT_ROOT}/build/dist/KairosApp"
+APP_ONEDIR="${PROJECT_ROOT}/build/dist/KairosApp/KairosApp"
+if [[ -f "${APP_ONEFILE}" && -x "${APP_ONEFILE}" ]]; then
+  APP_SRC="${APP_ONEFILE}"
+elif [[ -f "${APP_ONEDIR}" && -x "${APP_ONEDIR}" ]]; then
+  APP_SRC="${APP_ONEDIR}"
+else
+  echo "Missing KairosApp after make release. Expected one of:"
+  echo "  ${APP_ONEFILE}  (PyInstaller --onefile, default makefile)"
+  echo "  ${APP_ONEDIR}   (PyInstaller --onedir)"
   exit 1
 fi
 
