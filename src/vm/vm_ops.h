@@ -684,17 +684,51 @@ mutex_mailbox_retry:
  *  SHOW
  * ====================================================================== */
 
+static inline void op_show_flush_char_line(VM *vm)
+{
+    if (vm->show_char_pending) {
+        vm_printf("\n");
+        vm->show_char_pending = 0;
+    }
+}
+
 static inline void op_show(VM *vm, const char *frame_name)
 {
     if (vm->suppress_show) return;
     char *ID = strtok(NULL, " \t");
-    if (strtok(NULL, " \t")) vm_debug_panic("[VM] SHOW: troppi parametri!\n");
+    if (!ID) vm_debug_panic("[VM] SHOW: manca il nome della variabile\n");
+    char *fmt = strtok(NULL, " \t");
+    char *more = strtok(NULL, " \t");
+    if (more) vm_debug_panic("[VM] SHOW: troppi parametri!\n");
+
+    int as_char = 0;
+    if (fmt) {
+        if (strcmp(fmt, "char") != 0) {
+            vm_debug_panic(
+                "[VM] SHOW: secondo argomento non riconosciuto "
+                "(solo 'char' oppure omettere per formato classico)\n"
+            );
+        }
+        as_char = 1;
+    }
+
     uint fi = get_findex(frame_name);
     Var *v  = get_var(vm, fi, ID, "SHOW");
 
     if (v->T == TYPE_INT) {
-        vm_printf("%s: %d\n", ID, *(v->value));
+        if (as_char) {
+            /* Un solo byte in stdout, senza nome variabile, apici né newline (base per printf). */
+            unsigned char c = (unsigned char)(*(v->value) & 0xFF);
+            vm_printf("%c", c);
+            vm->show_char_pending = 1;
+        } else {
+            op_show_flush_char_line(vm);
+            vm_printf("%s: %d\n", ID, *(v->value));
+        }
     } else if (v->T == TYPE_STACK) {
+        if (as_char)
+            vm_debug_panic("[VM] SHOW char: supportato solo per int\n");
+        op_show_flush_char_line(vm);
         char open = (v->T == TYPE_STACK) ? '[' : '<';
         char clos = (v->T == TYPE_STACK) ? ']' : '>';
         vm_printf("%s: %c", ID, open);
@@ -704,6 +738,9 @@ static inline void op_show(VM *vm, const char *frame_name)
         }
         vm_printf("%c\n", clos);
     } else if (v->T == TYPE_CHANNEL) {
+        if (as_char)
+            vm_debug_panic("[VM] SHOW char: supportato solo per int\n");
+        op_show_flush_char_line(vm);
         vm_printf("%s: <", ID);
         pthread_mutex_lock(&v->channel->mtx);
         for (size_t k = 0; k < v->channel->buf_len; k++) {

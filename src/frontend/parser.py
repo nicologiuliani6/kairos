@@ -286,7 +286,14 @@ def _collect_par_branch_var_uses(stmt, out):
                 out.add(a)
         return
     if tag == 'call_direct':
-        _, _name, args, _lineno = stmt
+        _, name, args, _lineno = stmt
+        if name.lower() == 'show' and isinstance(args, list) and len(args) == 2:
+            a0, a1 = args[0], args[1]
+            if isinstance(a0, str):
+                out.add(a0)
+            if isinstance(a1, str) and a1 != 'char':
+                out.add(a1)
+            return
         for a in args or []:
             if isinstance(a, str):
                 out.add(a)
@@ -654,6 +661,29 @@ def _check_stmt_reversibility(
                     f"determinata). Usa un letterale o un altro nome di variabile."
                 ),
             )
+        return
+
+    if tag == 'call_direct':
+        _, name, args, lineno = stmt
+        if name.lower() == 'show':
+            if not args:
+                raise KairosCompileError(
+                    "STATIC",
+                    f"riga {lineno}: show richiede almeno un argomento (variabile int)",
+                )
+            if len(args) > 2:
+                raise KairosCompileError(
+                    "STATIC",
+                    f"riga {lineno}: show accetta al massimo due argomenti",
+                )
+            if len(args) == 2 and args[1] != 'char':
+                raise KairosCompileError(
+                    "STATIC",
+                    (
+                        f"riga {lineno}: secondo argomento di show deve essere il "
+                        f"formato letterale 'char' (es. show(x, char))"
+                    ),
+                )
         return
 
     if tag == 'if':

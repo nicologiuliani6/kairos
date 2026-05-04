@@ -535,10 +535,16 @@ Per definizione, l’I/O non è compatibile con la reversibilità.
 In Kairos, le operazioni di output tramite `show(var)` sono trattate come un’astrazione esterna al modello reversibile, pensata esclusivamente come supporto allo sviluppo e al debugging.
 
 `show(var)` stampa il valore corrente di una variabile su `stdout`.
+
+- **`show(x)`** (solo `int`, `stack` o `channel`): una riga con nome e valore, sempre terminata da newline, es. `x: 42` oppure `result: [1, 2, 3, 4, 5]`.
+- **`show(x, char)`** (solo `int`): emette **un solo carattere**, il byte basso del valore (`x & 0xFF`), **senza** nome variabile, apici o newline — utile come base per un `printf` stile C. Se subito dopo c’è un `show` in formato classico (anche su stack/canale), la VM inserisce **una** newline prima di quella riga, così i caratteri non restano attaccati all’etichetta (`ab` poi riga `k: 108`).
+
 ```
-show(x)        // stampa: x: 42
-show(result)   // stampa: result: [1, 2, 3, 4, 5]
+show(x)           // stampa: x: 42
+show(x, char)     // stampa solo il carattere (es. 'a' se x contiene 97), senza \n
+show(result)      // stampa: result: [1, 2, 3, 4, 5]
 ```
+
 Al termine dell’esecuzione, la VM produce sempre anche un dump finale dello stato:
 
 ```text
@@ -688,7 +694,8 @@ Le istruzioni principali:
 | `LABEL name` | Definisce un'etichetta |
 | `CALL proc args...` | Chiama procedura |
 | `UNCALL proc args...` | Chiama procedura in inverso |
-| `SHOW var` | Stampa variabile |
+| `SHOW var` | Stampa variabile (riga con `\n`) |
+| `SHOW var char` | Byte basso di `var` come carattere, senza `\n` |
 | `PAR_START` | Inizio blocco parallelo |
 | `THREAD_N` | Inizio thread N |
 | `PAR_END` | Fine blocco parallelo |
