@@ -1,6 +1,7 @@
 LIBVM_1.0 {
   global:
     vm_run_from_string;
+    vm_run_from_string_quiet;
     vm_debug_new;
     vm_debug_free;
     vm_debug_start;
