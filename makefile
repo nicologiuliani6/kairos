@@ -68,6 +68,7 @@ $(VERSCRIPT): $(VM_SOURCES)
 	@printf 'LIBVM_1.0 {\n  global:\n' > $@
 	@for sym in \
 	    vm_run_from_string \
+	    vm_run_from_string_quiet \
 	    vm_debug_new \
 	    vm_debug_free \
 	    vm_debug_start \

@@ -449,7 +449,7 @@ void vm_dump(VM *vm)
  *  Entry point — esecuzione normale (invariato)
  * ====================================================================== */
 
-void vm_run_from_string(const char *bytecode)
+static void vm_run_from_string_impl(const char *bytecode, int dump_after)
 {
     char *ast = normalize_bytecode_physical_lines(bytecode);
     if (!ast) {
@@ -460,8 +460,19 @@ void vm_run_from_string(const char *bytecode)
     VM vm; memset(&vm, 0, sizeof(VM));
     vm.dbg = NULL;   /* modalità normale: nessun debugger */
     vm_exec(&vm, ast);
-    /* Dump finale sempre emesso in modalità run standard. */
-    vm_dump(&vm);
+    if (dump_after)
+        vm_dump(&vm);
     vm_free(&vm);
     free(ast);
+}
+
+void vm_run_from_string(const char *bytecode)
+{
+    vm_run_from_string_impl(bytecode, 1);
+}
+
+/* Esecuzione senza dump finale (es. binari Mnemo standalone). */
+void vm_run_from_string_quiet(const char *bytecode)
+{
+    vm_run_from_string_impl(bytecode, 0);
 }
