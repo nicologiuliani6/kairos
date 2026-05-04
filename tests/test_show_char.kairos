@@ -1,0 +1,17 @@
+// show(x, char): byte su stdout senza newline; show(x) resta "nome: valore\n"
+procedure main()
+    local int a = 0
+    a += 97
+    show(a, char)
+    a -= 97
+    local int b = 0
+    b += 98
+    show(b, char)
+    b -= 98
+    local int k = 0
+    k += 108
+    show(k)
+    k -= 108
+    delocal int k = 0
+    delocal int b = 0
+    delocal int a = 0

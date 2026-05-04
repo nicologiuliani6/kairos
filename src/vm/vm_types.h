@@ -135,6 +135,7 @@ typedef struct {
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
     int   inversion_depth;
     int   suppress_show; /* 1 durante vm_run_BT di replay (inverso di UNCALL): no op_show */
+    int   show_char_pending; /* ultimo SHOW è stato show(x,char): il prossimo show classico prefissa \n */
 } VM;
 
 struct ThreadArgs {
