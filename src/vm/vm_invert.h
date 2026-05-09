@@ -26,18 +26,22 @@ static inline int invert_extract_srcline(const char *raw_line)
 typedef struct {
     uint eval_entry_line;
     char eval_entry_id[64], eval_entry_val[64];
+    char eval_entry_op[8]; /* bytecode EVAL memorizza !=, <, … — obbligatorio per invert */
     uint jmpf_err_line, from_start_line, from_end_line, from_err_line;
     uint eval_exit_line;
     char eval_exit_id[64], eval_exit_val[64];
+    char eval_exit_op[8];
     uint jmpf_start_line;
 } LoopDescriptor;
 
 typedef struct {
     uint eval_entry_line;
     char eval_entry_id[64], eval_entry_val[64];
+    char eval_entry_op[8];
     uint jmpf_else_line, jmp_fi_line, else_label_line, fi_label_line;
     uint eval_exit_line;
     char eval_exit_id[64], eval_exit_val[64];
+    char eval_exit_op[8];
     uint assert_line;
 } IfDescriptor;
 
@@ -56,6 +60,15 @@ typedef enum {
  *  collect_loops / collect_ifs
  * ====================================================================== */
 
+static inline void _copy_compare_op(char *dst8, const char *op_raw)
+{
+    if (op_raw && op_raw[0])
+        strncpy(dst8, op_raw, 7);
+    else
+        strncpy(dst8, "==", 7);
+    dst8[7] = '\0';
+}
+
 static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                                  LoopDescriptor *out, int max)
 {
@@ -64,7 +77,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     uint fi = char_id_map_get(&FrameIndexer, base);
     char *ptr = go_to_line(buf, vm->frames[fi].addr + 1);
     int n = 0, in_loop = 0;
-    uint peval = 0; char pid[64] = {0}, pval[64] = {0};
+    uint peval = 0; char pid[64] = {0}, pval[64] = {0}, pop[8] = {'=', '=', '\0'};
 
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
@@ -77,17 +90,18 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
-            /* strtok(NULL, " \t") salta l'operatore */
-            strtok(NULL, " \t");
+            char *op = strtok(NULL, " \t");
             char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
             strncpy(pid,  a   ? a   : "", 63);
             strncpy(pval, rhs,             63);
+            _copy_compare_op(pop, op);
         } else if (!strcmp(fw, "JMPF") && !in_loop) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "FROM_ERR", 8)) {
                 out[n].eval_entry_line = peval;
                 strncpy(out[n].eval_entry_id,  pid,  63);
                 strncpy(out[n].eval_entry_val, pval, 63);
+                _copy_compare_op(out[n].eval_entry_op, pop);
                 out[n].jmpf_err_line = cur; in_loop = 1;
             }
         } else if (!strcmp(fw, "LABEL") && in_loop) {
@@ -101,6 +115,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 out[n].eval_exit_line = peval;
                 strncpy(out[n].eval_exit_id,  pid,  63);
                 strncpy(out[n].eval_exit_val, pval, 63);
+                _copy_compare_op(out[n].eval_exit_op, pop);
                 out[n].jmpf_start_line = cur;
             }
         } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
@@ -118,6 +133,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     char *ptr = go_to_line(buf, vm->frames[fi].addr + 1);
     int n = 0, in_if = 0;
     uint peval = 0; char pid[64] = {0}, pval[64] = {0};
+    char pfi_op[8] = {'=', '=', '\0'};
 
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
@@ -132,24 +148,27 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                (non ASSERT). */
             out[n].eval_exit_line = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
-            strtok(NULL, " \t");            /* op  */
+            char *fi_op = strtok(NULL, " \t");
             char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
             strncpy(out[n].eval_exit_id,  a   ? a   : "", 63);
             strncpy(out[n].eval_exit_val, rhs,             63);
+            _copy_compare_op(out[n].eval_exit_op, fi_op);
             out[n].assert_line = cur; in_if = 0; n++;
         } else if (!strcmp(fw, "EVAL")) {
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
-            strtok(NULL, " \t");            /* op  */
+            char *iop = strtok(NULL, " \t");
             char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
             strncpy(pid,  a   ? a   : "", 63);
             strncpy(pval, rhs,             63);
+            _copy_compare_op(pfi_op, iop);
         } else if (!strcmp(fw, "JMPF") && !in_if) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
                 out[n].eval_entry_line = peval;
                 strncpy(out[n].eval_entry_id,  pid,  63);
                 strncpy(out[n].eval_entry_val, pval, 63);
+                _copy_compare_op(out[n].eval_entry_op, pfi_op);
                 out[n].jmpf_else_line = cur; in_if = 1;
             }
         } else if (!strcmp(fw, "JMP") && in_if) {
@@ -163,6 +182,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             out[n].eval_exit_line = peval;
             strncpy(out[n].eval_exit_id,  pid,  63);
             strncpy(out[n].eval_exit_val, pval, 63);
+            _copy_compare_op(out[n].eval_exit_op, pfi_op);
             out[n].assert_line = cur; in_if = 0; n++;
         } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
         *nl = '\n'; ptr = nl + 1;
@@ -202,12 +222,113 @@ static inline IfZone line_if_zone(uint line, IfDescriptor *I, int n, int *idx)
     *idx = -1; return IF_ZONE_NONE;
 }
 
-static inline void do_eval(VM *vm, uint fi, const char *id, const char *val)
+/* bytecode.py può ripetere lo stesso numero di riga @N su più record: la sola lookup per
+ * linea collide (EVAL prima di JMPF/LABEL). Classifica per opcode/etichetta. */
+
+static inline LoopZone line_loop_zone_for_instr(uint line, const char *fw, const char *arg1,
+                                                LoopDescriptor *L, int n, int *idx)
+{
+    if (fw && arg1) {
+        for (int i = 0; i < n; i++) {
+            if (!strcmp(fw, "JMPF")) {
+                if (!strncmp(arg1, "FROM_ERR", 8) && line == L[i].jmpf_err_line) {
+                    *idx = i; return LOOP_ZONE_JMPF_ERR;
+                }
+                if (!strncmp(arg1, "FROM_START", 10) && line == L[i].jmpf_start_line) {
+                    *idx = i; return LOOP_ZONE_JMPF_START;
+                }
+            }
+            if (!strcmp(fw, "LABEL")) {
+                if (!strncmp(arg1, "FROM_START", 10) && line == L[i].from_start_line) {
+                    *idx = i; return LOOP_ZONE_START_LABEL;
+                }
+                if (!strncmp(arg1, "FROM_END", 8) && line == L[i].from_end_line) {
+                    *idx = i; return LOOP_ZONE_END_LABEL;
+                }
+                if (!strncmp(arg1, "FROM_ERR", 8) && line == L[i].from_err_line) {
+                    *idx = i; return LOOP_ZONE_ERR_LABEL;
+                }
+            }
+        }
+    }
+    return line_loop_zone(line, L, n, idx);
+}
+
+static inline IfZone line_if_zone_for_instr(uint line, const char *fw, const char *arg1,
+                                            IfDescriptor *I, int n, int *idx)
+{
+    if (fw && arg1) {
+        for (int i = 0; i < n; i++) {
+            if (!strcmp(fw, "JMPF") && !strncmp(arg1, "ELSE_", 5) &&
+                line == I[i].jmpf_else_line) {
+                *idx = i; return IF_ZONE_JMPF_ELSE;
+            }
+            if (!strcmp(fw, "JMP") && !strncmp(arg1, "FI_", 3) &&
+                line == I[i].jmp_fi_line) {
+                *idx = i; return IF_ZONE_JMP_FI;
+            }
+            if (!strcmp(fw, "LABEL")) {
+                if (!strncmp(arg1, "ELSE_", 5) && line == I[i].else_label_line) {
+                    *idx = i; return IF_ZONE_ELSE_LABEL;
+                }
+                if (!strncmp(arg1, "FI_", 3) && line == I[i].fi_label_line) {
+                    *idx = i; return IF_ZONE_FI_LABEL;
+                }
+            }
+        }
+    }
+    if (fw && !strcmp(fw, "ASSERT")) {
+        for (int i = 0; i < n; i++) {
+            if (line == I[i].assert_line) {
+                *idx = i; return IF_ZONE_ASSERT;
+            }
+        }
+    }
+    return line_if_zone(line, I, n, idx);
+}
+
+/* Primo record @line con opcode atteso — necessario perché più record condividono @line. */
+
+static inline int lp_row_first_jmpf_from_start(uint line, char **lp, uint *ln, int nl)
+{
+    for (int j = 0; j < nl; j++) {
+        if (ln[j] != line) continue;
+        char buf[2048];
+        strncpy(buf, lp[j], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char scan[2048];
+        strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
+        scan[sizeof(scan) - 1] = '\0';
+        char *ff = strtok(scan, " \t");
+        char *a1 = strtok(NULL, " \t");
+        if (ff && !strcmp(ff, "JMPF") && a1 && !strncmp(a1, "FROM_START", 10)) return j;
+    }
+    return -1;
+}
+
+static inline int lp_row_first_eval_at_line(uint line, char **lp, uint *ln, int nl)
+{
+    for (int j = 0; j < nl; j++) {
+        if (ln[j] != line) continue;
+        char buf[2048];
+        strncpy(buf, lp[j], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char scan[2048];
+        strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
+        scan[sizeof(scan) - 1] = '\0';
+        char *ff = strtok(scan, " \t");
+        if (ff && !strcmp(ff, "EVAL")) return j;
+    }
+    return -1;
+}
+
+static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
+                           const char *val)
 {
     uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
     int  lval = *(vm->frames[fi].vars[vi]->value);
     int  rval = resolve_expr(vm, fi, val);
-    thread_val_IF = (lval == rval);
+    thread_val_IF = eval_cond(lval, op, rval);
 }
 
 static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
@@ -352,38 +473,54 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         ob[sizeof(ob) - 1] = '\0';
         uint  cur   = ln[i];
         char *clean = skip_lineno(ob);
-        char *fw    = strtok(clean, " \t");
-        if (!fw) { i--; continue; }
-        //fprintf(stderr, "[INV_LOOP] cur=%u fw='%s'\n", cur, fw);
-        int li = -1; LoopZone lz = line_loop_zone(cur, loops, nloops, &li);
+        /* exe_line: catena strtok per CALL/UNCALL/… senza toccherla prima con fw_cls */
+        char exe_line[2048];
+        strncpy(exe_line, clean, sizeof(exe_line) - 1);
+        exe_line[sizeof(exe_line) - 1] = '\0';
+        char zbuf[2048];
+        strncpy(zbuf, exe_line, sizeof(zbuf) - 1);
+        zbuf[sizeof(zbuf) - 1] = '\0';
+        char *fw_cls = strtok(zbuf, " \t");
+        char *arg1_cls = strtok(NULL, " \t");
+        if (!fw_cls) { i--; continue; }
+        //fprintf(stderr, "[INV_LOOP] cur=%u fw='%s'\n", cur, fw_cls);
+        int li = -1;
+        LoopZone lz = line_loop_zone_for_instr(cur, fw_cls, arg1_cls, loops, nloops, &li);
         if (lz == LOOP_ZONE_EVAL_ENTRY || lz == LOOP_ZONE_EVAL_EXIT  ||
             lz == LOOP_ZONE_START_LABEL|| lz == LOOP_ZONE_END_LABEL  ||
             lz == LOOP_ZONE_ERR_LABEL)  { i--; continue; }
 
         if (lz == LOOP_ZONE_JMPF_ERR) {
-            do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_val);
-            if (thread_val_IF) { i--; }
-            else {
-                int t = -1;
-                for (int j = nl - 1; j >= 0; j--) if (ln[j] == loops[li].jmpf_start_line) { t = j; break; }
+            do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_op,
+                    loops[li].eval_entry_val);
+            if (thread_val_IF) {
+                i--;
+            } else {
+                /* Torna vicino alla coda until dopo aver inverted il corpo (iterazione). */
+                int t = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
                 if (t < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
                 i = t - 1;
             }
             continue;
         }
         if (lz == LOOP_ZONE_JMPF_START) {
-            do_eval(vm, fi, loops[li].eval_exit_id, loops[li].eval_exit_val);
-            if (thread_val_IF) { i--; }
+            do_eval(vm, fi, loops[li].eval_exit_id, loops[li].eval_exit_op,
+                    loops[li].eval_exit_val);
+            /* Forward: exit loop se exit-cond vera (senza jmp). Inverse: mentre il corpo da
+               questa iterazione non è stato completamente inverted, ripeti da prima
+               dell'EVAL until; quando la guardia coincide con uscita inversa, solo i--.
+               I ramif erano scambiati: con e0==0 al primo incontr prendevamo i-- e mai il corpo. */
+            if (!thread_val_IF) { i--; }
             else {
-                int t = -1;
-                for (int j = 0; j < nl; j++) if (ln[j] == loops[li].jmpf_err_line) { t = j; break; }
-                if (t < 0) { vm_debug_panic("[UNCALL] jmpf_err\n"); }
+                int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
+                if (t < 0) { vm_debug_panic("[UNCALL] loop_eval_exit\n"); }
                 i = t - 1;
             }
             continue;
         }
 
-        int ii = -1; IfZone iz = line_if_zone(cur, ifs, nifs, &ii);
+        int ii = -1;
+        IfZone iz = line_if_zone_for_instr(cur, fw_cls, arg1_cls, ifs, nifs, &ii);
         if (iz == IF_ZONE_EVAL_ENTRY || iz == IF_ZONE_EVAL_EXIT || iz == IF_ZONE_ELSE_LABEL ||
             iz == IF_ZONE_FI_LABEL   || iz == IF_ZONE_ASSERT    || iz == IF_ZONE_JMP_FI)
             { i--; continue; }
@@ -411,7 +548,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     vm->frames[fi].LocalVariables = sv;
                 }
             } else {
-                do_eval(vm, fi, ifs[ii].eval_entry_id, ifs[ii].eval_entry_val);
+                do_eval(vm, fi, ifs[ii].eval_entry_id, ifs[ii].eval_entry_op,
+                        ifs[ii].eval_entry_val);
                 uint branch_from = 0, branch_to = 0;
                 if (thread_val_IF) {
                     /* Forward IF condition true: invert only THEN branch. */
@@ -440,6 +578,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
 
         if (line_is_inside_if(cur, ifs, nifs)) { i--; continue; }
+
+        char *fw = strtok(exe_line, " \t");
+        if (!fw) { i--; continue; }
 
         /* ── FIX: le istruzioni dentro un blocco PAR vengono gestite da
            exec_par_threads(is_inverse=1) quando il loop incontra PAR_START.
