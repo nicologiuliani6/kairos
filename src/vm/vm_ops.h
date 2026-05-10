@@ -236,6 +236,11 @@ static inline void op_pop(VM *vm, const char *frame_name)
     uint  si = char_id_map_get(&vm->frames[fi].VarIndexer, C_stack);
     Var  *sv = vm->frames[fi].vars[si];
 
+    if (vm->inversion_depth > 0) {
+        strncpy(vm->mn_hist_floor_pop_guard_cur_inv_proc, frame_name, VAR_NAME_LENGTH - 1);
+        vm->mn_hist_floor_pop_guard_cur_inv_proc[VAR_NAME_LENGTH - 1] = '\0';
+    }
+
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL) vm_debug_panic("[VM] POP: sorgente non è stack/channel!\n");
     if (sv->T == TYPE_STACK && sv->stack_len == 0)    vm_debug_panic("[VM] POP: stack vuoto!\n");
 
@@ -270,6 +275,12 @@ static inline void op_pop(VM *vm, const char *frame_name)
             sv->channel->buf = realloc(sv->channel->buf, sv->channel->buf_len * sizeof(int));
         pthread_mutex_unlock(&sv->channel->mtx);
     } else {
+        if (vm->invert_hist_guard_var && sv == vm->invert_hist_guard_var &&
+            vm->inversion_depth > 0 && sv->stack_len <= vm->invert_hist_floor_min &&
+            vm->mn_hist_floor_pop_guard_anchor[0] != '\0' &&
+            strcmp(vm->mn_hist_floor_pop_guard_cur_inv_proc, vm->mn_hist_floor_pop_guard_anchor) == 0)
+            vm_debug_panic(
+                "[VM] POP: __mn_hist sotto il pavimento mnemo (manca __mn_hist_floor_snap?)\n");
         popped = sv->value[--sv->stack_len];
         if (sv->stack_len > 0)
             sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
