@@ -51,6 +51,17 @@ def _strip_mnemo_par_shared_pragma(source: str) -> tuple[str, bool]:
 
 
 if __name__ == '__main__':
+    # invert_op_to_line (UNCALL) è ricorsiva sulle CALL; uno stack POSIX stretto sul main thread può dare SIGSEGV.
+    try:
+        import resource
+
+        resource.setrlimit(
+            resource.RLIMIT_STACK,
+            (resource.RLIM_INFINITY, resource.RLIM_INFINITY),
+        )
+    except (ValueError, AttributeError, OSError):
+        pass
+
     if len(sys.argv) < 2:
         print("Uso: python Kairos.py <file> [--dump-bytecode] [--dap]")
         sys.exit(1)

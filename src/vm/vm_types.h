@@ -2,12 +2,16 @@
 #define VM_TYPES_H
 
 #include <pthread.h>
+#include <stddef.h>
 #include "char_id_map.h"
 #include "stack.h"
 
 #define DBG_OUTPUT_BUF_SIZE (1024 * 1024)  // 1 MB
 
 #define uint     unsigned int
+
+/* Mnemo --opt-uncall-user-calls: vedere MnemoHistFloorSnapEntry sotto VAR_NAME_LENGTH. */
+#define MNEMO_HIST_SNAP_DEPTH 384
 
 typedef enum {
     TYPE_INT     = 0,
@@ -36,8 +40,13 @@ typedef struct {
 } Channel;
 
 #define VAR_NAME_LENGTH      100
-#define VAR_STACK_MAX_SIZE   128
+#define VAR_STACK_MAX_SIZE   512
 #define VAR_CHANNEL_MAX_SIZE 128
+
+typedef struct {
+    size_t hist_len_floor;
+    char   opt_call_callee[VAR_NAME_LENGTH];
+} MnemoHistFloorSnapEntry;
 
 typedef struct Var {
     ValueType T;
@@ -51,9 +60,9 @@ typedef struct Var {
     pthread_t  ref_lock_owner;
 } Var;
 
-#define MAX_VARS   100
-#define MAX_LABEL  100
-#define MAX_NESTED 100
+#define MAX_VARS   512
+#define MAX_LABEL  256
+#define MAX_NESTED 256
 
 typedef struct {
     CharIdMap VarIndexer;
@@ -136,6 +145,13 @@ typedef struct {
     int   inversion_depth;
     int   suppress_show; /* 1 durante vm_run_BT di replay (inverso di UNCALL): no op_show */
     int   show_char_pending; /* ultimo SHOW è stato show(x,char): il prossimo show classico prefissa \n */
+    Var  *invert_hist_guard_var;   /* NULL = nessun vincolo pop su hist */
+    size_t invert_hist_floor_min;
+    /* Vincolo pop: solo mentre si invierte la proc. UNCALL Mnemo (`inv_name`), non i figli invert_op_to_line. */
+    char   mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH];
+    char   mn_hist_floor_pop_guard_cur_inv_proc[VAR_NAME_LENGTH];
+    MnemoHistFloorSnapEntry mn_hist_floor_snaps[MNEMO_HIST_SNAP_DEPTH];
+    int    mn_hist_floor_snap_sp;
 } VM;
 
 struct ThreadArgs {

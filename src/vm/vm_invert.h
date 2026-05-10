@@ -824,9 +824,17 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 strncpy(cn, pn, sizeof(cn) - 1);
                 cn[sizeof(cn) - 1] = '\0';
             }
+            int saved_inv = vm->inversion_depth;
             int ss = vm->suppress_show;
+            Var *saved_g = vm->invert_hist_guard_var;
+            size_t saved_fm = vm->invert_hist_floor_min;
+            vm->inversion_depth          = 0;
+            vm->invert_hist_guard_var    = NULL;
             vm->suppress_show = 1;
             vm_run_BT(vm, orig, cn);
+            vm->inversion_depth       = saved_inv;
+            vm->invert_hist_guard_var = saved_g;
+            vm->invert_hist_floor_min = saved_fm;
             vm->suppress_show = ss;
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
@@ -1019,10 +1027,15 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 }
                 int saved_inv = vm->inversion_depth;
                 int ss = vm->suppress_show;
-                vm->inversion_depth = 0;
+                Var *saved_g = vm->invert_hist_guard_var;
+                size_t saved_fm = vm->invert_hist_floor_min;
+                vm->inversion_depth       = 0;
+                vm->invert_hist_guard_var = NULL;
                 vm->suppress_show = 1;
                 vm_run_BT(vm, original_buffer, cn);
-                vm->inversion_depth = saved_inv;
+                vm->inversion_depth       = saved_inv;
+                vm->invert_hist_guard_var = saved_g;
+                vm->invert_hist_floor_min = saved_fm;
                 vm->suppress_show = ss;
                 for (int k = 0; k < pc; k++) vm->frames[callee_fi].vars[pi[k]] = sv[k];
                 vm->frames[callee_fi].LocalVariables = slv;

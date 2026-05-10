@@ -65,6 +65,77 @@ static inline int extract_srcline(const char *raw_line)
         }                                                                \
     } while(0)
 
+/* Dopo CALL __mn_hist_floor_snap il Mnemo emette subito CALL <proc> (coppia XOR+uncall). */
+static inline char *mn_skip_bytecode_lineno_prefix(char *line)
+{
+    char *p = line;
+    while (*p >= '0' && *p <= '9') p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '@') {
+        p++;
+        while (*p >= '0' && *p <= '9') p++;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+    return p;
+}
+
+static int mn_bytecode_next_token(char **scan, char *buf, size_t bufsz)
+{
+    char *s = *scan;
+    while (*s == ' ' || *s == '\t' || *s == '\r') s++;
+    if (*s == '\0' || *s == '\n') {
+        *scan = s;
+        return 0;
+    }
+    size_t i = 0;
+    while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n' && i + 1 < bufsz)
+        buf[i++] = *s++;
+    buf[i] = '\0';
+    *scan = s;
+    return 1;
+}
+
+static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_line_nl,
+                                                     char *out_callee,
+                                                     size_t callee_sz)
+{
+    for (; *cursor_after_snap_line_nl;) {
+        char *nline = strchr(cursor_after_snap_line_nl, '\n');
+        size_t L    = nline ? (size_t)(nline - cursor_after_snap_line_nl)
+                           : strlen(cursor_after_snap_line_nl);
+        char  linebuf[2048];
+
+        if (L >= sizeof(linebuf))
+            vm_debug_panic("[VM] __mn_hist_floor_snap: riga bytecode troppo lunga\n");
+        memcpy(linebuf, cursor_after_snap_line_nl, L);
+        linebuf[L] = '\0';
+
+        cursor_after_snap_line_nl = nline ? nline + 1 : cursor_after_snap_line_nl + L;
+
+        char *past = mn_skip_bytecode_lineno_prefix(linebuf);
+        if (*past == '\0')
+            continue;
+
+        char *wk       = past;
+        char  tok_op[VAR_NAME_LENGTH], callee[VAR_NAME_LENGTH];
+        if (!mn_bytecode_next_token(&wk, tok_op, sizeof(tok_op)))
+            continue;
+        if (strcmp(tok_op, "CALL") != 0) {
+            vm_debug_panic(
+                "[VM] __mn_hist_floor_snap: dopo lo snap attendevo CALL <proc>, trovato '%s'\n",
+                tok_op);
+        }
+        if (!mn_bytecode_next_token(&wk, callee, sizeof(callee)))
+            vm_debug_panic("[VM] __mn_hist_floor_snap: CALL senza nome procedura\n");
+        if (!strcmp(callee, "__mn_hist_floor_snap"))
+            vm_debug_panic("[VM] __mn_hist_floor_snap: snapshot Mnemo duplicati consecutivi\n");
+        strncpy(out_callee, callee, callee_sz - 1);
+        out_callee[callee_sz - 1] = '\0';
+        return;
+    }
+    vm_debug_panic("[VM] __mn_hist_floor_snap: nessuna CALL dopo snapshot\n");
+}
+
 /* ======================================================================
  *  vm_run_BT — loop principale di esecuzione
  * ====================================================================== */
@@ -128,6 +199,26 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "CALL")) {
             vm_if_mark_call();
             char *pn      = strtok(NULL, " \t");
+            /* Mnemo: registra len(__mn_hist) prima di call ottimizzata + uncall. */
+            if (pn && !strcmp(pn, "__mn_hist_floor_snap")) {
+                char *hn = strtok(NULL, " \t");
+                if (!hn) vm_debug_panic("[VM] __mn_hist_floor_snap: manca stack\n");
+                uint  cfi_snap = get_findex(fname);
+                uint  si = char_id_map_get(&vm->frames[cfi_snap].VarIndexer, hn);
+                Var  *hv = vm->frames[cfi_snap].vars[si];
+                if (!hv || hv->T != TYPE_STACK)
+                    vm_debug_panic("[VM] __mn_hist_floor_snap: non stack\n");
+                if (vm->mn_hist_floor_snap_sp >= MNEMO_HIST_SNAP_DEPTH)
+                    vm_debug_panic("[VM] __mn_hist_floor_snap overflow\n");
+                MnemoHistFloorSnapEntry *ent =
+                    &vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp];
+                ent->hist_len_floor = hv->stack_len;
+                mn_hist_floor_snap_peek_next_call_callee(nl + 1, ent->opt_call_callee,
+                                                        sizeof(ent->opt_call_callee));
+                vm->mn_hist_floor_snap_sp++;
+                *nl = '\n'; ptr = nl + 1;
+                continue;
+            }
             uint  cfi_cur = get_findex(fname);
             char  base[VAR_NAME_LENGTH]; strncpy(base, fname, VAR_NAME_LENGTH - 1);
             char *at = strchr(base, '@'); if (at) *at = '\0';
@@ -231,7 +322,30 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 strncpy(inv_name, pn, sizeof(inv_name) - 1);
                 inv_name[sizeof(inv_name) - 1] = '\0';
             }
+            Var *histv = NULL;
+            for (int hk = 0; hk < pc; hk++) {
+                Var *cv = vm->frames[cfi].vars[pi[hk]];
+                if (cv && cv->T == TYPE_STACK) {
+                    histv = cv;
+                    break;
+                }
+            }
+            vm->invert_hist_guard_var   = NULL;
+            vm->invert_hist_floor_min   = 0;
+            vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
+            if (histv && vm->mn_hist_floor_snap_sp > 0 &&
+                !strcmp(vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp - 1].opt_call_callee, pn)) {
+                MnemoHistFloorSnapEntry *top =
+                    &vm->mn_hist_floor_snaps[--vm->mn_hist_floor_snap_sp];
+                vm->invert_hist_floor_min = top->hist_len_floor;
+                vm->invert_hist_guard_var = histv;
+                strncpy(vm->mn_hist_floor_pop_guard_anchor, inv_name, VAR_NAME_LENGTH - 1);
+                vm->mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH - 1] = '\0';
+            }
             invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            vm->invert_hist_guard_var = NULL;
+            vm->invert_hist_floor_min   = 0;
+            vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             vm->frames[cfi].LocalVariables = slv;
@@ -373,7 +487,9 @@ void vm_exec(VM *vm, char *buffer)
 void vm_free(VM *vm)
 {
     if (!vm) return;
-    Var *freed[MAX_FRAMES * MAX_VARS];
+    size_t freed_cap = (size_t)MAX_FRAMES * (size_t)MAX_VARS;
+    Var **freed = (Var **)calloc(freed_cap, sizeof(Var *));
+    if (!freed) return;
     int freed_count = 0;
     for (int i = 0; i <= vm->frame_top; i++) {
         Frame *f = &vm->frames[i];
@@ -405,14 +521,14 @@ void vm_free(VM *vm)
                         free(to_free->value);
                     }
                     free(to_free);
-                    if (freed_count < (MAX_FRAMES * MAX_VARS))
-                        freed[freed_count++] = to_free;
+                    if (freed_count < (int)freed_cap) freed[freed_count++] = to_free;
                 }
                 f->vars[j] = NULL;
             }
         }
         f->var_count = 0;
     }
+    free(freed);
 }
 
 /* ======================================================================
