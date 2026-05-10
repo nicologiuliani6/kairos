@@ -144,8 +144,10 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
 
         if (!strcmp(fw, "EVAL") && in_if) {
-            /* Chiusura IF nel bytecode corrente: dopo FI viene emesso EVAL di uscita
-               (non ASSERT). */
+            /* Dopo LABEL FI viene EVAL guardia FI; poi spesso ASSERT stessa guardia.
+               Prima riga bastava chiudere l'IF qui e mettere assert_line=EVAL.
+               Matcher ASSERT in line_if_zone_for_instr cerca riga fisica dell'ASSERT
+               → mismatch → zona IF fuori sincrono; IF dentro from/until + UNCALL rompe.*/
             out[n].eval_exit_line = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
             char *fi_op = strtok(NULL, " \t");
@@ -153,7 +155,27 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             strncpy(out[n].eval_exit_id,  a   ? a   : "", 63);
             strncpy(out[n].eval_exit_val, rhs,             63);
             _copy_compare_op(out[n].eval_exit_op, fi_op);
-            out[n].assert_line = cur; in_if = 0; n++;
+
+            /* Peek rigo dopo */
+            char *n2      = strchr(nl + 1, '\n');
+            int   nx_asrt = 0;
+            if (n2 && (size_t)(n2 - (nl + 1)) < sizeof(lb)) {
+                char peekb[2048];
+                memcpy(peekb, nl + 1, (size_t)(n2 - (nl + 1)));
+                peekb[(size_t)(n2 - (nl + 1))] = '\0';
+                char ptmp[2048];
+                strncpy(ptmp, peekb, sizeof(ptmp) - 1);
+                ptmp[sizeof(ptmp) - 1] = '\0';
+                char *p1 = strtok(skip_lineno(ptmp), " \t");
+                nx_asrt = (p1 && !strcmp(p1, "ASSERT"));
+            }
+            if (nx_asrt) {
+                out[n].assert_line = 0; /* sentinel: chiude riga ASSERT */
+            } else {
+                out[n].assert_line = cur;
+                in_if                = 0;
+                n++;
+            }
         } else if (!strcmp(fw, "EVAL")) {
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
@@ -165,6 +187,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         } else if (!strcmp(fw, "JMPF") && !in_if) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
+                memset(&out[n], 0, sizeof(IfDescriptor));
                 out[n].eval_entry_line = peval;
                 strncpy(out[n].eval_entry_id,  pid,  63);
                 strncpy(out[n].eval_entry_val, pval, 63);
@@ -179,11 +202,18 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             if      (!strncmp(ln, "ELSE_", 5)) out[n].else_label_line = cur;
             else if (!strncmp(ln, "FI_",   3)) out[n].fi_label_line   = cur;
         } else if (!strcmp(fw, "ASSERT") && in_if) {
-            out[n].eval_exit_line = peval;
-            strncpy(out[n].eval_exit_id,  pid,  63);
-            strncpy(out[n].eval_exit_val, pval, 63);
-            _copy_compare_op(out[n].eval_exit_op, pfi_op);
-            out[n].assert_line = cur; in_if = 0; n++;
+            if (!out[n].assert_line && out[n].eval_exit_line) {
+                /* EVAL FI ha lasciato in_if per questa ASSERT */
+                out[n].assert_line = cur;
+            } else {
+                out[n].eval_exit_line = peval;
+                strncpy(out[n].eval_exit_id,  pid,  63);
+                strncpy(out[n].eval_exit_val, pval, 63);
+                _copy_compare_op(out[n].eval_exit_op, pfi_op);
+                out[n].assert_line = cur;
+            }
+            in_if = 0;
+            n++;
         } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
         *nl = '\n'; ptr = nl + 1;
     }
@@ -331,6 +361,100 @@ static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
     thread_val_IF = eval_cond(lval, op, rval);
 }
 
+/* IF il cui bytecode è contenuto nel corpo del from/until (non il test pre-loop).
+   Serve a sapere quando applicare jmp_start_deep (solo corpi puri Mnemo-ish). */
+static inline int loop_body_has_nested_if(uint from_sl, uint from_el, IfDescriptor *ifs, int nifs)
+{
+    for (int i = 0; i < nifs; i++) {
+        if (ifs[i].eval_entry_line > from_sl && ifs[i].eval_entry_line < from_el)
+            return 1;
+    }
+    return 0;
+}
+
+/* CALL/UNCALL nel corpo: peeling profondo rompe pipeline tipo example_login/bruteforce. */
+static inline int loop_body_has_call_or_uncall(char *buf, uint from_sl, uint from_el)
+{
+    char *ptr = go_to_line(buf, from_sl);
+    if (!ptr) return 0;
+    while (ptr && *ptr) {
+        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        uint cur = (uint)atoi(ptr);
+        if (cur > from_el) { *nl = '\n'; break; }
+        if (cur >= from_sl) {
+            char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+            lb[sizeof(lb) - 1] = '\0';
+            char *fw = strtok(skip_lineno(lb), " \t");
+            if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) {
+                *nl = '\n'; return 1;
+            }
+        }
+        *nl = '\n'; ptr = nl + 1;
+    }
+    return 0;
+}
+
+static inline int loop_body_use_deep_peel(char *buf, LoopDescriptor *L, int ili,
+                                           IfDescriptor *ifs, int nifs)
+{
+    if (!loop_body_has_nested_if(L[ili].from_start_line, L[ili].from_end_line, ifs, nifs))
+        return 0;
+    if (loop_body_has_call_or_uncall(buf, L[ili].from_start_line, L[ili].from_end_line))
+        return 0;
+    return 1;
+}
+
+/* PUSH <id> <stack> nel corpo from/until (per riga bytecode). */
+static inline int loop_body_push_count_to_stack(char *buf, uint from_sl, uint from_el,
+                                                const char *stack_name)
+{
+    int n = 0;
+    char *ptr = go_to_line(buf, from_sl);
+    if (!ptr) return 0;
+    while (ptr && *ptr) {
+        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        uint cur = (uint)atoi(ptr);
+        if (cur > from_el) { *nl = '\n'; break; }
+        if (cur >= from_sl) {
+            char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+            lb[sizeof(lb) - 1] = '\0';
+            char scan[2048];
+            strncpy(scan, skip_lineno(lb), sizeof(scan) - 1);
+            scan[sizeof(scan) - 1] = '\0';
+            char *tok = strtok(scan, " \t"); /* PUSH */
+            if (tok && !strcmp(tok, "PUSH")) {
+                strtok(NULL, " \t"); /* id */
+                char *st = strtok(NULL, " \t");
+                if (st && !strcmp(st, stack_name))
+                    n++;
+            }
+        }
+        *nl = '\n'; ptr = nl + 1;
+    }
+    return n;
+}
+
+/* Bump jmp_start_deep: una unità per PUSH su hist/scratch nel corpo + margine IF interno Mnemo.
+   Es. Mnemo ladder: 4 PUSH hist + 2 scratch + 3 ≡ 9. */
+static inline int loop_mnemo_deep_increment(char *buf, LoopDescriptor *L, int ili,
+                                            IfDescriptor *ifs, int nifs)
+{
+    if (!loop_body_use_deep_peel(buf, L, ili, ifs, nifs)) return 0;
+    int nh = loop_body_push_count_to_stack(buf, L[ili].from_start_line, L[ili].from_end_line,
+                                              "__mn_hist");
+    int ns = loop_body_push_count_to_stack(buf, L[ili].from_start_line, L[ili].from_end_line,
+                                              "__mn_scratch");
+    /* Un IF nel corpo duplica un PUSH e0 (then+else) nel sorgente: una sola push per iter. */
+    int inner_ifs = 0;
+    for (int j = 0; j < nifs; j++)
+        if (ifs[j].eval_entry_line > L[ili].from_start_line &&
+            ifs[j].eval_entry_line < L[ili].from_end_line)
+            inner_ifs++;
+    nh -= inner_ifs;
+    if (nh < 1) nh = 1;
+    return nh + ns + 3;
+}
+
 static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
 {
     for (int i = 0; i < nifs; i++)
@@ -437,6 +561,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 #define MAX_IFS   32
 #define MAX_LINES 1024
 #define MAX_PARS  32
+    int jmp_start_deep[MAX_LOOPS];
+    memset(jmp_start_deep, 0, sizeof(jmp_start_deep));
 
     LoopDescriptor loops[MAX_LOOPS]; int nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
     IfDescriptor   ifs  [MAX_IFS];   int nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
@@ -493,13 +619,31 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         if (lz == LOOP_ZONE_JMPF_ERR) {
             do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_op,
                     loops[li].eval_entry_val);
-            if (thread_val_IF) {
-                i--;
+            int deep_peel =
+                loop_body_use_deep_peel(orig, loops, li, ifs, nifs);
+            if (deep_peel) {
+                if (thread_val_IF) {
+                    if (jmp_start_deep[li] > 0) {
+                        jmp_start_deep[li]--;
+                        int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
+                        if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
+                        i = tt - 1;
+                    } else {
+                        i--;
+                    }
+                } else {
+                    int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
+                    if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
+                    i = tt - 1;
+                }
             } else {
-                /* Torna vicino alla coda until dopo aver inverted il corpo (iterazione). */
-                int t = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
-                if (t < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
-                i = t - 1;
+                if (thread_val_IF) {
+                    i--;
+                } else {
+                    int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
+                    if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
+                    i = tt - 1;
+                }
             }
             continue;
         }
@@ -512,6 +656,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                I ramif erano scambiati: con e0==0 al primo incontr prendevamo i-- e mai il corpo. */
             if (!thread_val_IF) { i--; }
             else {
+                /* Uscita-until: caricare jmp_start_deep per le iterazioni residue (Mnemo). */
+                int dinc = loop_mnemo_deep_increment(orig, loops, li, ifs, nifs);
+                if (dinc > 0)
+                    jmp_start_deep[li] += dinc;
                 int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
                 if (t < 0) { vm_debug_panic("[UNCALL] loop_eval_exit\n"); }
                 i = t - 1;
@@ -742,20 +890,41 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
  *  exec_branch_inverse
  * ====================================================================== */
 
+/* Rami THEN/ELSE corti (solo PUSHEQ/PUSH, nessun from/until): inversione lineare
+ * come prima. Se nel ramo c’è un ciclo, serve il loop di invert_op_to_line
+ * (LOOP_ZONE + IF annidati dentro il corpo). */
+
+static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_line)
+{
+    char *ptr = go_to_line(buf, from_line);
+    if (!ptr) return 0;
+    while (ptr && *ptr) {
+        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        uint cur = (uint)atoi(ptr);
+        if (cur >= to_line) { *nl = '\n'; break; }
+        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        lb[sizeof(lb) - 1] = '\0';
+        char *fw = strtok(skip_lineno(lb), " \t");
+        if (fw) {
+            char *a1 = strtok(NULL, " \t");
+            if (!strcmp(fw, "LABEL") && a1 && !strncmp(a1, "FROM_", 5)) {
+                *nl = '\n'; return 1;
+            }
+            if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "FROM_", 5)) {
+                *nl = '\n'; return 1;
+            }
+        }
+        *nl = '\n'; ptr = nl + 1;
+    }
+    return 0;
+}
+
 static void exec_branch_inverse(VM *vm, char *original_buffer,
                                 const char *frame_name,
                                 uint from_line, uint to_line,
                                 uint caller_fi)
 {
-    char *lines[512]; int count = 0;
-    char *ptr = go_to_line(original_buffer, from_line);
-    if (!ptr) return;
-    while (ptr && *ptr && count < 512) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        if ((uint)atoi(ptr) >= to_line) { *nl = '\n'; break; }
-        lines[count++] = strdup(ptr);
-        *nl = '\n'; ptr = nl + 1;
-    }
+    if (from_line >= to_line) return;
 
     uint cfi = get_findex(frame_name);
     Var *saved[MAX_VARS]; memcpy(saved, vm->frames[cfi].vars, sizeof(Var *) * MAX_VARS);
@@ -782,84 +951,97 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         }
     }
 
-    for (int i = count - 1; i >= 0; i--) {
-        char ob[2048]; strncpy(ob, lines[i], sizeof(ob) - 1);
-        ob[sizeof(ob) - 1] = '\0';
-        char *clean = skip_lineno(ob);
-        char *fw = strtok(clean, " \t");
-        if (!fw) continue;
-
-        /* CALL resta nel loop principale di invert_op_to_line (spesso è fuori dal ramo IF).
-           Gestire CALL qui romperebbe la logica depth>0 su procedure ricorsive (es. cript). */
-        if (!strcmp(fw, "CALL")) continue;
-
-        if (!strcmp(fw, "UNCALL")) {
-            vm_if_mark_call();
-            char *pn = strtok(NULL, " \t");
-            char base_cur[VAR_NAME_LENGTH];
-            strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
-            base_cur[VAR_NAME_LENGTH - 1] = '\0';
-            char *at_cur = strchr(base_cur, '@');
-            if (at_cur) *at_cur = '\0';
-            int is_rec = (strcmp(pn, base_cur) == 0);
-            int new_depth = 0;
-            if (is_rec) {
-                const char *atf = strchr(frame_name, '@');
-                if (atf) {
-                    const char *us = strrchr(frame_name, '_');
-                    if (us && us > atf) new_depth = atoi(us + 1);
-                    else new_depth = atoi(atf + 1);
-                }
-                new_depth++;
+    if (branch_span_has_from_loop(original_buffer, from_line, to_line)) {
+        invert_op_to_line(vm, frame_name, original_buffer, to_line - 1, from_line - 1);
+    } else {
+        char *lines[512]; int count = 0;
+        char *p2 = go_to_line(original_buffer, from_line);
+        if (p2 && *p2) {
+            while (p2 && *p2 && count < 512) {
+                char *nl2 = strchr(p2, '\n'); if (!nl2) break; *nl2 = '\0';
+                if ((uint)atoi(p2) >= to_line) { *nl2 = '\n'; break; }
+                lines[count++] = strdup(p2);
+                *nl2 = '\n'; p2 = nl2 + 1;
             }
-            uint callee_fi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
-                                    : (current_thread_args ? clone_frame_for_thread(vm, pn)
-                                                           : char_id_map_get(&FrameIndexer, pn));
-            int  pc = vm->frames[callee_fi].param_count, *pi = vm->frames[callee_fi].param_indices;
-            Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi].vars[pi[k]];
-            Stack slv = vm->frames[callee_fi].LocalVariables;
-            stack_init(&vm->frames[callee_fi].LocalVariables);
-            char *p = NULL; int jj = 0;
-            while ((p = strtok(NULL, " \t")) && jj < pc) {
-                int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p);
-                vm->frames[callee_fi].vars[pi[jj++]] = vm->frames[cfi].vars[si];
-            }
-            char cn[VAR_NAME_LENGTH];
-            if (is_rec && current_thread_args) {
-                make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
-            } else if (is_rec) {
-                make_frame_key(pn, new_depth, cn, sizeof(cn));
-            } else if (current_thread_args) {
-                make_thread_frame_key(pn, cn, sizeof(cn));
-            } else {
-                strncpy(cn, pn, sizeof(cn) - 1);
-                cn[sizeof(cn) - 1] = '\0';
-            }
-            /* Riesecuzione avanti: inversion_depth>0 altera LOCAL/DELOCAL sui channel
-               (channel_restore_*); va azzerato per questa vm_run_BT. */
-            int saved_inv = vm->inversion_depth;
-            int ss = vm->suppress_show;
-            vm->inversion_depth = 0;
-            vm->suppress_show = 1;
-            vm_run_BT(vm, original_buffer, cn);
-            vm->inversion_depth = saved_inv;
-            vm->suppress_show = ss;
-            for (int k = 0; k < pc; k++) vm->frames[callee_fi].vars[pi[k]] = sv[k];
-            vm->frames[callee_fi].LocalVariables = slv;
-            continue;
         }
+        for (int i = count - 1; i >= 0; i--) {
+            char ob[2048]; strncpy(ob, lines[i], sizeof(ob) - 1);
+            ob[sizeof(ob) - 1] = '\0';
+            char *clean = skip_lineno(ob);
+            char *fw = strtok(clean, " \t");
+            if (!fw) continue;
 
-        if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
-        else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
-        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
-        else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
-        else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
-        else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
-        else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
-        else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
-        else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
-        else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
-        else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
+            /* CALL resta nel loop principale di invert_op_to_line (spesso è fuori dal ramo IF).
+               Gestire CALL qui romperebbe la logica depth>0 su procedure ricorsive (es. cript). */
+            if (!strcmp(fw, "CALL")) continue;
+
+            if (!strcmp(fw, "UNCALL")) {
+                vm_if_mark_call();
+                char *pn = strtok(NULL, " \t");
+                char base_cur[VAR_NAME_LENGTH];
+                strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
+                base_cur[VAR_NAME_LENGTH - 1] = '\0';
+                char *at_cur = strchr(base_cur, '@');
+                if (at_cur) *at_cur = '\0';
+                int is_rec = (strcmp(pn, base_cur) == 0);
+                int new_depth = 0;
+                if (is_rec) {
+                    const char *atf = strchr(frame_name, '@');
+                    if (atf) {
+                        const char *us = strrchr(frame_name, '_');
+                        if (us && us > atf) new_depth = atoi(us + 1);
+                        else new_depth = atoi(atf + 1);
+                    }
+                    new_depth++;
+                }
+                uint callee_fi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
+                                        : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                               : char_id_map_get(&FrameIndexer, pn));
+                int  pc = vm->frames[callee_fi].param_count, *pi = vm->frames[callee_fi].param_indices;
+                Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi].vars[pi[k]];
+                Stack slv = vm->frames[callee_fi].LocalVariables;
+                stack_init(&vm->frames[callee_fi].LocalVariables);
+                char *p3 = NULL; int jj = 0;
+                while ((p3 = strtok(NULL, " \t")) && jj < pc) {
+                    int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3);
+                    vm->frames[callee_fi].vars[pi[jj++]] = vm->frames[cfi].vars[si];
+                }
+                char cn[VAR_NAME_LENGTH];
+                if (is_rec && current_thread_args) {
+                    make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
+                } else if (is_rec) {
+                    make_frame_key(pn, new_depth, cn, sizeof(cn));
+                } else if (current_thread_args) {
+                    make_thread_frame_key(pn, cn, sizeof(cn));
+                } else {
+                    strncpy(cn, pn, sizeof(cn) - 1);
+                    cn[sizeof(cn) - 1] = '\0';
+                }
+                int saved_inv = vm->inversion_depth;
+                int ss = vm->suppress_show;
+                vm->inversion_depth = 0;
+                vm->suppress_show = 1;
+                vm_run_BT(vm, original_buffer, cn);
+                vm->inversion_depth = saved_inv;
+                vm->suppress_show = ss;
+                for (int k = 0; k < pc; k++) vm->frames[callee_fi].vars[pi[k]] = sv[k];
+                vm->frames[callee_fi].LocalVariables = slv;
+                continue;
+            }
+
+            if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
+            else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
+            else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
+            else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
+            else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
+            else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
+            else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
+            else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
+            else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
+            else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
+            else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
+        }
+        for (int i = 0; i < count; i++) free(lines[i]);
     }
 
     for (int v = 0; v < vm->frames[cfi].var_count; v++)
@@ -869,7 +1051,6 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
 
     memcpy(vm->frames[cfi].vars, saved, sizeof(Var *) * MAX_VARS);
     vm->frames[cfi].LocalVariables = saved_lv;
-    for (int i = 0; i < count; i++) free(lines[i]);
 }
 
 #endif /* VM_INVERT_H */
