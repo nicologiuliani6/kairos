@@ -1,0 +1,64 @@
+procedure __mn_k_loop(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, stack __mn_hist, stack __mn_scratch)
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+    local int __mn_e2 = 0
+        // funzione C loop
+        push(__mn_mem0, __mn_hist)
+        __mn_mem0 += 0
+        if __mn_mem0 < 10 then
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 1
+        else
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+        fi __mn_mem0 < 10
+        from __mn_e0 != 0 loop
+            push(__mn_e1, __mn_hist)
+            __mn_e1 += __mn_mem0
+            __mn_e2 += __mn_e1
+            __mn_e2 += 1
+            push(__mn_mem0, __mn_hist)
+            __mn_mem0 += __mn_e2
+            push(__mn_e2, __mn_scratch)
+            push(__mn_e1, __mn_scratch)
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+            if __mn_mem0 < 10 then
+                push(__mn_e0, __mn_hist)
+                __mn_e0 += 1
+            else
+                push(__mn_e0, __mn_hist)
+                __mn_e0 += 0
+            fi __mn_mem0 < 10
+        until __mn_e0 == 0
+    push(__mn_e2, __mn_hist)
+    delocal int __mn_e2 = 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_mem0 = 0
+    local int __mn_mem1 = 0
+    local int __mn_mem2 = 0
+    local int __mn_mem3 = 0
+    local int __mn_mem4 = 0
+    local int __mn_exit = 0
+        // generato da Mnemo da C
+        call __mn_k_loop(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_hist, __mn_scratch)
+        uncall __mn_k_loop(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_hist, __mn_scratch)
+        // return
+    push(__mn_exit, __mn_hist)
+    delocal int __mn_exit = 0
+    push(__mn_mem4, __mn_hist)
+    delocal int __mn_mem4 = 0
+    push(__mn_mem3, __mn_hist)
+    delocal int __mn_mem3 = 0
+    push(__mn_mem2, __mn_hist)
+    delocal int __mn_mem2 = 0
+    push(__mn_mem1, __mn_hist)
+    delocal int __mn_mem1 = 0
+    push(__mn_mem0, __mn_hist)
+    delocal int __mn_mem0 = 0

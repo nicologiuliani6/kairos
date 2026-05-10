@@ -277,7 +277,14 @@ static inline void op_pop(VM *vm, const char *frame_name)
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
     var_par_mut_acquire(dest);
-    *(dest->value) += popped;
+    /* In UNCALL invert_op_to_line, POP è l'inverso di PUSH su stack: PUSH azzera
+       l'INT sorgente; ripristinarlo è assegnazione, non +=. += fallisce se nel
+       percorso d'inversione l'INT non è stato riportato esattamente a 0 prima
+       del pop (IF/LOOP annidati, procedure Mnemo → stack residui dopo uncall). */
+    if (vm->inversion_depth > 0 && dest->T == TYPE_INT && sv->T == TYPE_STACK)
+        *(dest->value) = popped;
+    else
+        *(dest->value) += popped;
     var_par_mut_release(dest);
 
     if (sv->T == TYPE_CHANNEL && sender_to_wake)
