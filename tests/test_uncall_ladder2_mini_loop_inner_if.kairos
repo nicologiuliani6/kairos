@@ -1,0 +1,52 @@
+// Scala UNCALL: stesso corpo Mnemo/e2 di ladder1 ma meno parametri —
+// termina in pochi step (overflow int32) così è un repro veloce, non un ciclo quasi infinito.
+procedure p(int __mn_mem0, stack __mn_hist, stack __mn_scratch)
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+    local int __mn_e2 = 0
+    push(__mn_mem0, __mn_hist)
+    __mn_mem0 += 0
+    if __mn_mem0 < 10 then
+        push(__mn_e0, __mn_hist)
+        __mn_e0 += 1
+    else
+        push(__mn_e0, __mn_hist)
+        __mn_e0 += 0
+    fi __mn_mem0 < 10
+    from __mn_e0 != 0 loop
+        push(__mn_e1, __mn_hist)
+        __mn_e1 += __mn_mem0
+        __mn_e2 += __mn_e1
+        __mn_e2 += 1
+        push(__mn_mem0, __mn_hist)
+        __mn_mem0 += __mn_e2
+        push(__mn_e2, __mn_scratch)
+        push(__mn_e1, __mn_scratch)
+        push(__mn_e0, __mn_hist)
+        __mn_e0 += 0
+        if __mn_mem0 < 10 then
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 1
+        else
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+        fi __mn_mem0 < 10
+    until __mn_e0 == 0
+    push(__mn_e2, __mn_hist)
+    delocal int __mn_e2 = 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_mem0 = 0
+    local int __mn_ex = 0
+    call p(__mn_mem0, __mn_hist, __mn_scratch)
+    uncall p(__mn_mem0, __mn_hist, __mn_scratch)
+    push(__mn_ex, __mn_hist)
+    delocal int __mn_ex = 0
+    push(__mn_mem0, __mn_hist)
+    delocal int __mn_mem0 = 0
