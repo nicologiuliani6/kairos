@@ -177,8 +177,23 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
         if (!strcmp(fw, "END_PROC")) {
             uint fi = get_findex(fname);
-            if (stack_size(&vm->frames[fi].LocalVariables) > -1)
+            if (stack_size(&vm->frames[fi].LocalVariables) > -1) {
+                // #region agent log
+                {
+                    FILE *_ep = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
+                    if (_ep) {
+                        fprintf(_ep,
+                                "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"H\",\"location\":\"end_proc\","
+                                "\"message\":\"open_locals\",\"data\":{\"frame\":\"%s\",\"loc_sz\":%d},"
+                                "\"timestamp\":%lld}\n",
+                                fname, stack_size(&vm->frames[fi].LocalVariables),
+                                (long long)time(NULL) * 1000);
+                        fclose(_ep);
+                    }
+                }
+                // #endregion
                 vm_debug_panic("[VM] END_PROC: variabili LOCAL non chiuse!\n");
+            }
             *nl = '\n';
             if (cs_top >= 0) {
                 int cfi = cs[cs_top].callee_findex;
@@ -342,7 +357,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 strncpy(vm->mn_hist_floor_pop_guard_anchor, inv_name, VAR_NAME_LENGTH - 1);
                 vm->mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH - 1] = '\0';
             }
-            invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+            invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1,
+                              vm->frames[cfi].addr + 1, 1);
             vm->invert_hist_guard_var = NULL;
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';

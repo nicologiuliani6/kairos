@@ -23,7 +23,7 @@ static inline int par_extract_srcline(const char *raw_line)
 static void *thread_entry(void *arg);
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
-                       uint start, uint stop);
+                       uint start, uint stop, int honor_if_line_skip);
 
 /* ======================================================================
  *  PAR — struttura di un blocco parallelo
@@ -256,7 +256,7 @@ static void *thread_entry(void *arg)
             }
             if (do_invert)
                 invert_op_to_line(vm, thread_key, args->buffer,
-                                  vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1);
+                                  vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1, 1);
             else {
                 int ss = vm->suppress_show;
                 if (args->is_inverse) vm->suppress_show = 1;

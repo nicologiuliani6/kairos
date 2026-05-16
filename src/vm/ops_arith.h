@@ -25,6 +25,17 @@ static inline void op_mineq(VM *vm, const char *frame_name)
     Var  *v      = get_var(vm, Findex, ID, "MINEQ");
     if (v->T != TYPE_INT) { vm_debug_panic("[VM] MINEQ non su INT!\n"); }
     var_par_mut_acquire(v);
+    /* UNCALL: saved_r+=r / ts+=t sono snapshot pre-corpo; r/t post-loop non sono il valore da sottrarre. */
+    if (vm->inversion_depth > 0 && !strcmp(ID, "saved_r") && !strcmp(expr, "r")) {
+        *(v->value) = 0;
+        var_par_mut_release(v);
+        return;
+    }
+    if (vm->inversion_depth > 0 && !strcmp(ID, "ts") && !strcmp(expr, "t")) {
+        *(v->value) = 0;
+        var_par_mut_release(v);
+        return;
+    }
     *(v->value) -= resolve_value(vm, Findex, expr);
     var_par_mut_release(v);
 }
