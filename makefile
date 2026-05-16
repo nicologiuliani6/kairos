@@ -21,7 +21,9 @@ VM_HDRS     := $(wildcard $(VM_DIR)/*.h)
 CC          := gcc
 CXX         := g++
 CFLAGS      := -shared -fPIC -Wall -Wextra -pthread
-# Release: massima ottimizzazione locale (-march=native → non redistribuire il .so su CPU diverse)
+# `build` (standard): compilazione portabile, -O2, niente -march=native/-flto. Adatta per dev.
+CFLAGS_BLD  := $(CFLAGS) -O2 -DNDEBUG -Wno-stringop-truncation
+# `release`: massima ottimizzazione locale (-march=native → non redistribuire il .so su CPU diverse)
 CFLAGS_REL  := $(CFLAGS) -O3 -march=native -flto -fomit-frame-pointer -funroll-loops \
                -DNDEBUG -Wno-stringop-truncation
 CFLAGS_DAP  := $(CFLAGS) -g -DDEBUG -DDAP_MODE
@@ -34,21 +36,34 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 RESET  := \033[0m
 
-.PHONY: all build-release build-dap test-dap run test mnemo-test mnemo-run release install-deps check-deps clean help
+.PHONY: all build build-release build-dap test-dap run test mnemo-test mnemo-run release release-app install-deps check-deps clean help
 
-# Default: build ottimizzata
-all: build-release
+# Default: release (massima ottimizzazione).
+all: release
+
+# `release`: libvm.so massima ottimizzazione (-O3 -march=native -flto). Default per `all`.
+release: $(LIBVM)
+
+# Compat: build-release ≡ release (legacy).
+build-release: release
 
 $(LIBVM): $(VM_SOURCES) $(VM_HDRS) $(VERSCRIPT) | check-deps
 	@mkdir -p build
-	@echo "$(CYAN)Build release ($(CC) -O3 -march=native -flto)...$(RESET)"
+	@echo "$(CYAN)Release ($(CC) -O3 -march=native -flto)...$(RESET)"
 	$(CC) $(CFLAGS_REL) \
 	    -Wl,--version-script=$(VERSCRIPT) \
 	    $(LDFLAGS_REL) \
 	    -o $(LIBVM) $(VM_SOURCES) -I$(VM_DIR)
-	@echo "$(GREEN)Build release OK$(RESET)"
+	@echo "$(GREEN)Release OK$(RESET)"
 
-build-release: $(LIBVM)
+# `build`: compilazione standard portabile (-O2, niente -march=native/-flto).
+build: $(VM_SOURCES) $(VM_HDRS) $(VERSCRIPT) | check-deps
+	@mkdir -p build
+	@echo "$(CYAN)Build ($(CC) -O2)...$(RESET)"
+	$(CC) $(CFLAGS_BLD) \
+	    -Wl,--version-script=$(VERSCRIPT) \
+	    -o $(LIBVM) $(VM_SOURCES) -I$(VM_DIR)
+	@echo "$(GREEN)Build OK$(RESET)"
 
 build-dap: check-deps
 	@mkdir -p build
@@ -150,8 +165,9 @@ ifndef FILE
 endif
 	@$(MAKE) -C $(MNEMO_DIR) run FILE=$(FILE) KAIROS_ROOT=$(abspath $(CURDIR))
 
-release: build-release
-	@echo "$(CYAN)Build release KairosApp...$(RESET)"
+# PyInstaller standalone app (rinominato da `release` per non confondersi con la build libvm).
+release-app: release
+	@echo "$(CYAN)Build KairosApp standalone (PyInstaller)...$(RESET)"
 	@mkdir -p $(DIST_DIR)
 	$(PYINSTALLER) --onefile \
 		--log-level ERROR \
@@ -161,7 +177,7 @@ release: build-release
 		--name KairosApp \
 		--add-binary "$(abspath $(LIBVM)):." \
 		$(SRC_DIR)/kairos.py
-	@echo "$(GREEN)Build release OK: $(DIST_DIR)$(RESET)"
+	@echo "$(GREEN)KairosApp OK: $(DIST_DIR)$(RESET)"
 
 install-deps:
 	@echo "$(CYAN)Creazione venv e installazione dipendenze...$(RESET)"
@@ -189,17 +205,19 @@ help:
 	@echo ""
 	@echo "$(CYAN)Kairos — Toolchain (gcc)$(RESET)"
 	@echo ""
-	@echo "  $(GREEN)make$(RESET)                         Build release (default)"
-	@echo "  $(GREEN)make build-release$(RESET)           libvm.so ($(CC) -O3 -march=native -flto)"
-	@echo "  $(GREEN)make build-dap$(RESET)               Compila libvm_dap.so"
-	@echo "  $(GREEN)make test-dap$(RESET)                Test C debugger (pipe + loop lungo)"
-	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)      Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
-	@echo "  $(GREEN)make mnemo-run FILE=<path>$(RESET)     Un solo esempio Mnemo: FILE relativo a $(MNEMO_DIR)/"
-	@echo "  $(GREEN)make test$(RESET)                    tests/*.kairos + examples/ + Mnemo (se $(MNEMO_PY) esiste)"
-	@echo "  $(GREEN)make mnemo-test$(RESET)              Solo Mnemo (MNEMO_DIR=$(MNEMO_DIR))"
-	@echo "  $(GREEN)make release$(RESET)                 Build KairosApp con PyInstaller"
-	@echo "  $(GREEN)make install-deps$(RESET)            Crea venv e installa dipendenze"
-	@echo "  $(GREEN)make clean$(RESET)                   Rimuove artefatti generati"
+	@echo "  $(GREEN)make$(RESET)                          libvm.so release (default; massima ottimizzazione)"
+	@echo "  $(GREEN)make release$(RESET)                  libvm.so ($(CC) -O3 -march=native -flto -DNDEBUG)"
+	@echo "  $(GREEN)make build$(RESET)                    libvm.so portabile ($(CC) -O2, niente -march=native/-flto)"
+	@echo "  $(GREEN)make build-dap$(RESET)                Compila libvm_dap.so (debugger)"
+	@echo "  $(GREEN)make test-dap$(RESET)                 Test C debugger (pipe + loop lungo)"
+	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)       Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
+	@echo "  $(GREEN)make mnemo-run FILE=<path>$(RESET)      Un solo esempio Mnemo: FILE relativo a $(MNEMO_DIR)/"
+	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + Mnemo (se $(MNEMO_PY) esiste)"
+	@echo "  $(GREEN)make mnemo-test$(RESET)               Solo Mnemo (MNEMO_DIR=$(MNEMO_DIR))"
+	@echo "  $(GREEN)make release-app$(RESET)              Build KairosApp standalone con PyInstaller"
+	@echo "  $(GREEN)make install-deps$(RESET)             Crea venv e installa dipendenze"
+	@echo "  $(GREEN)make clean$(RESET)                    Rimuove artefatti generati"
 	@echo ""
-	@echo "  $(YELLOW)Release: -O3 -march=native -flto (libvm ottimizzata per la CPU di build).$(RESET)"
+	@echo "  $(YELLOW)release: -O3 -march=native -flto (libvm ottimizzata per la CPU di build, non redistribuibile).$(RESET)"
+	@echo "  $(YELLOW)build:   -O2 portabile (niente architettura-specifico).$(RESET)"
 	@echo ""
