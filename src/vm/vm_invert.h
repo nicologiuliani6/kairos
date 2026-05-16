@@ -396,8 +396,15 @@ static inline int invert_if_entry_lval(VM *vm, uint fi, const char *id, int curr
 static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char *op,
                                     const char *val)
 {
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
-    int  lval = invert_if_entry_lval(vm, fi, id, *(vm->frames[fi].vars[vi]->value));
+    /* `id` può essere un letterale numerico (es. `from 0 == 0 loop ...`): in tal caso
+       lval = atoi(id), niente lookup in VarIndexer (eviterebbe SEGV). */
+    int lval;
+    if (id && (id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))) {
+        lval = (int)strtol(id, NULL, 10);
+    } else {
+        uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
+        lval = invert_if_entry_lval(vm, fi, id, *(vm->frames[fi].vars[vi]->value));
+    }
     int  rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
 }
