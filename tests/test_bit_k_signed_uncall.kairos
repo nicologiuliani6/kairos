@@ -1,0 +1,108 @@
+procedure __mn_move_int(int dst, int src, stack __mn_hist, stack __mn_scratch)
+    local stack __mn_g = nil
+    push(src, __mn_g)
+    pop(dst, __mn_g)
+    delocal stack __mn_g = nil
+
+procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
+    call __mn_move_int(r, a, __mn_hist, __mn_scratch)
+    local int saved_r = 0
+    saved_r += r
+    if saved_r >= b then
+        from q == 0 loop
+            r -= b
+            q += 1
+        until r < b
+    fi saved_r >= b
+    push(saved_r, __mn_hist)
+    delocal int saved_r = 0
+
+procedure __mn_divmod_nonneg_div2(int a, int q, int r, stack __mn_hist, stack __mn_scratch)
+    local int two = 0
+    two += 1
+    two += 1
+    call __mn_divmod_nonneg(a, two, q, r, __mn_hist, __mn_scratch)
+    delocal int two = 2
+
+procedure __mn_floor_div2_signed(int t, int q, stack __mn_hist, stack __mn_scratch)
+    local int r = 0
+    local int ts = 0
+    ts += t
+    if ts >= 0 then
+        call __mn_divmod_nonneg_div2(t, q, r, __mn_hist, __mn_scratch)
+    else
+        local int u = 0
+        u -= t
+        u += 1
+        call __mn_divmod_nonneg_div2(u, q, r, __mn_hist, __mn_scratch)
+        local int z = 0
+        z -= q
+        push(q, __mn_hist)
+        call __mn_move_int(q, z, __mn_hist, __mn_scratch)
+        local int sink = 0
+        call __mn_move_int(sink, t, __mn_hist, __mn_scratch)
+        push(sink, __mn_hist)
+        delocal int sink = 0
+        push(z, __mn_hist)
+        delocal int z = 0
+        push(u, __mn_hist)
+        delocal int u = 0
+    fi ts >= 0
+    push(ts, __mn_hist)
+    delocal int ts = 0
+    push(r, __mn_hist)
+    delocal int r = 0
+
+procedure __mn_bit_k_signed(int a, int k, int bit_out, stack __mn_hist, stack __mn_scratch)
+    local int t = 0
+    t += a
+    local int i = 0
+    if k != 0 then
+        from i == 0 loop
+            i += 1
+            local int q = 0
+            call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
+            t += q
+            push(q, __mn_hist)
+            delocal int q = 0
+        until i == k
+    fi k != 0
+    local int qf = 0
+    local int rf = 0
+    local int ts = 0
+    ts += t
+    if ts >= 0 then
+        call __mn_divmod_nonneg_div2(t, qf, rf, __mn_hist, __mn_scratch)
+        bit_out += rf
+    else
+        local int u = 0
+        u -= t
+        call __mn_divmod_nonneg_div2(u, qf, rf, __mn_hist, __mn_scratch)
+        bit_out += rf
+        push(u, __mn_hist)
+        delocal int u = 0
+    fi ts >= 0
+    push(ts, __mn_hist)
+    delocal int ts = 0
+    push(rf, __mn_hist)
+    delocal int rf = 0
+    push(qf, __mn_hist)
+    delocal int qf = 0
+    push(i, __mn_hist)
+    delocal int i = 0
+    push(t, __mn_hist)
+    delocal int t = 0
+
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int a = 0
+    local int k = 0
+    local int bit_out = 0
+    a -= 5
+    k += 1
+    call __mn_bit_k_signed(a, k, bit_out, __mn_hist, __mn_scratch)
+    uncall __mn_bit_k_signed(a, k, bit_out, __mn_hist, __mn_scratch)
+    delocal int bit_out = 0
+    delocal int k = 0
+    delocal int a = -5
