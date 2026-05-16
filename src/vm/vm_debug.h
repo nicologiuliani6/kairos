@@ -19,9 +19,16 @@
 #include <string.h>
 #include "vm_types.h"
 #include "vm_helpers.h"
+/* Trace VM verboso (`/tmp/kairos-vm.log`). Default OFF perché ogni VMLOG
+   apre+chiude il file (3 syscall) → ~1M syscall su encrypt opt-uncall.
+   Enable: `KAIROS_VM_TRACE=1 python -m src.kairos ...`. */
 #define VMLOG(...) do { \
-    FILE *_f = fopen("/tmp/kairos-vm.log", "a"); \
-    if (_f) { fprintf(_f, __VA_ARGS__); fclose(_f); } \
+    static int _vm_log_enabled = -1; \
+    if (_vm_log_enabled < 0) _vm_log_enabled = getenv("KAIROS_VM_TRACE") ? 1 : 0; \
+    if (_vm_log_enabled) { \
+        FILE *_f = fopen("/tmp/kairos-vm.log", "a"); \
+        if (_f) { fprintf(_f, __VA_ARGS__); fclose(_f); } \
+    } \
 } while(0)
 
 /* ======================================================================
