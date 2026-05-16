@@ -1308,7 +1308,17 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
                     vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
                 }
-                invert_op_to_line(vm, pn, original_buffer,
+                /* Sotto thread PAR la chiamata annidata deve usare la chiave threaded
+                   (`pn@t<tid>`), altrimenti get_findex risolve sul frame template e i
+                   suoi vars non sono linkati → SEGV su `vars[vi]->value` in invert. */
+                char target_c[VAR_NAME_LENGTH];
+                if (current_thread_args) {
+                    make_thread_frame_key(pn, target_c, sizeof(target_c));
+                } else {
+                    strncpy(target_c, pn, sizeof(target_c) - 1);
+                    target_c[sizeof(target_c) - 1] = '\0';
+                }
+                invert_op_to_line(vm, target_c, original_buffer,
                                   vm->frames[callee_fi_c].end_addr - 1,
                                   vm->frames[callee_fi_c].addr + 1, 1);
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
