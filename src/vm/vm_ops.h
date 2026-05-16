@@ -879,7 +879,8 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
     uint  fi     = get_findex(fname);
     uint  li     = char_id_map_get(&vm->frames[fi].LabelIndexer, lbl);
     char *newptr = go_to_line(buf, vm->frames[fi].label[li] + 1);
-    if (!newptr) vm_debug_panic("[VM] JMP: label non trovata!\n");
+    if (!newptr) vm_debug_panic("[VM] JMP: label '%s' non trovata (frame='%s' fi=%u li=%u line=%u)!\n",
+                                lbl ? lbl : "(null)", fname, fi, li, vm->frames[fi].label[li]);
     return newptr;
 }
 
