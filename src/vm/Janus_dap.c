@@ -11,7 +11,7 @@
 #include "Kairos_core.h"
 
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
-                       uint start, uint stop);
+                       uint start, uint stop, int honor_if_line_skip);
 void vm_debug_start(const char *bytecode, VMDebugState *dbg);
 void vm_debug_stop(VMDebugState *dbg);
 int vm_debug_step(VMDebugState *dbg);
