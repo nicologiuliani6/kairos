@@ -1350,10 +1350,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             char *fw = strtok(skip_lineno(ob), " \t");
             if (!fw) { idx--; continue; }
 
-            /* JMPF ELSE_<uid> di un nested IF (jmpf_else_line > from_line): dispatch. */
+            /* JMPF ELSE_<uid> di un nested IF interamente nel branch: dispatch.
+             * Filtro: jmpf_else > from_line && assert < to_line (IF interno, non sibling). */
             int matched = -1;
             for (int k = 0; k < nifs2; k++) {
                 if (ifs[k].jmpf_else_line <= from_line) continue;
+                if (ifs[k].assert_line >= to_line) continue;
                 if (cur == ifs[k].jmpf_else_line) { matched = k; break; }
             }
             if (matched >= 0) {
@@ -1385,6 +1387,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             int inside_nested = 0;
             for (int k = 0; k < nifs2; k++) {
                 if (ifs[k].jmpf_else_line <= from_line) continue;
+                if (ifs[k].assert_line >= to_line) continue;
                 if ((cur > ifs[k].jmpf_else_line && cur < ifs[k].jmp_fi_line) ||
                     (cur > ifs[k].else_label_line && cur < ifs[k].fi_label_line)) {
                     inside_nested = 1; break;
@@ -1406,30 +1409,41 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 base_cur_c[VAR_NAME_LENGTH - 1] = '\0';
                 char *at_cur_c = strchr(base_cur_c, '@'); if (at_cur_c) *at_cur_c = '\0';
                 int is_rec_c = (strcmp(pn, base_cur_c) == 0);
-                if (!is_rec_c) {
-                    uint callee_fi_c = current_thread_args ? clone_frame_for_thread(vm, pn)
-                                                           : char_id_map_get(&FrameIndexer, pn);
-                    int pc_c = vm->frames[callee_fi_c].param_count;
-                    int *pi_c = vm->frames[callee_fi_c].param_indices;
-                    Var *sv_c[64];
-                    for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c].vars[pi_c[k]];
-                    Stack slv_c = vm->frames[callee_fi_c].LocalVariables;
-                    stack_init(&vm->frames[callee_fi_c].LocalVariables);
-                    char *p3c = NULL; int jjc = 0;
-                    while ((p3c = strtok(NULL, " \t")) && jjc < pc_c) {
-                        if (!char_id_map_exists(&vm->frames[cfi].VarIndexer, p3c)) { jjc++; continue; }
-                        int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
-                        vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
+                int new_depth_c = 0;
+                if (is_rec_c) {
+                    const char *atf = strchr(frame_name, '@');
+                    if (atf) {
+                        const char *us = strrchr(frame_name, '_');
+                        if (us && us > atf) new_depth_c = atoi(us + 1);
+                        else new_depth_c = atoi(atf + 1);
                     }
-                    char target_c[VAR_NAME_LENGTH];
-                    if (current_thread_args) make_thread_frame_key(pn, target_c, sizeof(target_c));
-                    else { strncpy(target_c, pn, sizeof(target_c) - 1); target_c[sizeof(target_c) - 1] = '\0'; }
-                    invert_op_to_line(vm, target_c, original_buffer,
-                                      vm->frames[callee_fi_c].end_addr - 1,
-                                      vm->frames[callee_fi_c].addr + 1, 1);
-                    for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
-                    vm->frames[callee_fi_c].LocalVariables = slv_c;
+                    new_depth_c++;
                 }
+                uint callee_fi_c = is_rec_c ? clone_frame_for_depth(vm, pn, new_depth_c)
+                                            : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                                   : char_id_map_get(&FrameIndexer, pn));
+                int pc_c = vm->frames[callee_fi_c].param_count;
+                int *pi_c = vm->frames[callee_fi_c].param_indices;
+                Var *sv_c[64];
+                for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c].vars[pi_c[k]];
+                Stack slv_c = vm->frames[callee_fi_c].LocalVariables;
+                stack_init(&vm->frames[callee_fi_c].LocalVariables);
+                char *p3c = NULL; int jjc = 0;
+                while ((p3c = strtok(NULL, " \t")) && jjc < pc_c) {
+                    if (!char_id_map_exists(&vm->frames[cfi].VarIndexer, p3c)) { jjc++; continue; }
+                    int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
+                    vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
+                }
+                char target_c[VAR_NAME_LENGTH];
+                if (is_rec_c && current_thread_args) make_frame_key_par_rec(pn, new_depth_c, target_c, sizeof(target_c));
+                else if (is_rec_c) make_frame_key(pn, new_depth_c, target_c, sizeof(target_c));
+                else if (current_thread_args) make_thread_frame_key(pn, target_c, sizeof(target_c));
+                else { strncpy(target_c, pn, sizeof(target_c) - 1); target_c[sizeof(target_c) - 1] = '\0'; }
+                invert_op_to_line(vm, target_c, original_buffer,
+                                  vm->frames[callee_fi_c].end_addr - 1,
+                                  vm->frames[callee_fi_c].addr + 1, 1);
+                for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
+                vm->frames[callee_fi_c].LocalVariables = slv_c;
             }
             else if (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
@@ -1464,20 +1478,30 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             if (!fw) continue;
 
             if (!strcmp(fw, "CALL")) {
-                /* Inverti la procedura chiamata (non-ricorsiva) come fa il loop principale
-                   di invert_op_to_line: chiama invert_op_to_line sul callee. */
+                /* Inverti la procedura chiamata (anche ricorsiva): mirror del
+                   path in invert_op_to_line per CALL. Per ricorsiva calcola
+                   new_depth dal frame_name (@1, @_1, …) e usa clone_frame_for_depth. */
                 vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
-                //fprintf(stderr, "[BRANCH_CALL] frame='%s' callee='%s'\n", frame_name, pn ? pn : "NULL");
                 char base_cur_c[VAR_NAME_LENGTH];
                 strncpy(base_cur_c, frame_name, VAR_NAME_LENGTH - 1);
                 base_cur_c[VAR_NAME_LENGTH - 1] = '\0';
                 char *at_cur_c = strchr(base_cur_c, '@');
                 if (at_cur_c) *at_cur_c = '\0';
                 int is_rec_c = (strcmp(pn, base_cur_c) == 0);
-                if (is_rec_c) continue; /* ricorsiva: salta (non supportato qui) */
-                uint callee_fi_c = current_thread_args ? clone_frame_for_thread(vm, pn)
-                                                       : char_id_map_get(&FrameIndexer, pn);
+                int new_depth_c = 0;
+                if (is_rec_c) {
+                    const char *atf = strchr(frame_name, '@');
+                    if (atf) {
+                        const char *us = strrchr(frame_name, '_');
+                        if (us && us > atf) new_depth_c = atoi(us + 1);
+                        else new_depth_c = atoi(atf + 1);
+                    }
+                    new_depth_c++;
+                }
+                uint callee_fi_c = is_rec_c ? clone_frame_for_depth(vm, pn, new_depth_c)
+                                            : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                                   : char_id_map_get(&FrameIndexer, pn));
                 int  pc_c = vm->frames[callee_fi_c].param_count;
                 int *pi_c = vm->frames[callee_fi_c].param_indices;
                 Var *sv_c[64];
@@ -1490,11 +1514,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
                     vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
                 }
-                /* Sotto thread PAR la chiamata annidata deve usare la chiave threaded
-                   (`pn@t<tid>`), altrimenti get_findex risolve sul frame template e i
-                   suoi vars non sono linkati → SEGV su `vars[vi]->value` in invert. */
                 char target_c[VAR_NAME_LENGTH];
-                if (current_thread_args) {
+                if (is_rec_c && current_thread_args) {
+                    make_frame_key_par_rec(pn, new_depth_c, target_c, sizeof(target_c));
+                } else if (is_rec_c) {
+                    make_frame_key(pn, new_depth_c, target_c, sizeof(target_c));
+                } else if (current_thread_args) {
                     make_thread_frame_key(pn, target_c, sizeof(target_c));
                 } else {
                     strncpy(target_c, pn, sizeof(target_c) - 1);
