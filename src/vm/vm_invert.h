@@ -132,7 +132,17 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     char *at = strchr(base, '@'); if (at) *at = '\0';
     uint fi = char_id_map_get(&FrameIndexer, base);
     char *ptr = go_to_line(buf, vm->frames[fi].addr + 1);
-    int n = 0, in_if = 0;
+    int n = 0;
+
+    /* Stack di IF aperti — match label per uid (ELSE_<uid>, FI_<uid>) per gestire
+     * nested IF (es. Mnemo loop con IF di guard dentro body). Top dello stack =
+     * IF correntemente in costruzione; chiuso da ASSERT (con sentinel handling
+     * per EVAL-FI seguita o no da ASSERT). */
+    int   stack_idx[64];          /* indice in out[] */
+    char  stack_uid[64][32];      /* uid dell'IF aperto (es. "42" da "ELSE_42") */
+    int   stack_eval_exit_set[64];/* 1 se EVAL FI già visto, attendiamo ASSERT */
+    int   top = -1;
+
     uint peval = 0; char pid[64] = {0}, pval[64] = {0};
     char pfi_op[8] = {'=', '=', '\0'};
 
@@ -144,40 +154,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
 
-        if (!strcmp(fw, "EVAL") && in_if) {
-            /* Dopo LABEL FI viene EVAL guardia FI; poi spesso ASSERT stessa guardia.
-               Prima riga bastava chiudere l'IF qui e mettere assert_line=EVAL.
-               Matcher ASSERT in line_if_zone_for_instr cerca riga fisica dell'ASSERT
-               → mismatch → zona IF fuori sincrono; IF dentro from/until + UNCALL rompe.*/
-            out[n].eval_exit_line = cur;
-            char *a = strtok(NULL, " \t");  /* lhs */
-            char *fi_op = strtok(NULL, " \t");
-            char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
-            strncpy(out[n].eval_exit_id,  a   ? a   : "", 63);
-            strncpy(out[n].eval_exit_val, rhs,             63);
-            _copy_compare_op(out[n].eval_exit_op, fi_op);
-
-            /* Peek rigo dopo */
-            char *n2      = strchr(nl + 1, '\n');
-            int   nx_asrt = 0;
-            if (n2 && (size_t)(n2 - (nl + 1)) < sizeof(lb)) {
-                char peekb[2048];
-                memcpy(peekb, nl + 1, (size_t)(n2 - (nl + 1)));
-                peekb[(size_t)(n2 - (nl + 1))] = '\0';
-                char ptmp[2048];
-                strncpy(ptmp, peekb, sizeof(ptmp) - 1);
-                ptmp[sizeof(ptmp) - 1] = '\0';
-                char *p1 = strtok(skip_lineno(ptmp), " \t");
-                nx_asrt = (p1 && !strcmp(p1, "ASSERT"));
-            }
-            if (nx_asrt) {
-                out[n].assert_line = 0; /* sentinel: chiude riga ASSERT */
-            } else {
-                out[n].assert_line = cur;
-                in_if                = 0;
-                n++;
-            }
-        } else if (!strcmp(fw, "EVAL")) {
+        if (!strcmp(fw, "EVAL")) {
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
             char *iop = strtok(NULL, " \t");
@@ -185,36 +162,97 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             strncpy(pid,  a   ? a   : "", 63);
             strncpy(pval, rhs,             63);
             _copy_compare_op(pfi_op, iop);
-        } else if (!strcmp(fw, "JMPF") && !in_if) {
+
+            /* EVAL FI: se top dello stack è in_then-completato (jmp_fi visto) e
+             * aspettiamo l'EVAL/ASSERT di chiusura, registra eval_exit qui. */
+            if (top >= 0 && out[stack_idx[top]].fi_label_line && !stack_eval_exit_set[top]) {
+                int ti = stack_idx[top];
+                out[ti].eval_exit_line = cur;
+                strncpy(out[ti].eval_exit_id,  pid,  63);
+                strncpy(out[ti].eval_exit_val, pval, 63);
+                _copy_compare_op(out[ti].eval_exit_op, pfi_op);
+                stack_eval_exit_set[top] = 1;
+
+                /* Peek rigo dopo: se ASSERT, sentinel; altrimenti EVAL=ASSERT collassati. */
+                char *n2 = strchr(nl + 1, '\n');
+                int  nx_asrt = 0;
+                if (n2 && (size_t)(n2 - (nl + 1)) < sizeof(lb)) {
+                    char peekb[2048];
+                    memcpy(peekb, nl + 1, (size_t)(n2 - (nl + 1)));
+                    peekb[(size_t)(n2 - (nl + 1))] = '\0';
+                    char ptmp[2048];
+                    strncpy(ptmp, peekb, sizeof(ptmp) - 1);
+                    ptmp[sizeof(ptmp) - 1] = '\0';
+                    char *p1 = strtok(skip_lineno(ptmp), " \t");
+                    nx_asrt = (p1 && !strcmp(p1, "ASSERT"));
+                }
+                if (!nx_asrt) {
+                    /* Collassato: EVAL fa anche da ASSERT. Chiudi qui. */
+                    out[ti].assert_line = cur;
+                    top--;
+                }
+            }
+        } else if (!strcmp(fw, "JMPF")) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
-                memset(&out[n], 0, sizeof(IfDescriptor));
-                out[n].eval_entry_line = peval;
-                strncpy(out[n].eval_entry_id,  pid,  63);
-                strncpy(out[n].eval_entry_val, pval, 63);
-                _copy_compare_op(out[n].eval_entry_op, pfi_op);
-                out[n].jmpf_else_line = cur; in_if = 1;
+                if (top + 1 >= 64 || n >= max) { *nl = '\n'; ptr = nl + 1; continue; }
+                int idx = n++;
+                top++;
+                stack_idx[top] = idx;
+                strncpy(stack_uid[top], ln + 5, 31);
+                stack_uid[top][31] = '\0';
+                stack_eval_exit_set[top] = 0;
+                memset(&out[idx], 0, sizeof(IfDescriptor));
+                out[idx].eval_entry_line = peval;
+                strncpy(out[idx].eval_entry_id,  pid,  63);
+                strncpy(out[idx].eval_entry_val, pval, 63);
+                _copy_compare_op(out[idx].eval_entry_op, pfi_op);
+                out[idx].jmpf_else_line = cur;
             }
-        } else if (!strcmp(fw, "JMP") && in_if) {
+        } else if (!strcmp(fw, "JMP")) {
             char *ln = strtok(NULL, " \t");
-            if (ln && !strncmp(ln, "FI_", 3)) out[n].jmp_fi_line = cur;
-        } else if (!strcmp(fw, "LABEL") && in_if) {
-            char *ln = strtok(NULL, " \t"); if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
-            if      (!strncmp(ln, "ELSE_", 5)) out[n].else_label_line = cur;
-            else if (!strncmp(ln, "FI_",   3)) out[n].fi_label_line   = cur;
-        } else if (!strcmp(fw, "ASSERT") && in_if) {
-            if (!out[n].assert_line && out[n].eval_exit_line) {
-                /* EVAL FI ha lasciato in_if per questa ASSERT */
-                out[n].assert_line = cur;
-            } else {
-                out[n].eval_exit_line = peval;
-                strncpy(out[n].eval_exit_id,  pid,  63);
-                strncpy(out[n].eval_exit_val, pval, 63);
-                _copy_compare_op(out[n].eval_exit_op, pfi_op);
-                out[n].assert_line = cur;
+            if (ln && !strncmp(ln, "FI_", 3)) {
+                /* Match per uid sullo stack — tipicamente è il top, ma se più
+                 * IF chiusi annidati incompleti, cerca tutto lo stack. */
+                for (int s = top; s >= 0; s--) {
+                    if (!strcmp(stack_uid[s], ln + 3)) {
+                        out[stack_idx[s]].jmp_fi_line = cur;
+                        break;
+                    }
+                }
             }
-            in_if = 0;
-            n++;
+        } else if (!strcmp(fw, "LABEL")) {
+            char *ln = strtok(NULL, " \t");
+            if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
+            if (!strncmp(ln, "ELSE_", 5)) {
+                for (int s = top; s >= 0; s--) {
+                    if (!strcmp(stack_uid[s], ln + 5)) {
+                        out[stack_idx[s]].else_label_line = cur;
+                        break;
+                    }
+                }
+            } else if (!strncmp(ln, "FI_", 3)) {
+                for (int s = top; s >= 0; s--) {
+                    if (!strcmp(stack_uid[s], ln + 3)) {
+                        out[stack_idx[s]].fi_label_line = cur;
+                        break;
+                    }
+                }
+            }
+        } else if (!strcmp(fw, "ASSERT")) {
+            if (top >= 0) {
+                int ti = stack_idx[top];
+                if (!out[ti].assert_line && out[ti].eval_exit_line) {
+                    out[ti].assert_line = cur;
+                } else {
+                    out[ti].eval_exit_line = peval;
+                    strncpy(out[ti].eval_exit_id,  pid,  63);
+                    strncpy(out[ti].eval_exit_val, pval, 63);
+                    _copy_compare_op(out[ti].eval_exit_op, pfi_op);
+                    out[ti].assert_line = cur;
+                }
+                top--;
+            }
         } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
         *nl = '\n'; ptr = nl + 1;
     }
@@ -1197,6 +1235,30 @@ static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_l
                 *nl = '\n'; return 1;
             }
             if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "FROM_", 5)) {
+                *nl = '\n'; return 1;
+            }
+        }
+        *nl = '\n'; ptr = nl + 1;
+    }
+    return 0;
+}
+
+/* Branch contiene IF nested (JMPF ELSE_*). exec_branch_inverse linear non rispetta
+ * if_branch_stack → invertirebbe entrambi rami. Fall back a invert_op_to_line. */
+static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_line)
+{
+    char *ptr = go_to_line(buf, from_line);
+    if (!ptr) return 0;
+    while (ptr && *ptr) {
+        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        uint cur = (uint)atoi(ptr);
+        if (cur >= to_line) { *nl = '\n'; break; }
+        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        lb[sizeof(lb) - 1] = '\0';
+        char *fw = strtok(skip_lineno(lb), " \t");
+        if (fw) {
+            char *a1 = strtok(NULL, " \t");
+            if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "ELSE_", 5)) {
                 *nl = '\n'; return 1;
             }
         }
