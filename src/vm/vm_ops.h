@@ -242,7 +242,9 @@ static inline void op_pop(VM *vm, const char *frame_name)
     }
 
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL) vm_debug_panic("[VM] POP: sorgente non è stack/channel!\n");
-    if (sv->T == TYPE_STACK && sv->stack_len == 0)    vm_debug_panic("[VM] POP: stack vuoto!\n");
+    if (sv->T == TYPE_STACK && sv->stack_len == 0)
+        vm_debug_panic("[VM] POP: stack vuoto! (frame=%s dest=%s stack=%s inv=%d)\n",
+                       frame_name, C_dest, C_stack, vm->inversion_depth);
 
     ThreadArgs *sender_to_wake = NULL;
     int           popped;
