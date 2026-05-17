@@ -60,6 +60,16 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
                 vm_debug_panic("[VM] init_clone_frame: malloc Var fallita\n");
             alloc_var(clone->vars[vi], typ, bv->name);
             clone->vars[vi]->is_local = 0;
+        } else if (bv->T == TYPE_INT) {
+            /* Mnemo emit `int __mn_e<N> = 0` a livello procedura (DECL). Forward su
+             * clone ricorsivo non re-esegue DECL → opt-uncall XOREQ su __mn_e<N>
+             * andava in Var* NULL. Duplichiamo anche slot int DECL (LOCAL-allocati
+             * sovrascriveranno via op_local). */
+            clone->vars[vi] = malloc(sizeof(Var));
+            if (!clone->vars[vi])
+                vm_debug_panic("[VM] init_clone_frame: malloc Var int fallita\n");
+            alloc_var(clone->vars[vi], "int", bv->name);
+            clone->vars[vi]->is_local = 0;
         }
     }
 }
