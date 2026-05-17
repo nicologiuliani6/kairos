@@ -1325,6 +1325,126 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         } else {
             invert_op_to_line(vm, frame_name, original_buffer, to_line - 1, from_line - 1, 0);
         }
+    } else if (branch_span_has_nested_if(original_buffer, from_line, to_line)) {
+        /* Branch contiene nested IF: linear-reverse standard processerebbe entrambi
+         * THEN+ELSE come atomic ops (non riconosce JMPF/LABEL/EVAL) corrompendo
+         * hist. Collect_ifs sull'intero frame, itera righe del branch in reverse,
+         * skippa quelle interne a nested IF e dispatch ai loro JMPF ELSE_<uid>
+         * con recurse exec_branch_inverse sul ramo che era vero in forward. */
+        IfDescriptor   ifs[32];
+        int nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, 32);
+
+        char *lp[512]; uint ln[512]; int nl = 0;
+        char *p3 = go_to_line(original_buffer, from_line);
+        while (p3 && *p3 && nl < 512) {
+            char *nl3 = strchr(p3, '\n'); if (!nl3) break; *nl3 = '\0';
+            uint cur_ln = (uint)atoi(p3);
+            if (cur_ln >= to_line) { *nl3 = '\n'; break; }
+            lp[nl] = strdup(p3); ln[nl] = cur_ln; nl++;
+            *nl3 = '\n'; p3 = nl3 + 1;
+        }
+        int idx = nl - 1;
+        while (idx >= 0) {
+            uint cur = ln[idx];
+            char ob[2048]; strncpy(ob, lp[idx], sizeof(ob) - 1); ob[sizeof(ob) - 1] = '\0';
+            char *fw = strtok(skip_lineno(ob), " \t");
+            if (!fw) { idx--; continue; }
+
+            /* JMPF ELSE_<uid> di un nested IF (jmpf_else_line > from_line): dispatch. */
+            int matched = -1;
+            for (int k = 0; k < nifs2; k++) {
+                if (ifs[k].jmpf_else_line <= from_line) continue;
+                if (cur == ifs[k].jmpf_else_line) { matched = k; break; }
+            }
+            if (matched >= 0) {
+                do_eval_if_entry(vm, cfi, ifs[matched].eval_entry_id,
+                                 ifs[matched].eval_entry_op, ifs[matched].eval_entry_val);
+                uint bf = 0, bt = 0;
+                if (thread_val_IF) {
+                    bf = ifs[matched].jmpf_else_line + 1;
+                    bt = ifs[matched].jmp_fi_line;
+                } else {
+                    bf = ifs[matched].else_label_line + 1;
+                    bt = ifs[matched].fi_label_line;
+                }
+                if (bf < bt) {
+                    Stack sv2 = vm->frames[cfi].LocalVariables;
+                    stack_init(&vm->frames[cfi].LocalVariables);
+                    exec_branch_inverse(vm, original_buffer, frame_name, bf, bt, caller_fi);
+                    vm->frames[cfi].LocalVariables = sv2;
+                }
+                /* Jump idx a prima dell'EVAL del nested IF. */
+                int t = -1;
+                for (int j = idx - 1; j >= 0; j--)
+                    if (ln[j] == ifs[matched].eval_entry_line) { t = j; break; }
+                idx = (t >= 0) ? t - 1 : idx - 1;
+                continue;
+            }
+
+            /* Cerca se cur è meta-line o body-line di un nested IF: skip. */
+            int inside_nested = 0;
+            for (int k = 0; k < nifs2; k++) {
+                if (ifs[k].jmpf_else_line <= from_line) continue;
+                if ((cur > ifs[k].jmpf_else_line && cur < ifs[k].jmp_fi_line) ||
+                    (cur > ifs[k].else_label_line && cur < ifs[k].fi_label_line)) {
+                    inside_nested = 1; break;
+                }
+                if (cur == ifs[k].jmp_fi_line || cur == ifs[k].else_label_line ||
+                    cur == ifs[k].fi_label_line || cur == ifs[k].eval_exit_line ||
+                    cur == ifs[k].assert_line  || cur == ifs[k].eval_entry_line) {
+                    inside_nested = 1; break;
+                }
+            }
+            if (inside_nested) { idx--; continue; }
+
+            /* Linear inverse della op come prima. */
+            if (!strcmp(fw, "CALL")) {
+                vm_if_mark_call();
+                char *pn = strtok(NULL, " \t");
+                char base_cur_c[VAR_NAME_LENGTH];
+                strncpy(base_cur_c, frame_name, VAR_NAME_LENGTH - 1);
+                base_cur_c[VAR_NAME_LENGTH - 1] = '\0';
+                char *at_cur_c = strchr(base_cur_c, '@'); if (at_cur_c) *at_cur_c = '\0';
+                int is_rec_c = (strcmp(pn, base_cur_c) == 0);
+                if (!is_rec_c) {
+                    uint callee_fi_c = current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                           : char_id_map_get(&FrameIndexer, pn);
+                    int pc_c = vm->frames[callee_fi_c].param_count;
+                    int *pi_c = vm->frames[callee_fi_c].param_indices;
+                    Var *sv_c[64];
+                    for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c].vars[pi_c[k]];
+                    Stack slv_c = vm->frames[callee_fi_c].LocalVariables;
+                    stack_init(&vm->frames[callee_fi_c].LocalVariables);
+                    char *p3c = NULL; int jjc = 0;
+                    while ((p3c = strtok(NULL, " \t")) && jjc < pc_c) {
+                        if (!char_id_map_exists(&vm->frames[cfi].VarIndexer, p3c)) { jjc++; continue; }
+                        int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
+                        vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
+                    }
+                    char target_c[VAR_NAME_LENGTH];
+                    if (current_thread_args) make_thread_frame_key(pn, target_c, sizeof(target_c));
+                    else { strncpy(target_c, pn, sizeof(target_c) - 1); target_c[sizeof(target_c) - 1] = '\0'; }
+                    invert_op_to_line(vm, target_c, original_buffer,
+                                      vm->frames[callee_fi_c].end_addr - 1,
+                                      vm->frames[callee_fi_c].addr + 1, 1);
+                    for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
+                    vm->frames[callee_fi_c].LocalVariables = slv_c;
+                }
+            }
+            else if (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
+            else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
+            else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
+            else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
+            else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
+            else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
+            else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
+            else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
+            else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
+            else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
+            else if (!strcmp(fw, "SHOW"))   { /* no-op */ }
+            idx--;
+        }
+        for (int j = 0; j < nl; j++) free(lp[j]);
     } else {
         char *lines[512]; int count = 0;
         char *p2 = go_to_line(original_buffer, from_line);
