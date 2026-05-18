@@ -534,99 +534,6 @@ static inline void mn_dbg_log_loop(const char *hypothesisId, const char *zone,
 }
 // #endregion
 
-/* IF il cui bytecode è contenuto nel corpo del from/until (non il test pre-loop).
-   Serve a sapere quando applicare jmp_start_deep (solo corpi puri Mnemo-ish). */
-static inline int loop_body_has_nested_if(uint from_sl, uint from_el, IfDescriptor *ifs, int nifs)
-{
-    for (int i = 0; i < nifs; i++) {
-        if (ifs[i].eval_entry_line > from_sl && ifs[i].eval_entry_line < from_el)
-            return 1;
-    }
-    return 0;
-}
-
-/* CALL/UNCALL nel corpo: peeling profondo rompe pipeline tipo example_login/bruteforce. */
-static inline int loop_body_has_call_or_uncall(char *buf, uint from_sl, uint from_el)
-{
-    char *ptr = go_to_line(buf, from_sl);
-    if (!ptr) return 0;
-    while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        uint cur = (uint)atoi(ptr);
-        if (cur > from_el) { *nl = '\n'; break; }
-        if (cur >= from_sl) {
-            char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
-            lb[sizeof(lb) - 1] = '\0';
-            char *fw = strtok(skip_lineno(lb), " \t");
-            if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) {
-                *nl = '\n'; return 1;
-            }
-        }
-        *nl = '\n'; ptr = nl + 1;
-    }
-    return 0;
-}
-
-static inline int loop_body_use_deep_peel(char *buf, LoopDescriptor *L, int ili,
-                                           IfDescriptor *ifs, int nifs)
-{
-    if (!loop_body_has_nested_if(L[ili].from_start_line, L[ili].from_end_line, ifs, nifs))
-        return 0;
-    if (loop_body_has_call_or_uncall(buf, L[ili].from_start_line, L[ili].from_end_line))
-        return 0;
-    return 1;
-}
-
-/* PUSH <id> <stack> nel corpo from/until (per riga bytecode). */
-static inline int loop_body_push_count_to_stack(char *buf, uint from_sl, uint from_el,
-                                                const char *stack_name)
-{
-    int n = 0;
-    char *ptr = go_to_line(buf, from_sl);
-    if (!ptr) return 0;
-    while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        uint cur = (uint)atoi(ptr);
-        if (cur > from_el) { *nl = '\n'; break; }
-        if (cur >= from_sl) {
-            char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
-            lb[sizeof(lb) - 1] = '\0';
-            char scan[2048];
-            strncpy(scan, skip_lineno(lb), sizeof(scan) - 1);
-            scan[sizeof(scan) - 1] = '\0';
-            char *tok = strtok(scan, " \t"); /* PUSH */
-            if (tok && !strcmp(tok, "PUSH")) {
-                strtok(NULL, " \t"); /* id */
-                char *st = strtok(NULL, " \t");
-                if (st && !strcmp(st, stack_name))
-                    n++;
-            }
-        }
-        *nl = '\n'; ptr = nl + 1;
-    }
-    return n;
-}
-
-/* Bump jmp_start_deep: una unità per PUSH su hist/scratch nel corpo + margine IF interno Mnemo.
-   Es. Mnemo ladder: 4 PUSH hist + 2 scratch + 3 ≡ 9. */
-static inline int loop_mnemo_deep_increment(char *buf, LoopDescriptor *L, int ili,
-                                            IfDescriptor *ifs, int nifs)
-{
-    if (!loop_body_use_deep_peel(buf, L, ili, ifs, nifs)) return 0;
-    int nh = loop_body_push_count_to_stack(buf, L[ili].from_start_line, L[ili].from_end_line,
-                                              "__mn_hist");
-    int ns = loop_body_push_count_to_stack(buf, L[ili].from_start_line, L[ili].from_end_line,
-                                              "__mn_scratch");
-    /* Un IF nel corpo duplica un PUSH e0 (then+else) nel sorgente: una sola push per iter. */
-    int inner_ifs = 0;
-    for (int j = 0; j < nifs; j++)
-        if (ifs[j].eval_entry_line > L[ili].from_start_line &&
-            ifs[j].eval_entry_line < L[ili].from_end_line)
-            inner_ifs++;
-    nh -= inner_ifs;
-    if (nh < 1) nh = 1;
-    return nh + ns + 3;
-}
 
 static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
 {
@@ -754,9 +661,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 #define MAX_IFS   32
 #define MAX_LINES 1024
 #define MAX_PARS  32
-    int jmp_start_deep[MAX_LOOPS];
-    memset(jmp_start_deep, 0, sizeof(jmp_start_deep));
-
     LoopDescriptor loops[MAX_LOOPS]; int nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
     IfDescriptor   ifs  [MAX_IFS];   int nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
 
@@ -875,31 +779,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 i = tt - 1;
                 continue;
             }
-            int deep_peel =
-                loop_body_use_deep_peel(orig, loops, li, ifs, nifs);
-            if (deep_peel) {
-                if (thread_val_IF) {
-                    if (jmp_start_deep[li] > 0) {
-                        jmp_start_deep[li]--;
-                        int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
-                        if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
-                        i = tt - 1;
-                    } else {
-                        i--;
-                    }
-                } else {
-                    int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
-                    if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
-                    i = tt - 1;
-                }
+            if (thread_val_IF) {
+                i--;
             } else {
-                if (thread_val_IF) {
-                    i--;
-                } else {
-                    int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
-                    if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
-                    i = tt - 1;
-                }
+                int tt = lp_row_first_jmpf_from_start(loops[li].jmpf_start_line, lp, ln, nl);
+                if (tt < 0) { vm_debug_panic("[UNCALL] jmpf_start\n"); }
+                i = tt - 1;
             }
             continue;
         }
@@ -932,10 +817,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             // #endregion
             if (!peel_more) { i--; }
             else {
-                /* Uscita-until: caricare jmp_start_deep per le iterazioni residue (Mnemo). */
-                int dinc = loop_mnemo_deep_increment(orig, loops, li, ifs, nifs);
-                if (dinc > 0)
-                    jmp_start_deep[li] += dinc;
                 int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
                 if (t < 0) { vm_debug_panic("[UNCALL] loop_eval_exit\n"); }
                 i = t - 1;
