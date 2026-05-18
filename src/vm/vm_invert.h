@@ -546,6 +546,27 @@ static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
     return 0;
 }
 
+/* Range-scoped variant: skip only IFs strictly nested in (rfrom, rto).
+ * Usata da invert_op_to_line quando viene invocata da exec_branch_inverse su un
+ * sotto-range (es. corpo loop dentro IIf outer wrap di counter-loop): l'IF outer
+ * NON va filtrata (è il branch attuale), ma IFs annidate dentro il body sì. */
+static inline int line_is_inside_if_subrange(uint line, IfDescriptor *ifs, int nifs,
+                                              uint rfrom, uint rto)
+{
+    for (int i = 0; i < nifs; i++) {
+        if (ifs[i].jmpf_else_line <= rfrom) continue;
+        if (ifs[i].fi_label_line  >= rto)   continue;
+        if (line > ifs[i].jmpf_else_line && line < ifs[i].jmp_fi_line) return 1;
+        if (line > ifs[i].else_label_line && line < ifs[i].fi_label_line) return 1;
+    }
+    return 0;
+}
+
+/* Static state per range-scoped skip filter. Set da exec_branch_inverse prima di
+ * chiamare invert_op_to_line(honor=0) sul FROM-loop fallback, restored dopo. */
+static __thread uint g_invert_nested_filter_from = 0;
+static __thread uint g_invert_nested_filter_to   = 0;
+
 /* ======================================================================
  *  ParRange — intervallo [par_start_line .. par_end_line]
  *
@@ -736,8 +757,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         if (!fw_cls) { i--; continue; }
         if (!strcmp(frame_name, "__mn_divmod_nonneg"))
             VMLOG("[INV_LOOP] frame='%s' i=%d cur=%u fw='%s'\n", frame_name, i, cur, fw_cls ? fw_cls : "NULL");
-        /* Nel ramo THEN già invertito da exec_branch_inverse (honor_if_line_skip=0 lì). */
+        /* Nel ramo THEN già invertito da exec_branch_inverse (honor_if_line_skip=0 lì).
+         * Con range globals attivi (FROM-loop fallback su sub-range), filtra IFs
+         * annidate dentro (g_from, g_to) ANCHE quando honor=0. */
         if (honor_if_line_skip && line_is_inside_if(cur, ifs, nifs)) { i--; continue; }
+        if (!honor_if_line_skip && g_invert_nested_filter_to > g_invert_nested_filter_from &&
+            line_is_inside_if_subrange(cur, ifs, nifs,
+                                        g_invert_nested_filter_from,
+                                        g_invert_nested_filter_to)) { i--; continue; }
         if (line_is_inside_par(cur, pars, npars)) { i--; continue; }
         int li = -1;
         LoopZone lz = line_loop_zone_for_instr(cur, fw_cls, arg1_cls, loops, nloops, &li);
@@ -1204,7 +1231,16 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             divmod_saved_r_loop_skipped_forward(vm, cfi)) {
             /* forward non entrò nel from q==0: il ramo THEN va saltato */
         } else {
+            /* Attiva range-scoped IF skip: invert_op_to_line(honor=0) altrimenti
+             * processa linearmente sia il body del FROM-loop che i corpi degli
+             * IF annidati (gestiti via JMPF_ELSE dispatch) → double-processing. */
+            uint saved_ff = g_invert_nested_filter_from;
+            uint saved_ft = g_invert_nested_filter_to;
+            g_invert_nested_filter_from = from_line;
+            g_invert_nested_filter_to   = to_line;
             invert_op_to_line(vm, frame_name, original_buffer, to_line - 1, from_line - 1, 0);
+            g_invert_nested_filter_from = saved_ff;
+            g_invert_nested_filter_to   = saved_ft;
         }
     } else if (branch_span_has_nested_if(original_buffer, from_line, to_line)) {
         /* Branch contiene nested IF: linear-reverse standard processerebbe entrambi
