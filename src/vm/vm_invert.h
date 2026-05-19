@@ -905,7 +905,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                                         g_invert_nested_filter_to)) { i--; continue; }
         if (line_is_inside_par(cur, pars, npars)) { i--; continue; }
         int li = -1;
-        LoopZone lz = line_loop_zone_for_instr(cur, fw_cls, arg1_cls, loops, nloops, &li);
+        /* fast path: line_loop_zone_for_instr controlla JMPF/LABEL/JMP via arg1.
+           Per altri op (XOREQ/PUSHEQ/etc) basta confronto sui line numbers. */
+        LoopZone lz;
+        if (op_tag == INVOP_JMPF || op_tag == INVOP_LABEL || op_tag == INVOP_JMP) {
+            lz = line_loop_zone_for_instr(cur, fw_cls, arg1_cls, loops, nloops, &li);
+        } else {
+            lz = line_loop_zone(cur, loops, nloops, &li);
+        }
         if (lz == LOOP_ZONE_EVAL_ENTRY || lz == LOOP_ZONE_EVAL_EXIT  ||
             lz == LOOP_ZONE_START_LABEL|| lz == LOOP_ZONE_END_LABEL  ||
             lz == LOOP_ZONE_ERR_LABEL)  { i--; continue; }
@@ -990,7 +997,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
 
         int ii = -1;
-        IfZone iz = line_if_zone_for_instr(cur, fw_cls, arg1_cls, ifs, nifs, &ii);
+        IfZone iz;
+        if (op_tag == INVOP_JMPF || op_tag == INVOP_LABEL || op_tag == INVOP_JMP) {
+            iz = line_if_zone_for_instr(cur, fw_cls, arg1_cls, ifs, nifs, &ii);
+        } else {
+            iz = line_if_zone(cur, ifs, nifs, &ii);
+        }
         if (iz == IF_ZONE_EVAL_ENTRY || iz == IF_ZONE_EVAL_EXIT || iz == IF_ZONE_ELSE_LABEL ||
             iz == IF_ZONE_FI_LABEL   || iz == IF_ZONE_ASSERT    || iz == IF_ZONE_JMP_FI)
             { i--; continue; }
