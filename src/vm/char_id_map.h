@@ -29,8 +29,10 @@ static inline void char_id_map_init(CharIdMap *m) {
  * NOTA: il parametro è ora const char* invece di char
  */
 static inline int char_id_map_get(CharIdMap *m, const char *name) {
+    /* Hot path: prefisso check rapido sul primo char prima di strcmp completo. */
+    char c0 = name[0];
     for (int i = 0; i < m->count; i++) {
-        if (strcmp(m->names[i], name) == 0)
+        if (m->names[i][0] == c0 && strcmp(m->names[i], name) == 0)
             return i;
     }
     if (m->count >= CHAR_ID_MAP_SIZE) {
@@ -44,14 +46,20 @@ static inline int char_id_map_get(CharIdMap *m, const char *name) {
 }
 
 /**
- * Controlla se una stringa è già stata vista
+ * Controlla se una stringa è già stata vista.
+ * Restituisce -1 se mancante (così il chiamante può evitare doppia scansione).
  */
-static inline int char_id_map_exists(CharIdMap *m, const char *name) {
+static inline int char_id_map_lookup(CharIdMap *m, const char *name) {
+    char c0 = name[0];
     for (int i = 0; i < m->count; i++) {
-        if (strcmp(m->names[i], name) == 0)
-            return 1;
+        if (m->names[i][0] == c0 && strcmp(m->names[i], name) == 0)
+            return i;
     }
-    return 0;
+    return -1;
+}
+
+static inline int char_id_map_exists(CharIdMap *m, const char *name) {
+    return char_id_map_lookup(m, name) >= 0;
 }
 
 /**

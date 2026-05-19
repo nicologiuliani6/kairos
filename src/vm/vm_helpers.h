@@ -57,8 +57,8 @@ static inline int resolve_expr(VM *vm, uint fi, const char *tok);
 
 static inline int resolve_atom(VM *vm, uint fi, const char *s)
 {
-    if (char_id_map_exists(&vm->frames[fi].VarIndexer, s)) {
-        uint idx = char_id_map_get(&vm->frames[fi].VarIndexer, s);
+    int idx = char_id_map_lookup(&vm->frames[fi].VarIndexer, s);
+    if (idx >= 0) {
         return *(vm->frames[fi].vars[idx]->value);
     }
     return (int)strtol(s, NULL, 10);
@@ -145,10 +145,10 @@ static inline void read_rest_of_expr(char *out, size_t outsz)
 
 static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op)
 {
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, name)) {
+    int idx = char_id_map_lookup(&vm->frames[fi].VarIndexer, name);
+    if (idx < 0) {
         vm_debug_panic("[VM] %s: variabile '%s' non definita!\n", op, name);
     }
-    uint idx = char_id_map_get(&vm->frames[fi].VarIndexer, name);
     if (!vm->frames[fi].vars[idx]) {
         vm_debug_panic("[VM] %s: variabile '%s' è NULL\n", op, name);
     }
