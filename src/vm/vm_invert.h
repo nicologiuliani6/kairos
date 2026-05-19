@@ -58,6 +58,67 @@ typedef enum {
 } IfZone;
 
 /* ======================================================================
+ *  Opcode classification (cache to avoid strcmp chain in hot loop)
+ * ====================================================================== */
+
+enum InvOpTag {
+    INVOP_UNKNOWN = 0,
+    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP,
+    INVOP_PUSH, INVOP_POP, INVOP_SSEND, INVOP_SRECV,
+    INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW,
+    INVOP_CALL, INVOP_UNCALL,
+    INVOP_PAR_START, INVOP_PAR_END,
+    INVOP_JMP, INVOP_JMPF, INVOP_EVAL, INVOP_LABEL, INVOP_ASSERT, INVOP_DECL,
+    INVOP_HALT, INVOP_START, INVOP_PARAM, INVOP_THREAD, INVOP_END_PROC,
+};
+
+static inline uint8_t classify_op(const char *fw)
+{
+    if (!fw || !*fw) return INVOP_UNKNOWN;
+    switch (fw[0]) {
+        case 'P':
+            if (!strcmp(fw, "PUSHEQ"))    return INVOP_PUSHEQ;
+            if (!strcmp(fw, "PUSH"))      return INVOP_PUSH;
+            if (!strcmp(fw, "POP"))       return INVOP_POP;
+            if (!strcmp(fw, "PARAM"))     return INVOP_PARAM;
+            if (!strcmp(fw, "PAR_START")) return INVOP_PAR_START;
+            if (!strcmp(fw, "PAR_END"))   return INVOP_PAR_END;
+            break;
+        case 'M': if (!strcmp(fw, "MINEQ")) return INVOP_MINEQ; break;
+        case 'X': if (!strcmp(fw, "XOREQ")) return INVOP_XOREQ; break;
+        case 'S':
+            if (!strcmp(fw, "SWAP"))  return INVOP_SWAP;
+            if (!strcmp(fw, "SSEND")) return INVOP_SSEND;
+            if (!strcmp(fw, "SRECV")) return INVOP_SRECV;
+            if (!strcmp(fw, "SHOW"))  return INVOP_SHOW;
+            if (!strcmp(fw, "START")) return INVOP_START;
+            break;
+        case 'L':
+            if (!strcmp(fw, "LOCAL")) return INVOP_LOCAL;
+            if (!strcmp(fw, "LABEL")) return INVOP_LABEL;
+            break;
+        case 'D':
+            if (!strcmp(fw, "DELOCAL")) return INVOP_DELOCAL;
+            if (!strcmp(fw, "DECL"))    return INVOP_DECL;
+            break;
+        case 'C': if (!strcmp(fw, "CALL"))   return INVOP_CALL;   break;
+        case 'U': if (!strcmp(fw, "UNCALL")) return INVOP_UNCALL; break;
+        case 'J':
+            if (!strcmp(fw, "JMPF")) return INVOP_JMPF;
+            if (!strcmp(fw, "JMP"))  return INVOP_JMP;
+            break;
+        case 'E':
+            if (!strcmp(fw, "EVAL"))     return INVOP_EVAL;
+            if (!strcmp(fw, "END_PROC")) return INVOP_END_PROC;
+            break;
+        case 'A': if (!strcmp(fw, "ASSERT")) return INVOP_ASSERT; break;
+        case 'H': if (!strcmp(fw, "HALT"))   return INVOP_HALT;   break;
+        case 'T': if (!strncmp(fw, "THREAD_", 7)) return INVOP_THREAD; break;
+    }
+    return INVOP_UNKNOWN;
+}
+
+/* ======================================================================
  *  collect_loops / collect_ifs
  * ====================================================================== */
 
@@ -684,21 +745,65 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 #define MAX_IFS   32
 #define MAX_LINES 1024
 #define MAX_PARS  32
-    LoopDescriptor loops[MAX_LOOPS]; int nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
-    IfDescriptor   ifs  [MAX_IFS];   int nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
+
+    /* Per-frame analysis cache. collect_loops/ifs/par_ranges scan ~50KB
+       bytecode per invocation. Encrypt opt-uncall fa molte UNCALL su
+       stesse procedure (divmod, putd, bit_k_signed, …) → cache per
+       base name evita N rescan. */
+    typedef struct {
+        char base[VAR_NAME_LENGTH];
+        int nloops, nifs, npars;
+        LoopDescriptor loops[MAX_LOOPS];
+        IfDescriptor   ifs  [MAX_IFS];
+        ParRange       pars [MAX_PARS];
+    } FrameAnalysisCache;
+    static FrameAnalysisCache _fa_cache[64];
+    static int _fa_cache_n = 0;
+    LoopDescriptor *loops;
+    IfDescriptor   *ifs;
+    ParRange       *pars;
+    int nloops, nifs, npars;
+    int _fa_hit = -1;
+    for (int _c = 0; _c < _fa_cache_n; _c++) {
+        if (!strcmp(_fa_cache[_c].base, base)) { _fa_hit = _c; break; }
+    }
+    if (_fa_hit < 0 && _fa_cache_n < (int)(sizeof(_fa_cache)/sizeof(_fa_cache[0]))) {
+        _fa_hit = _fa_cache_n++;
+        strncpy(_fa_cache[_fa_hit].base, base, VAR_NAME_LENGTH - 1);
+        _fa_cache[_fa_hit].base[VAR_NAME_LENGTH - 1] = '\0';
+        _fa_cache[_fa_hit].nloops = collect_loops(vm, frame_name, orig,
+                                                  _fa_cache[_fa_hit].loops, MAX_LOOPS);
+        _fa_cache[_fa_hit].nifs   = collect_ifs  (vm, frame_name, orig,
+                                                  _fa_cache[_fa_hit].ifs,   MAX_IFS);
+        _fa_cache[_fa_hit].npars  = collect_par_ranges(orig,
+                                                       vm->frames[fi_reset].addr + 1,
+                                                       vm->frames[fi_reset].end_addr,
+                                                       _fa_cache[_fa_hit].pars, MAX_PARS);
+    }
+    if (_fa_hit >= 0) {
+        loops  = _fa_cache[_fa_hit].loops;  nloops = _fa_cache[_fa_hit].nloops;
+        ifs    = _fa_cache[_fa_hit].ifs;    nifs   = _fa_cache[_fa_hit].nifs;
+        pars   = _fa_cache[_fa_hit].pars;   npars  = _fa_cache[_fa_hit].npars;
+    } else {
+        /* Cache piena: stack arrays di fallback */
+        static LoopDescriptor _fb_loops[MAX_LOOPS];
+        static IfDescriptor   _fb_ifs  [MAX_IFS];
+        static ParRange       _fb_pars [MAX_PARS];
+        loops = _fb_loops; ifs = _fb_ifs; pars = _fb_pars;
+        nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
+        nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
+        npars  = collect_par_ranges(orig, vm->frames[fi_reset].addr + 1,
+                                    vm->frames[fi_reset].end_addr, pars, MAX_PARS);
+    }
 
     char cur_frame[VAR_NAME_LENGTH]; strncpy(cur_frame, frame_name, VAR_NAME_LENGTH - 1);
     uint fi       = get_findex(cur_frame);
     uint start_ln = vm->frames[fi_reset].addr + 1;
+    (void)start_ln;
     /* Cache: strstr(frame_name, X) chiamato in più punti dell'hot loop interno.
        frame_name è invariante per chiamata di invert_op_to_line. */
-    int _is_divmod_nonneg = (_is_divmod_nonneg);
+    int _is_divmod_nonneg = (strstr(frame_name, "divmod_nonneg") != NULL);
     int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
-
-    /* Raccoglie i range PAR della procedura per skippare le istruzioni
-       interne durante il loop inverso (vengono gestite da exec_par_threads). */
-    ParRange pars[MAX_PARS];
-    int npars = collect_par_ranges(orig, start_ln, vm->frames[fi_reset].end_addr, pars, MAX_PARS);
 
     char *lp[MAX_LINES]; uint ln[MAX_LINES]; int nl = 0;
     /* Arena: one malloc per invert call instead of N strdups.
@@ -778,6 +883,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         char *fw_cls = strtok(zbuf, " \t");
         char *arg1_cls = strtok(NULL, " \t");
         if (!fw_cls) { i--; continue; }
+        uint8_t op_tag = classify_op(fw_cls);
         if (!strcmp(frame_name, "__mn_divmod_nonneg"))
             VMLOG("[INV_LOOP] frame='%s' i=%d cur=%u fw='%s'\n", frame_name, i, cur, fw_cls ? fw_cls : "NULL");
         /* Nel ramo THEN già invertito da exec_branch_inverse (honor_if_line_skip=0 lì).
@@ -935,24 +1041,24 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         char *fw = strtok(exe_line, " \t");
         if (!fw) { i--; continue; }
 
-        if (!strcmp(fw, "PAR_END")) { i--; continue; }
+        if (op_tag == INVOP_PAR_END) { i--; continue; }
 
         if (_is_divmod_nonneg &&
-            divmod_saved_r_loop_skipped_forward(vm, fi) && fw_cls && arg1_cls &&
-            ((!strcmp(fw_cls, "MINEQ") && !strcmp(arg1_cls, "r")) ||
-             (!strcmp(fw_cls, "PUSHEQ") && !strcmp(arg1_cls, "q")))) {
+            divmod_saved_r_loop_skipped_forward(vm, fi) && arg1_cls &&
+            ((op_tag == INVOP_MINEQ  && !strcmp(arg1_cls, "r")) ||
+             (op_tag == INVOP_PUSHEQ && !strcmp(arg1_cls, "q")))) {
             i--;
             continue;
         }
         if (_is_bit_k_signed &&
-            bit_k_loop_skipped_forward(vm, fi) && fw_cls && arg1_cls &&
-            ((!strcmp(fw_cls, "MINEQ") && !strcmp(arg1_cls, "i")) ||
-             (!strcmp(fw_cls, "PUSHEQ") && !strcmp(arg1_cls, "i")))) {
+            bit_k_loop_skipped_forward(vm, fi) && arg1_cls &&
+            ((op_tag == INVOP_MINEQ  && !strcmp(arg1_cls, "i")) ||
+             (op_tag == INVOP_PUSHEQ && !strcmp(arg1_cls, "i")))) {
             i--;
             continue;
         }
 
-        if (!strcmp(fw, "CALL")) {
+        if (op_tag == INVOP_CALL) {
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
@@ -999,7 +1105,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
         }
-        if (!strcmp(fw, "UNCALL")) {
+        if (op_tag == INVOP_UNCALL) {
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
@@ -1074,7 +1180,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         /* PAR_START nell'inversione: rilancia i thread con is_inverse=1,
            in modo che SSEND e SRECV vengano scambiati dentro thread_entry.
            Le istruzioni interne sono già skippate da line_is_inside_par. */
-        if (!strcmp(fw, "PAR_START")) {
+        if (op_tag == INVOP_PAR_START) {
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             /* cur è il numero-riga stampato nel bytecode (es. 52 per "0052 PAR_START").
@@ -1089,31 +1195,33 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
 
         if (vm->dbg && vm->dbg->initialized) {
-            if (!strcmp(fw, "DECL") || !strcmp(fw, "LABEL")) {
+            if (op_tag == INVOP_DECL || op_tag == INVOP_LABEL) {
                 vm->dbg->current_line = invert_extract_srcline(lp[i]);
-            } else if (strcmp(fw, "PARAM") != 0) {
+            } else if (op_tag != INVOP_PARAM) {
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             }
         }
 
         if (!strcmp(frame_name, "__mn_divmod_nonneg"))
             VMLOG("[INV_OP] frame='%s' cur=%u op='%s'\n", frame_name, cur, fw);
-        if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, cur_frame);
-        else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, cur_frame);
-        else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, cur_frame);
-        else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, cur_frame);
-        else if (!strcmp(fw, "PUSH"))  op_pop  (vm, cur_frame);
-        else if (!strcmp(fw, "POP"))   op_push (vm, cur_frame);
-        else if (!strcmp(fw, "SSEND")) op_srecv(vm, cur_frame);
-        else if (!strcmp(fw, "SRECV")) op_ssend(vm, cur_frame);
-        else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, cur_frame);
-        else if (!strcmp(fw, "DELOCAL"))op_local     (vm, cur_frame);
-        else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
-        else if (!strcmp(fw, "START")   || !strcmp(fw, "PARAM")   || !strcmp(fw, "LABEL")   ||
-                 !strcmp(fw, "EVAL")    || !strcmp(fw, "JMPF")    || !strcmp(fw, "JMP")     ||
-                 !strcmp(fw, "ASSERT")   || !strcmp(fw, "DECL")    || !strcmp(fw, "HALT")    ||
-                 strncmp(fw, "THREAD_", 7) == 0) { /* skip */ }
-        else { vm_debug_panic("[UNCALL] op sconosciuta: '%s'\n", fw); }
+        switch (op_tag) {
+            case INVOP_PUSHEQ:  op_pusheq_inv(vm, cur_frame); break;
+            case INVOP_MINEQ:   op_mineq_inv (vm, cur_frame); break;
+            case INVOP_XOREQ:   op_xoreq_inv (vm, cur_frame); break;
+            case INVOP_SWAP:    op_swap_inv  (vm, cur_frame); break;
+            case INVOP_PUSH:    op_pop       (vm, cur_frame); break;
+            case INVOP_POP:     op_push      (vm, cur_frame); break;
+            case INVOP_SSEND:   op_srecv     (vm, cur_frame); break;
+            case INVOP_SRECV:   op_ssend     (vm, cur_frame); break;
+            case INVOP_LOCAL:   op_delocal   (vm, cur_frame); break;
+            case INVOP_DELOCAL: op_local     (vm, cur_frame); break;
+            case INVOP_SHOW:    /* no-op in inverse */ break;
+            case INVOP_START: case INVOP_PARAM: case INVOP_LABEL:
+            case INVOP_EVAL:  case INVOP_JMPF:  case INVOP_JMP:
+            case INVOP_ASSERT: case INVOP_DECL: case INVOP_HALT:
+            case INVOP_THREAD: /* skip */ break;
+            default: vm_debug_panic("[UNCALL] op sconosciuta: '%s'\n", fw);
+        }
         i--;
     }
 
