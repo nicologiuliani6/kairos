@@ -805,7 +805,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     int _is_divmod_nonneg = (strstr(frame_name, "divmod_nonneg") != NULL);
     int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
 
-    char *lp[MAX_LINES]; uint ln[MAX_LINES]; int nl = 0;
+    char *lp[MAX_LINES]; uint ln[MAX_LINES]; uint8_t lp_op[MAX_LINES]; int nl = 0;
     /* Arena: one malloc per invert call instead of N strdups.
        Upper bound = size of remaining buffer from stop+1 to END_PROC. */
     size_t _arena_cap = strlen(orig) + 1;
@@ -822,10 +822,19 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             (op_start[8] == ' ' || op_start[8] == '\t' || op_start[8] == '\0')) {
             *newline = '\n'; break;
         }
-        if (cur_ln <= start && cur_ln > stop) {   // ← già corretto
+        if (cur_ln <= start && cur_ln > stop) {
             size_t _line_len = (size_t)(newline - ptr);
             memcpy(_arena_p, ptr, _line_len);
             _arena_p[_line_len] = '\0';
+            /* Precompute op_tag al collection: classify_op richiede null-term
+               sul fw token. Trova fine-token come space/tab/null. */
+            char *_a_op = _arena_p + (op_start - ptr);
+            char *_tok_end = _a_op;
+            while (*_tok_end && *_tok_end != ' ' && *_tok_end != '\t') _tok_end++;
+            char _save_c = *_tok_end;
+            *_tok_end = '\0';
+            lp_op[nl] = classify_op(_a_op);
+            *_tok_end = _save_c;
             lp[nl] = _arena_p;
             ln[nl] = cur_ln;
             _arena_p += _line_len + 1;
@@ -883,7 +892,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         char *fw_cls = strtok(zbuf, " \t");
         char *arg1_cls = strtok(NULL, " \t");
         if (!fw_cls) { i--; continue; }
-        uint8_t op_tag = classify_op(fw_cls);
+        uint8_t op_tag = lp_op[i];
         if (!strcmp(frame_name, "__mn_divmod_nonneg"))
             VMLOG("[INV_LOOP] frame='%s' i=%d cur=%u fw='%s'\n", frame_name, i, cur, fw_cls ? fw_cls : "NULL");
         /* Nel ramo THEN già invertito da exec_branch_inverse (honor_if_line_skip=0 lì).
