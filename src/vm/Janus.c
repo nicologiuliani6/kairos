@@ -178,7 +178,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         if (!strcmp(fw, "END_PROC")) {
             uint fi = get_findex(fname);
             if (stack_size(&vm->frames[fi].LocalVariables) > -1) {
-                // #region agent log
+                #ifdef MNEMO_AGENT_LOG
                 {
                     FILE *_ep = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
                     if (_ep) {
@@ -191,7 +191,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                         fclose(_ep);
                     }
                 }
-                // #endregion
+                #endif
                 vm_debug_panic("[VM] END_PROC: variabili LOCAL non chiuse!\n");
             }
             *nl = '\n';

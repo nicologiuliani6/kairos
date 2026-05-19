@@ -506,7 +506,7 @@ static inline int loop_peel_more_at_until(VM *vm, uint fi, LoopDescriptor *L, in
     return exit_cond_true;
 }
 
-// #region agent log
+#ifdef MNEMO_AGENT_LOG
 static inline int mn_dbg_read_int(VM *vm, uint fi, const char *name)
 {
     if (!char_id_map_exists(&vm->frames[fi].VarIndexer, name)) return -9999;
@@ -532,7 +532,7 @@ static inline void mn_dbg_log_loop(const char *hypothesisId, const char *zone,
             (long long)time(NULL) * 1000);
     fclose(f);
 }
-// #endregion
+#endif
 
 
 static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
@@ -653,14 +653,16 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop, int honor_if_line_skip)
 {
     //fprintf(stderr, "[INVERT] frame='%s' start=%u stop=%u depth=%d\n", frame_name, start, stop, vm->inversion_depth);
-    char *orig = strdup(buffer);
-    if (!orig) { vm_debug_panic("[UNCALL] strdup fallita\n"); }
+    /* buffer è già thread-locale (vm_par.h:77 dup_buffer per worker, top-level
+       vm_run_BT alloca dal chiamante). Mutations qui (newline='\0' poi restore)
+       sono transienti → no strdup, riduciamo malloc pressure. */
+    char *orig = buffer;
     VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
     vm->inversion_depth++;   
     char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
     char *at = strchr(base, '@'); if (at) *at = '\0';
     uint fi_reset = char_id_map_get(&FrameIndexer, base);
-    // #region agent log
+    #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "divmod_nonneg")) {
         FILE *_df = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
         if (_df) {
@@ -675,7 +677,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             fclose(_df);
         }
     }
-    // #endregion
+    #endif
     stack_init(&vm->frames[fi_reset].LocalVariables);
 
 #define MAX_LOOPS 32
@@ -688,6 +690,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     char cur_frame[VAR_NAME_LENGTH]; strncpy(cur_frame, frame_name, VAR_NAME_LENGTH - 1);
     uint fi       = get_findex(cur_frame);
     uint start_ln = vm->frames[fi_reset].addr + 1;
+    /* Cache: strstr(frame_name, X) chiamato in più punti dell'hot loop interno.
+       frame_name è invariante per chiamata di invert_op_to_line. */
+    int _is_divmod_nonneg = (_is_divmod_nonneg);
+    int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
 
     /* Raccoglie i range PAR della procedura per skippare le istruzioni
        interne durante il loop inverso (vengono gestite da exec_par_threads). */
@@ -695,22 +701,35 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     int npars = collect_par_ranges(orig, start_ln, vm->frames[fi_reset].end_addr, pars, MAX_PARS);
 
     char *lp[MAX_LINES]; uint ln[MAX_LINES]; int nl = 0;
+    /* Arena: one malloc per invert call instead of N strdups.
+       Upper bound = size of remaining buffer from stop+1 to END_PROC. */
+    size_t _arena_cap = strlen(orig) + 1;
+    char  *_arena = (char *)malloc(_arena_cap);
+    if (!_arena) vm_debug_panic("[UNCALL] arena malloc fallita\n");
+    char  *_arena_p = _arena;
     char *ptr = go_to_line(orig, stop + 1);   // ← CAMBIA: parti da dopo PROC
     while (ptr && *ptr && nl < MAX_LINES) {
         char *newline = strchr(ptr, '\n'); if (!newline) break;
         *newline = '\0';
         uint cur_ln = (uint)atoi(ptr);
-        char tmp[2048]; strncpy(tmp, ptr, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        char *fw = strtok(skip_lineno(tmp), " \t");
-        if (fw && !strcmp(fw, "END_PROC")) { *newline = '\n'; break; }
+        char *op_start = skip_lineno(ptr);
+        if (!strncmp(op_start, "END_PROC", 8) &&
+            (op_start[8] == ' ' || op_start[8] == '\t' || op_start[8] == '\0')) {
+            *newline = '\n'; break;
+        }
         if (cur_ln <= start && cur_ln > stop) {   // ← già corretto
-            lp[nl] = strdup(ptr); ln[nl] = cur_ln; nl++;
+            size_t _line_len = (size_t)(newline - ptr);
+            memcpy(_arena_p, ptr, _line_len);
+            _arena_p[_line_len] = '\0';
+            lp[nl] = _arena_p;
+            ln[nl] = cur_ln;
+            _arena_p += _line_len + 1;
+            nl++;
         }
         *newline = '\n'; ptr = newline + 1;
     }
     //fprintf(stderr, "[INVERT] start=%u stop=%u righe_raccolte=%d\n", start, stop, nl);
-    // #region agent log
+    #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "move_int")) {
         FILE *_mf = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
         if (_mf) {
@@ -733,25 +752,29 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             fclose(_mf);
         }
     }
-    // #endregion
+    #endif
 
     int i = nl - 1;
+#ifdef MNEMO_AGENT_LOG
     long long _iter_count = 0;
+#endif
     while (i >= 0) {
+#ifdef MNEMO_AGENT_LOG
         if (++_iter_count % 100000 == 0)
             fprintf(stderr, "[INVERT_LOOP] frame='%s' iter=%lld i=%d nl=%d\n",
                     frame_name, _iter_count, i, nl);
-        char ob[2048]; strncpy(ob, lp[i], sizeof(ob) - 1);
-        ob[sizeof(ob) - 1] = '\0';
+#endif
         uint  cur   = ln[i];
-        char *clean = skip_lineno(ob);
-        /* exe_line: catena strtok per CALL/UNCALL/… senza toccherla prima con fw_cls */
+        /* skip_lineno è puro arithmetic, può operare su lp[i] direttamente (immutato). */
+        char *clean = skip_lineno(lp[i]);
+        size_t _clean_len = strlen(clean);
+        /* exe_line: copia indipendente per strtok finale (dopo dispatch early-skip).
+           zbuf: copia indipendente per strtok early (fw_cls/arg1_cls). */
         char exe_line[2048];
-        strncpy(exe_line, clean, sizeof(exe_line) - 1);
-        exe_line[sizeof(exe_line) - 1] = '\0';
+        if (_clean_len >= sizeof(exe_line)) _clean_len = sizeof(exe_line) - 1;
+        memcpy(exe_line, clean, _clean_len); exe_line[_clean_len] = '\0';
         char zbuf[2048];
-        strncpy(zbuf, exe_line, sizeof(zbuf) - 1);
-        zbuf[sizeof(zbuf) - 1] = '\0';
+        memcpy(zbuf, clean, _clean_len); zbuf[_clean_len] = '\0';
         char *fw_cls = strtok(zbuf, " \t");
         char *arg1_cls = strtok(NULL, " \t");
         if (!fw_cls) { i--; continue; }
@@ -773,13 +796,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             lz == LOOP_ZONE_ERR_LABEL)  { i--; continue; }
 
         if (lz == LOOP_ZONE_JMPF_ERR) {
-            if (strstr(frame_name, "divmod_nonneg") &&
+            if (_is_divmod_nonneg &&
                 loop_entry_eq_zero_guard(loops, li) &&
                 divmod_saved_r_loop_skipped_forward(vm, fi)) {
                 i--;
                 continue;
             }
-            if (strstr(frame_name, "bit_k_signed") &&
+            if (_is_bit_k_signed &&
                 loop_entry_eq_zero_guard(loops, li) &&
                 !strcmp(loops[li].eval_entry_id, "i") &&
                 bit_k_loop_skipped_forward(vm, fi)) {
@@ -788,14 +811,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             }
             do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_op,
                     loops[li].eval_entry_val);
-            // #region agent log
+            #ifdef MNEMO_AGENT_LOG
             mn_dbg_log_loop("B", "JMPF_ERR", frame_name, _iter_count, i, nl,
                             (int)thread_val_IF,
                             loop_entry_eq_zero_guard(loops, li)
                                 ? loop_entry_counter_val(vm, fi, loops, li)
                                 : mn_dbg_read_int(vm, fi, "q"),
                             mn_dbg_read_int(vm, fi, "r"), mn_dbg_read_int(vm, fi, "b"), -1);
-            // #endregion
+            #endif
             if (loop_entry_eq_zero_guard(loops, li)) {
                 if (loop_entry_counter_val(vm, fi, loops, li) <= 0) {
                     i--;
@@ -816,13 +839,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             continue;
         }
         if (lz == LOOP_ZONE_JMPF_START) {
-            if (strstr(frame_name, "divmod_nonneg") &&
+            if (_is_divmod_nonneg &&
                 loop_entry_eq_zero_guard(loops, li) &&
                 divmod_saved_r_loop_skipped_forward(vm, fi)) {
                 i--;
                 continue;
             }
-            if (strstr(frame_name, "bit_k_signed") &&
+            if (_is_bit_k_signed &&
                 loop_entry_eq_zero_guard(loops, li) &&
                 !strcmp(loops[li].eval_entry_id, "i") &&
                 bit_k_loop_skipped_forward(vm, fi)) {
@@ -836,12 +859,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                dell'EVAL until; quando la guardia coincide con uscita inversa, solo i--.
                I ramif erano scambiati: con e0==0 al primo incontr prendevamo i-- e mai il corpo. */
             int peel_more = loop_peel_more_at_until(vm, fi, loops, li, thread_val_IF);
-            // #region agent log
+            #ifdef MNEMO_AGENT_LOG
             mn_dbg_log_loop("A", "JMPF_START", frame_name, _iter_count, i, nl,
                             (int)thread_val_IF, mn_dbg_read_int(vm, fi, "q"),
                             mn_dbg_read_int(vm, fi, "r"), mn_dbg_read_int(vm, fi, "b"),
                             peel_more);
-            // #endregion
+            #endif
             if (!peel_more) { i--; }
             else {
                 int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
@@ -914,14 +937,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if (!strcmp(fw, "PAR_END")) { i--; continue; }
 
-        if (strstr(frame_name, "divmod_nonneg") &&
+        if (_is_divmod_nonneg &&
             divmod_saved_r_loop_skipped_forward(vm, fi) && fw_cls && arg1_cls &&
             ((!strcmp(fw_cls, "MINEQ") && !strcmp(arg1_cls, "r")) ||
              (!strcmp(fw_cls, "PUSHEQ") && !strcmp(arg1_cls, "q")))) {
             i--;
             continue;
         }
-        if (strstr(frame_name, "bit_k_signed") &&
+        if (_is_bit_k_signed &&
             bit_k_loop_skipped_forward(vm, fi) && fw_cls && arg1_cls &&
             ((!strcmp(fw_cls, "MINEQ") && !strcmp(arg1_cls, "i")) ||
              (!strcmp(fw_cls, "PUSHEQ") && !strcmp(arg1_cls, "i")))) {
@@ -1025,7 +1048,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             vm->inversion_depth          = 0;
             vm->invert_hist_guard_var    = NULL;
             vm->suppress_show = 1;
-            // #region agent log
+            #ifdef MNEMO_AGENT_LOG
             {
                 FILE *_uf = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
                 if (_uf) {
@@ -1038,7 +1061,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     fclose(_uf);
                 }
             }
-            // #endregion
+            #endif
             vm_run_BT(vm, orig, cn);
             vm->inversion_depth       = saved_inv;
             vm->invert_hist_guard_var = saved_g;
@@ -1094,8 +1117,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         i--;
     }
 
-    for (int j = 0; j < nl; j++) free(lp[j]);
-    // #region agent log
+    free(_arena);
+    /* orig non strduped → niente free(orig) */
+    #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "move_int")) {
         FILE *_df = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
         if (_df) {
@@ -1108,10 +1132,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             fclose(_df);
         }
     }
-    // #endregion
+    #endif
     VMLOG("[INVERT] completata, righe processate=%d\n", nl);
     vm->inversion_depth--;
-    free(orig);
+    /* orig = buffer (no strdup), niente free */
 #undef MAX_LOOPS
 #undef MAX_IFS
 #undef MAX_LINES
