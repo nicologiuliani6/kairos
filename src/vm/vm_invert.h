@@ -818,8 +818,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         IfDescriptor   ifs  [MAX_IFS];
         ParRange       pars [MAX_PARS];
     } FrameAnalysisCache;
-    static FrameAnalysisCache _fa_cache[64];
-    static int _fa_cache_n = 0;
+    /* Thread-local: due thread par (es. fib_left/fib_right) chiamano
+       invert_op_to_line in parallelo; senza __thread la cache (n++ + array
+       writes) è una race → descriptor partial-write → DELOCAL `__mn_e<N>`
+       value errato a fine inverse. */
+    static __thread FrameAnalysisCache _fa_cache[64];
+    static __thread int _fa_cache_n = 0;
     LoopDescriptor *loops;
     IfDescriptor   *ifs;
     ParRange       *pars;
