@@ -131,6 +131,14 @@ static inline void _copy_compare_op(char *dst8, const char *op_raw)
     dst8[7] = '\0';
 }
 
+/* Estrae l'UID da una label tipo "FROM_START_1140" → "1140". Ritorna 0 se non match. */
+static inline const char *_loop_label_uid(const char *label, const char *prefix, size_t plen)
+{
+    if (strncmp(label, prefix, plen) != 0) return NULL;
+    if (label[plen] != '_') return NULL;
+    return label + plen + 1;
+}
+
 static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                                  LoopDescriptor *out, int max)
 {
@@ -138,8 +146,35 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     char *at = strchr(base, '@'); if (at) *at = '\0';
     uint fi = char_id_map_get(&FrameIndexer, base);
     char *ptr = go_to_line(buf, vm->frames[fi].addr + 1);
-    int n = 0, in_loop = 0;
+    int n = 0;
+    /* Stack di loop aperti per UID. Layout Kairos:
+     *   LOCAL → EVAL → JMPF FROM_ERR_<UID> → LABEL FROM_START_<UID> → body
+     *   → EVAL → JMPF FROM_START_<UID> → LABEL FROM_END_<UID> → LABEL FROM_ERR_<UID>
+     * UID coerente tra JMPF FROM_ERR / LABEL FROM_START / JMPF FROM_START / LABEL FROM_END
+     * / LABEL FROM_ERR. Slot aperto da prima reference, chiuso da LABEL FROM_ERR_<UID>.
+     */
+    int stack_slot[32];
+    char stack_uid[32][32];
+    int top = -1;
+
     uint peval = 0; char pid[64] = {0}, pval[64] = {0}, pop[8] = {'=', '=', '\0'};
+
+    /* find_or_open: cerca slot per uid; se non aperto, alloca. */
+    #define LOOP_FIND_OR_OPEN(uid, slot_out) do { \
+        slot_out = -1; \
+        for (int _s = top; _s >= 0; _s--) { \
+            if (!strcmp(stack_uid[_s], uid)) { slot_out = stack_slot[_s]; break; } \
+        } \
+        if (slot_out < 0 && n < max && \
+            top + 1 < (int)(sizeof(stack_slot)/sizeof(stack_slot[0]))) { \
+            slot_out = n++; \
+            memset(&out[slot_out], 0, sizeof(LoopDescriptor)); \
+            top++; \
+            stack_slot[top] = slot_out; \
+            strncpy(stack_uid[top], uid, sizeof(stack_uid[0]) - 1); \
+            stack_uid[top][sizeof(stack_uid[0]) - 1] = '\0'; \
+        } \
+    } while (0)
 
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
@@ -157,32 +192,58 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             strncpy(pid,  a   ? a   : "", 63);
             strncpy(pval, rhs,             63);
             _copy_compare_op(pop, op);
-        } else if (!strcmp(fw, "JMPF") && !in_loop) {
+        } else if (!strcmp(fw, "LABEL")) {
             char *ln = strtok(NULL, " \t");
-            if (ln && !strncmp(ln, "FROM_ERR", 8)) {
-                out[n].eval_entry_line = peval;
-                strncpy(out[n].eval_entry_id,  pid,  63);
-                strncpy(out[n].eval_entry_val, pval, 63);
-                _copy_compare_op(out[n].eval_entry_op, pop);
-                out[n].jmpf_err_line = cur; in_loop = 1;
+            if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
+            const char *uid;
+            if ((uid = _loop_label_uid(ln, "FROM_START", 10)) != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) out[slot].from_start_line = cur;
+            } else if ((uid = _loop_label_uid(ln, "FROM_END", 8)) != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) out[slot].from_end_line = cur;
+            } else if ((uid = _loop_label_uid(ln, "FROM_ERR", 8)) != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) out[slot].from_err_line = cur;
+                /* Chiude loop, pop stack. */
+                for (int s = top; s >= 0; s--) {
+                    if (!strcmp(stack_uid[s], uid)) {
+                        for (int k = s; k < top; k++) {
+                            stack_slot[k] = stack_slot[k + 1];
+                            strncpy(stack_uid[k], stack_uid[k + 1], sizeof(stack_uid[0]) - 1);
+                        }
+                        top--;
+                        break;
+                    }
+                }
             }
-        } else if (!strcmp(fw, "LABEL") && in_loop) {
-            char *ln = strtok(NULL, " \t"); if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
-            if      (!strncmp(ln, "FROM_START", 10)) out[n].from_start_line = cur;
-            else if (!strncmp(ln, "FROM_END",   8))  out[n].from_end_line   = cur;
-            else if (!strncmp(ln, "FROM_ERR",   8))  { out[n].from_err_line = cur; in_loop = 0; n++; }
-        } else if (!strcmp(fw, "JMPF") && in_loop) {
+        } else if (!strcmp(fw, "JMPF")) {
             char *ln = strtok(NULL, " \t");
-            if (ln && !strncmp(ln, "FROM_START", 10)) {
-                out[n].eval_exit_line = peval;
-                strncpy(out[n].eval_exit_id,  pid,  63);
-                strncpy(out[n].eval_exit_val, pval, 63);
-                _copy_compare_op(out[n].eval_exit_op, pop);
-                out[n].jmpf_start_line = cur;
+            if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
+            const char *uid;
+            if ((uid = _loop_label_uid(ln, "FROM_ERR", 8)) != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) {
+                    out[slot].eval_entry_line = peval;
+                    strncpy(out[slot].eval_entry_id,  pid,  63);
+                    strncpy(out[slot].eval_entry_val, pval, 63);
+                    _copy_compare_op(out[slot].eval_entry_op, pop);
+                    out[slot].jmpf_err_line = cur;
+                }
+            } else if ((uid = _loop_label_uid(ln, "FROM_START", 10)) != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) {
+                    out[slot].eval_exit_line = peval;
+                    strncpy(out[slot].eval_exit_id,  pid,  63);
+                    strncpy(out[slot].eval_exit_val, pval, 63);
+                    _copy_compare_op(out[slot].eval_exit_op, pop);
+                    out[slot].jmpf_start_line = cur;
+                }
             }
         } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
         *nl = '\n'; ptr = nl + 1;
     }
+    #undef LOOP_FIND_OR_OPEN
     return n;
 }
 
