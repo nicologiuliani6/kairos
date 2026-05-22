@@ -177,12 +177,13 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     } while (0)
 
     while (ptr && *ptr && n < max) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
-        lb[sizeof(lb) - 1] = '\0';
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
+        size_t llen = (size_t)(nl - ptr);
+        if (llen >= 2047) llen = 2047;
+        char lb[2048]; memcpy(lb, ptr, llen); lb[llen] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
-        if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
+        if (!fw) { ptr = nl + 1; continue; }
 
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
@@ -194,7 +195,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             _copy_compare_op(pop, op);
         } else if (!strcmp(fw, "LABEL")) {
             char *ln = strtok(NULL, " \t");
-            if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
+            if (!ln) { ptr = nl + 1; continue; }
             const char *uid;
             if ((uid = _loop_label_uid(ln, "FROM_START", 10)) != NULL) {
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
@@ -219,7 +220,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             }
         } else if (!strcmp(fw, "JMPF")) {
             char *ln = strtok(NULL, " \t");
-            if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
+            if (!ln) { ptr = nl + 1; continue; }
             const char *uid;
             if ((uid = _loop_label_uid(ln, "FROM_ERR", 8)) != NULL) {
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
@@ -240,8 +241,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                     out[slot].jmpf_start_line = cur;
                 }
             }
-        } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
-        *nl = '\n'; ptr = nl + 1;
+        } else if (!strcmp(fw, "END_PROC")) { break; }
+        ptr = nl + 1;
     }
     #undef LOOP_FIND_OR_OPEN
     return n;
@@ -269,12 +270,14 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     char pfi_op[8] = {'=', '=', '\0'};
 
     while (ptr && *ptr && n < max) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
-        lb[sizeof(lb) - 1] = '\0';
+        char *nl = strchr(ptr, '\n');
+        if (!nl) break;
+        size_t llen = (size_t)(nl - ptr);
+        if (llen >= 2047) llen = 2047;
+        char lb[2048]; memcpy(lb, ptr, llen); lb[llen] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
-        if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
+        if (!fw) { ptr = nl + 1; continue; }
 
         if (!strcmp(fw, "EVAL")) {
             peval = cur;
@@ -317,7 +320,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         } else if (!strcmp(fw, "JMPF")) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
-                if (top + 1 >= 64 || n >= max) { *nl = '\n'; ptr = nl + 1; continue; }
+                if (top + 1 >= 64 || n >= max) { ptr = nl + 1; continue; }
                 int idx = n++;
                 top++;
                 stack_idx[top] = idx;
@@ -345,7 +348,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             }
         } else if (!strcmp(fw, "LABEL")) {
             char *ln = strtok(NULL, " \t");
-            if (!ln) { *nl = '\n'; ptr = nl + 1; continue; }
+            if (!ln) { ptr = nl + 1; continue; }
             if (!strncmp(ln, "ELSE_", 5)) {
                 for (int s = top; s >= 0; s--) {
                     if (!strcmp(stack_uid[s], ln + 5)) {
@@ -375,8 +378,10 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                 }
                 top--;
             }
-        } else if (!strcmp(fw, "END_PROC")) { *nl = '\n'; break; }
-        *nl = '\n'; ptr = nl + 1;
+        } else if (!strcmp(fw, "END_PROC")) {
+            break;
+        }
+        ptr = nl + 1;
     }
     return n;
 }

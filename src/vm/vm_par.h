@@ -254,6 +254,9 @@ static void *thread_entry(void *arg)
                 int si = char_id_map_get(&vm->frames[cfi_cur].VarIndexer, p);
                 vm->frames[cfi].vars[pi[ii++]] = vm->frames[cfi_cur].vars[si];
             }
+            /* Restore '\n' before any recursive scan on args->buffer (collect_ifs /
+               vm_run_BT scan it line-by-line; an active '\0' would short-circuit strchr). */
+            *nl = '\n';
             if (do_invert)
                 invert_op_to_line(vm, thread_key, args->buffer,
                                   vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1, 1);

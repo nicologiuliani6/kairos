@@ -357,6 +357,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 strncpy(vm->mn_hist_floor_pop_guard_anchor, inv_name, VAR_NAME_LENGTH - 1);
                 vm->mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH - 1] = '\0';
             }
+            /* Restore '\n' su orig prima del recursive scan: invert_op_to_line ->
+               collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
+               ancora attivo qui la scan si fermerebbe prematuramente. */
+            *nl = '\n';
             invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1,
                               vm->frames[cfi].addr + 1, 1);
             vm->invert_hist_guard_var = NULL;
@@ -365,7 +369,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             vm->frames[cfi].LocalVariables = slv;
-            *nl = '\n'; ptr = nl + 1; continue;
+            ptr = nl + 1; continue;
         }
         else if (!strcmp(fw, "PAR_START")) {
             *nl = '\n';
