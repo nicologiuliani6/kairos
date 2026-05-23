@@ -898,6 +898,23 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
         }
         if_branch_stack[++if_branch_top] = thread_val_IF ? 1 : 0;
         if_branch_has_call_stack[if_branch_top] = 0;
+        /* Fix P3 trace push solo se siamo dentro opt-uncall pattern
+         * Mnemo (delimitato da __mn_hist_floor_snap…UNCALL match) E
+         * proc corrente base matches branch_trace_proc. Procs diverse
+         * non interferiscono (loro inverse usa legacy depth path). */
+        if (vm->branch_trace_active > 0) {
+            char proc_base[VAR_NAME_LENGTH];
+            strncpy(proc_base, fname, VAR_NAME_LENGTH - 1);
+            proc_base[VAR_NAME_LENGTH - 1] = '\0';
+            char *pb_at = strchr(proc_base, '@');
+            if (pb_at) *pb_at = '\0';
+            if (!strcmp(proc_base, vm->branch_trace_proc)) {
+                if (vm->branch_trace_top >= VM_BRANCH_TRACE_MAX)
+                    vm_debug_panic("[VM] branch_trace overflow (max=%d)\n",
+                                   VM_BRANCH_TRACE_MAX);
+                vm->branch_trace[vm->branch_trace_top++] = thread_val_IF ? 1 : 0;
+            }
+        }
     }
 
     if (thread_val_IF) return NULL;

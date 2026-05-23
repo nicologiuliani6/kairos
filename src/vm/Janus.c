@@ -231,6 +231,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 mn_hist_floor_snap_peek_next_call_callee(nl + 1, ent->opt_call_callee,
                                                         sizeof(ent->opt_call_callee));
                 vm->mn_hist_floor_snap_sp++;
+                /* Fix P3: attiva execution trace per il subtree opt-uncall.
+                 * op_jmpf forward push trace mentre active>0 E proc match.
+                 * Inverse JMPF_ELSE pop quando trace non vuota.
+                 * Decremento dopo UNCALL match. */
+                vm->branch_trace_active++;
+                strncpy(vm->branch_trace_proc, ent->opt_call_callee, VAR_NAME_LENGTH - 1);
+                vm->branch_trace_proc[VAR_NAME_LENGTH - 1] = '\0';
                 *nl = '\n'; ptr = nl + 1;
                 continue;
             }
@@ -288,6 +295,23 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 if (!current_thread_args) {
                     uint bfi = char_id_map_get(&FrameIndexer, pn);
                     vm->frames[bfi].recursion_depth = new_depth;
+                }
+            }
+            /* Fix P3 trace: push trace_top corrente sullo stack del clone.
+             * Inverse INVOP_CALL/UNCALL pop e setta come trace_window_start
+             * corrente. Stack necessario perché clone reused tra siblings.
+             * Solo se proc base matches trace_proc (procs altre = skip). */
+            if (vm->branch_trace_active > 0) {
+                char p_base[VAR_NAME_LENGTH];
+                strncpy(p_base, pn, VAR_NAME_LENGTH - 1);
+                p_base[VAR_NAME_LENGTH - 1] = '\0';
+                char *pb_at2 = strchr(p_base, '@');
+                if (pb_at2) *pb_at2 = '\0';
+                if (!strcmp(p_base, vm->branch_trace_proc)) {
+                    if (vm->frames[cfi].trace_window_top >= VM_TRACE_WIN_STACK_MAX)
+                        vm_debug_panic("[VM] trace_window_stack overflow\n");
+                    vm->frames[cfi].trace_window_stack[vm->frames[cfi].trace_window_top++] =
+                        vm->branch_trace_top;
                 }
             }
             char nfname[VAR_NAME_LENGTH];
@@ -348,6 +372,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             vm->invert_hist_guard_var   = NULL;
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
+            int matched_opt_uncall = 0;
             if (histv && vm->mn_hist_floor_snap_sp > 0 &&
                 !strcmp(vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp - 1].opt_call_callee, pn)) {
                 MnemoHistFloorSnapEntry *top =
@@ -356,6 +381,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 vm->invert_hist_guard_var = histv;
                 strncpy(vm->mn_hist_floor_pop_guard_anchor, inv_name, VAR_NAME_LENGTH - 1);
                 vm->mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH - 1] = '\0';
+                matched_opt_uncall = 1;
+            }
+            /* Fix P3 trace: pop callee clone trace_window stack, imposta
+             * trace_window_start corrente. Cursor reset = 0. Copia anche
+             * sul BASE frame perché invert_op_to_line riceve frame_name
+             * base e get_findex(base) → base fi. */
+            if (vm->branch_trace_active > 0 && vm->frames[cfi].trace_window_top > 0) {
+                int win = vm->frames[cfi].trace_window_stack[--vm->frames[cfi].trace_window_top];
+                vm->frames[cfi].trace_window_start = win;
+                vm->frames[cfi].trace_window_cursor = 0;
+                uint base_fi_t = char_id_map_get(&FrameIndexer, pn);
+                vm->frames[base_fi_t].trace_window_start = win;
+                vm->frames[base_fi_t].trace_window_cursor = 0;
             }
             /* Restore '\n' su orig prima del recursive scan: invert_op_to_line ->
                collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
@@ -366,6 +404,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             vm->invert_hist_guard_var = NULL;
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
+            /* Fix P3: chiudi modalità trace e azzera trace residua (sanity). */
+            if (matched_opt_uncall && vm->branch_trace_active > 0) {
+                vm->branch_trace_active--;
+                if (vm->branch_trace_active == 0) {
+                    vm->branch_trace_top = 0;
+                }
+            }
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             vm->frames[cfi].LocalVariables = slv;

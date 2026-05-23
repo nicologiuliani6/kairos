@@ -80,6 +80,16 @@ typedef struct {
     int       loop_bottom_i[MAX_NESTED];
     int       loop_counter;
     int       recursion_depth;
+    /* Fix P3 trace: per-clone-frame LIFO stack di trace_window_start.
+     * Forward CALL push branch_trace_top corrente. Inverse INVOP_CALL/
+     * UNCALL pop e setta come trace_window_start corrente (consumato
+     * da JMPF_ELSE handler via trace_window_cursor). Stack necessario
+     * perché clones reused (es. fib(1) e fib(0) entrambi a fib@2). */
+#define VM_TRACE_WIN_STACK_MAX 4096
+    int       trace_window_stack[VM_TRACE_WIN_STACK_MAX];
+    int       trace_window_top;
+    int       trace_window_start;
+    int       trace_window_cursor;
 } Frame;
 
 #define MAX_FRAMES 100
@@ -153,6 +163,20 @@ typedef struct {
     char   mn_hist_floor_pop_guard_cur_inv_proc[VAR_NAME_LENGTH];
     MnemoHistFloorSnapEntry mn_hist_floor_snaps[MNEMO_HIST_SNAP_DEPTH];
     int    mn_hist_floor_snap_sp;
+    /* Fix P3 execution trace: attivato SOLO dentro opt-uncall pattern
+     * Mnemo (delimitato da CALL __mn_hist_floor_snap … UNCALL match).
+     * op_jmpf forward push branch-take su trace LIFO se active>0.
+     * vm_invert JMPF_ELSE handler pop una entry e replay quel branch
+     * specifico. Cosi non interferisce con path inverse legacy
+     * (divmod ecc. che usano replay basato su recursion_depth). */
+#define VM_BRANCH_TRACE_MAX 131072
+    int    branch_trace[VM_BRANCH_TRACE_MAX];
+    int    branch_trace_top;
+    int    branch_trace_active;
+    /* Proc name (base) di cui le chiamate ricorsive partecipano alla
+     * trace. Settato da __mn_hist_floor_snap. op_jmpf push solo se
+     * current proc base name matches. Procs diverse non interferiscono. */
+    char   branch_trace_proc[VAR_NAME_LENGTH];
 } VM;
 
 struct ThreadArgs {

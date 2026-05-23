@@ -1078,6 +1078,46 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             { i--; continue; }
 
         if (iz == IF_ZONE_JMPF_ELSE) {
+            /* Fix P3 trace: legge branch dal clone frame trace window.
+             * Forward CALL salva trace_window_start sul clone. Inverse
+             * JMPF_ELSE legge window-relative (start+cursor) ed avanza
+             * cursor. Attivo solo se proc base matches trace_proc. */
+            int trace_path_active = 0;
+            if (vm->branch_trace_active > 0) {
+                char fb[VAR_NAME_LENGTH];
+                strncpy(fb, cur_frame, VAR_NAME_LENGTH - 1);
+                fb[VAR_NAME_LENGTH - 1] = '\0';
+                char *fb_at = strchr(fb, '@');
+                if (fb_at) *fb_at = '\0';
+                if (!strcmp(fb, vm->branch_trace_proc)) trace_path_active = 1;
+            }
+            if (trace_path_active) {
+                int win_start = vm->frames[fi].trace_window_start;
+                int win_cursor = vm->frames[fi].trace_window_cursor;
+                int trace_idx = win_start + win_cursor;
+                if (trace_idx < vm->branch_trace_top) {
+                    int branch_was_then = vm->branch_trace[trace_idx];
+                    vm->frames[fi].trace_window_cursor = win_cursor + 1;
+                    uint branch_from = 0, branch_to = 0;
+                    if (branch_was_then) {
+                        branch_from = ifs[ii].jmpf_else_line + 1;
+                        branch_to   = ifs[ii].jmp_fi_line;
+                    } else {
+                        branch_from = ifs[ii].else_label_line + 1;
+                        branch_to   = ifs[ii].fi_label_line;
+                    }
+                    if (branch_from < branch_to) {
+                        Stack sv = vm->frames[fi].LocalVariables;
+                        stack_init(&vm->frames[fi].LocalVariables);
+                        exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
+                        vm->frames[fi].LocalVariables = sv;
+                    }
+                    int t = -1;
+                    for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
+                    i = (t >= 0) ? t - 1 : i - 1;
+                    continue;
+                }
+            }
             int depth = vm->frames[fi_reset].recursion_depth;
             if (depth > 0) {
                 /* Recursive procedure: the entry guard can be overwritten by nested calls.
@@ -1191,8 +1231,38 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 strncpy(target, pn, sizeof(target) - 1);
                 target[sizeof(target) - 1] = '\0';
             }
+            /* Fix P3 trace: pop callee clone trace_window stack, imposta
+             * window_start corrente per invert_op_to_line. Save/restore
+             * base frame window_state attorno all'invert ricorsivo per
+             * non sovrascrivere il context outer. */
+            int saved_base_win_start_x = 0;
+            int saved_base_win_cursor_x = 0;
+            int trace_did_pop_x = 0;
+            uint base_fi_x = 0;
+            if (vm->branch_trace_active > 0 && vm->frames[cfi].trace_window_top > 0) {
+                char pb_c[VAR_NAME_LENGTH];
+                strncpy(pb_c, pn, VAR_NAME_LENGTH - 1);
+                pb_c[VAR_NAME_LENGTH - 1] = '\0';
+                char *pbc_at = strchr(pb_c, '@');
+                if (pbc_at) *pbc_at = '\0';
+                if (!strcmp(pb_c, vm->branch_trace_proc)) {
+                    int win = vm->frames[cfi].trace_window_stack[--vm->frames[cfi].trace_window_top];
+                    vm->frames[cfi].trace_window_start = win;
+                    vm->frames[cfi].trace_window_cursor = 0;
+                    base_fi_x = char_id_map_get(&FrameIndexer, pn);
+                    saved_base_win_start_x = vm->frames[base_fi_x].trace_window_start;
+                    saved_base_win_cursor_x = vm->frames[base_fi_x].trace_window_cursor;
+                    vm->frames[base_fi_x].trace_window_start = win;
+                    vm->frames[base_fi_x].trace_window_cursor = 0;
+                    trace_did_pop_x = 1;
+                }
+            }
             invert_op_to_line(vm, target, orig, vm->frames[cfi].end_addr - 1,
                               vm->frames[cfi].addr + 1, 1);
+            if (trace_did_pop_x) {
+                vm->frames[base_fi_x].trace_window_start = saved_base_win_start_x;
+                vm->frames[base_fi_x].trace_window_cursor = saved_base_win_cursor_x;
+            }
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
             i--; continue;
         }
@@ -1579,9 +1649,38 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 else if (is_rec_c) make_frame_key(pn, new_depth_c, target_c, sizeof(target_c));
                 else if (current_thread_args) make_thread_frame_key(pn, target_c, sizeof(target_c));
                 else { strncpy(target_c, pn, sizeof(target_c) - 1); target_c[sizeof(target_c) - 1] = '\0'; }
+                /* Fix P3 trace: pop callee clone trace_window stack, set
+                 * window_start corrente per invert_op_to_line. Save/restore
+                 * base attorno per non polluire outer context. */
+                int saved_bws_eb = 0, saved_bwc_eb = 0, popped_eb = 0;
+                uint base_fi_eb = 0;
+                if (vm->branch_trace_active > 0 &&
+                    vm->frames[callee_fi_c].trace_window_top > 0) {
+                    char pb_eb[VAR_NAME_LENGTH];
+                    strncpy(pb_eb, pn, VAR_NAME_LENGTH - 1);
+                    pb_eb[VAR_NAME_LENGTH - 1] = '\0';
+                    char *pbeb_at = strchr(pb_eb, '@');
+                    if (pbeb_at) *pbeb_at = '\0';
+                    if (!strcmp(pb_eb, vm->branch_trace_proc)) {
+                        int win = vm->frames[callee_fi_c].trace_window_stack
+                                  [--vm->frames[callee_fi_c].trace_window_top];
+                        vm->frames[callee_fi_c].trace_window_start = win;
+                        vm->frames[callee_fi_c].trace_window_cursor = 0;
+                        base_fi_eb = char_id_map_get(&FrameIndexer, pn);
+                        saved_bws_eb = vm->frames[base_fi_eb].trace_window_start;
+                        saved_bwc_eb = vm->frames[base_fi_eb].trace_window_cursor;
+                        vm->frames[base_fi_eb].trace_window_start = win;
+                        vm->frames[base_fi_eb].trace_window_cursor = 0;
+                        popped_eb = 1;
+                    }
+                }
                 invert_op_to_line(vm, target_c, original_buffer,
                                   vm->frames[callee_fi_c].end_addr - 1,
                                   vm->frames[callee_fi_c].addr + 1, 1);
+                if (popped_eb) {
+                    vm->frames[base_fi_eb].trace_window_start = saved_bws_eb;
+                    vm->frames[base_fi_eb].trace_window_cursor = saved_bwc_eb;
+                }
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
                 vm->frames[callee_fi_c].LocalVariables = slv_c;
             }
@@ -1665,9 +1764,38 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     strncpy(target_c, pn, sizeof(target_c) - 1);
                     target_c[sizeof(target_c) - 1] = '\0';
                 }
+                /* Fix P3 trace: pop callee clone trace_window stack, set
+                 * window_start corrente per invert_op_to_line. Save/restore
+                 * base. */
+                int saved_bws_eb2 = 0, saved_bwc_eb2 = 0, popped_eb2 = 0;
+                uint base_fi_eb2 = 0;
+                if (vm->branch_trace_active > 0 &&
+                    vm->frames[callee_fi_c].trace_window_top > 0) {
+                    char pb_eb2[VAR_NAME_LENGTH];
+                    strncpy(pb_eb2, pn, VAR_NAME_LENGTH - 1);
+                    pb_eb2[VAR_NAME_LENGTH - 1] = '\0';
+                    char *peb2_at = strchr(pb_eb2, '@');
+                    if (peb2_at) *peb2_at = '\0';
+                    if (!strcmp(pb_eb2, vm->branch_trace_proc)) {
+                        int win = vm->frames[callee_fi_c].trace_window_stack
+                                  [--vm->frames[callee_fi_c].trace_window_top];
+                        vm->frames[callee_fi_c].trace_window_start = win;
+                        vm->frames[callee_fi_c].trace_window_cursor = 0;
+                        base_fi_eb2 = char_id_map_get(&FrameIndexer, pn);
+                        saved_bws_eb2 = vm->frames[base_fi_eb2].trace_window_start;
+                        saved_bwc_eb2 = vm->frames[base_fi_eb2].trace_window_cursor;
+                        vm->frames[base_fi_eb2].trace_window_start = win;
+                        vm->frames[base_fi_eb2].trace_window_cursor = 0;
+                        popped_eb2 = 1;
+                    }
+                }
                 invert_op_to_line(vm, target_c, original_buffer,
                                   vm->frames[callee_fi_c].end_addr - 1,
                                   vm->frames[callee_fi_c].addr + 1, 1);
+                if (popped_eb2) {
+                    vm->frames[base_fi_eb2].trace_window_start = saved_bws_eb2;
+                    vm->frames[base_fi_eb2].trace_window_cursor = saved_bwc_eb2;
+                }
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
                 vm->frames[callee_fi_c].LocalVariables = slv_c;
                 continue;
