@@ -1443,7 +1443,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         if (!vm->frames[cfi].vars[v]) {
             vm->frames[cfi].vars[v]        = calloc(1, sizeof(Var));
             vm->frames[cfi].vars[v]->T     = TYPE_INT;
-            vm->frames[cfi].vars[v]->value = calloc(1, sizeof(int));
+            vm->frames[cfi].vars[v]->value = calloc(1, sizeof(int64_t));
             if (saved[v]) strncpy(vm->frames[cfi].vars[v]->name, saved[v]->name, VAR_NAME_LENGTH - 1);
             tmp_alloc[v] = vm->frames[cfi].vars[v];
         }

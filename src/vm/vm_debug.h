@@ -293,19 +293,19 @@ static inline int vm_debug_dump_json(VM *vm, char *out, int outsz)
             JWRITE("{\"name\":\"%s\",", v->name);
 
             if (v->T == TYPE_INT) {
-                JWRITE("\"type\":\"int\",\"value\":%d}", *(v->value));
+                JWRITE("\"type\":\"int\",\"value\":%lld}", (long long)*(v->value));
             } else if (v->T == TYPE_STACK) {
                 JWRITE("\"type\":\"stack\",\"value\":[");
                 for (size_t k = 0; k < v->stack_len; k++) {
                     if (k) JWRITE(",");
-                    JWRITE("%d", v->value[k]);
+                    JWRITE("%lld", (long long)v->value[k]);
                 }
                 JWRITE("]}");
             } else if (v->T == TYPE_CHANNEL) {
                 JWRITE("\"type\":\"channel\",\"value\":[");
                 for (size_t k = 0; k < v->channel->buf_len; k++) {
                     if (k) JWRITE(",");
-                    JWRITE("%d", v->channel->buf[k]);
+                    JWRITE("%lld", (long long)v->channel->buf[k]);
                 }
                 JWRITE("]}");
             } else {
@@ -351,15 +351,15 @@ static inline int vm_debug_vars_json(VM *vm, const char *frame_name,
 
         JWRITE("{\"name\":\"%s\",", v->name);
         if (v->T == TYPE_INT) {
-            JWRITE("\"type\":\"int\",\"value\":%d}", *(v->value));
+            JWRITE("\"type\":\"int\",\"value\":%lld}", (long long)*(v->value));
         } else if (v->T == TYPE_STACK || v->T == TYPE_CHANNEL) {
             JWRITE("\"type\":\"%s\",\"value\":[",
                    v->T == TYPE_STACK ? "stack" : "channel");
             size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
-            int *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
+            int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
             for (size_t k = 0; k < n; k++) {
                 if (k) JWRITE(",");
-                JWRITE("%d", arr[k]);
+                JWRITE("%lld", (long long)arr[k]);
             }
             JWRITE("]}");
         } else {

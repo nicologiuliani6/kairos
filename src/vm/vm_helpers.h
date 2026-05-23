@@ -53,15 +53,15 @@ static inline uint get_findex(const char *name)
  *    op        ::= '+' | '-'
  *  Esempi: "x", "42", "(y + 1)", "((a + b) - c)"
  * ====================================================================== */
-static inline int resolve_expr(VM *vm, uint fi, const char *tok);
+static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok);
 
-static inline int resolve_atom(VM *vm, uint fi, const char *s)
+static inline int64_t resolve_atom(VM *vm, uint fi, const char *s)
 {
     int idx = char_id_map_lookup(&vm->frames[fi].VarIndexer, s);
     if (idx >= 0) {
         return *(vm->frames[fi].vars[idx]->value);
     }
-    return (int)strtol(s, NULL, 10);
+    return (int64_t)strtoll(s, NULL, 10);
 }
 
 /*
@@ -85,7 +85,7 @@ static inline int token_len(const char *p)
     return i > 0 ? i : 1;
 }
 
-static inline int resolve_expr(VM *vm, uint fi, const char *tok)
+static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 {
     /* Salta spazi iniziali */
     while (*tok == ' ') tok++;
@@ -99,7 +99,7 @@ static inline int resolve_expr(VM *vm, uint fi, const char *tok)
         /* Leggi left operand */
         int llen = token_len(inner);
         char left[256]; strncpy(left, inner, llen < 255 ? llen : 255); left[llen] = '\0';
-        int lval = resolve_expr(vm, fi, left);
+        int64_t lval = resolve_expr(vm, fi, left);
 
         /* Salta l'operand e spazi */
         const char *after_left = inner + llen;
@@ -113,7 +113,7 @@ static inline int resolve_expr(VM *vm, uint fi, const char *tok)
         /* Leggi right operand (fino alla ')' di chiusura) */
         int rlen = token_len(after_op);
         char right[256]; strncpy(right, after_op, rlen < 255 ? rlen : 255); right[rlen] = '\0';
-        int rval = resolve_expr(vm, fi, right);
+        int64_t rval = resolve_expr(vm, fi, right);
 
         if (op == '+') return lval + rval;
         if (op == '-') return lval - rval;
@@ -124,7 +124,7 @@ static inline int resolve_expr(VM *vm, uint fi, const char *tok)
     return resolve_atom(vm, fi, tok);
 }
 
-static inline int resolve_value(VM *vm, uint fi, const char *tok)
+static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
 {
     return resolve_expr(vm, fi, tok);
 }
@@ -260,18 +260,18 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
 
     if (strcmp(type, "int") == 0) {
         v->T     = TYPE_INT;
-        v->value = calloc(1, sizeof(int));
+        v->value = calloc(1, sizeof(int64_t));
     } else if (strcmp(type, "stack") == 0) {
         v->T         = TYPE_STACK;
         v->stack_len = 0;
-        v->value     = malloc(VAR_STACK_MAX_SIZE * sizeof(int));
+        v->value     = malloc(VAR_STACK_MAX_SIZE * sizeof(int64_t));
     } else if (strcmp(type, "channel") == 0) {
         v->T         = TYPE_CHANNEL;
         v->stack_len = 0;
         v->value     = NULL;
         v->channel   = calloc(1, sizeof(Channel));
         pthread_mutex_init(&v->channel->mtx, NULL);
-        v->channel->buf = calloc((size_t)VAR_CHANNEL_MAX_SIZE, sizeof(int));
+        v->channel->buf = calloc((size_t)VAR_CHANNEL_MAX_SIZE, sizeof(int64_t));
         v->channel->buf_len = 0;
         v->channel->refcount = 1;
     } else {

@@ -565,13 +565,13 @@ void vm_dump(VM *vm)
             Var *v = f->vars[j]; if (!v) continue;
             vm_printf("%s: ", v->name);
             if (v->T == TYPE_INT) {
-                vm_printf("%d", *(v->value));
+                vm_printf("%lld", (long long)*(v->value));
             } else {
                 vm_printf("[");
                 size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
-                int *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
+                int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
                 for (size_t k = 0; k < n; k++) {
-                    vm_printf("%d", arr[k]);
+                    vm_printf("%lld", (long long)arr[k]);
                     if (k + 1 < n) vm_printf(", ");
                 }
                 vm_printf("]");

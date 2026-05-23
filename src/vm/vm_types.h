@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "char_id_map.h"
 #include "stack.h"
 
@@ -34,7 +35,7 @@ typedef struct {
     Waiter *send_q_head, *send_q_tail;
     Waiter *recv_q_head, *recv_q_tail;
     ThreadArgs *sender_args;
-    int *buf;
+    int64_t *buf;
     size_t buf_len;
     int refcount;
 } Channel;
@@ -50,7 +51,7 @@ typedef struct {
 
 typedef struct Var {
     ValueType T;
-    int      *value;
+    int64_t  *value;
     size_t    stack_len;
     int       is_local;
     char      name[VAR_NAME_LENGTH];

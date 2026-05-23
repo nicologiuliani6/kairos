@@ -163,7 +163,7 @@ void op_swap(VM *vm, const char *frame_name)
     Var  *v1  = get_var(vm, fi, ID1, "SWAP");
     Var  *v2  = get_var(vm, fi, ID2, "SWAP");
     var_par_mut_acquire2(v1, v2);
-    int   tmp = *(v1->value);
+    int64_t tmp = *(v1->value);
     *(v1->value) = *(v2->value);
     *(v2->value) = tmp;
     var_par_mut_release2(v1, v2);
@@ -187,7 +187,7 @@ static inline void op_push(VM *vm, const char *frame_name)
     if (strtok(NULL, " \t")) vm_debug_panic("[VM] PUSH: troppi parametri!\n");
 
     uint fi  = get_findex(frame_name);
-    int  val;
+    int64_t val;
 
     if (char_id_map_exists(&vm->frames[fi].VarIndexer, C_val)) {
         Var *src = get_var(vm, fi, C_val, "PUSH");
@@ -196,7 +196,7 @@ static inline void op_push(VM *vm, const char *frame_name)
         *(src->value) = 0;
         var_par_mut_release(src);
     } else {
-        val = (int)strtoul(C_val, NULL, 10);
+        val = (int64_t)strtoull(C_val, NULL, 10);
     }
 
     if (!char_id_map_exists(&vm->frames[fi].VarIndexer, C_stack))
@@ -208,12 +208,12 @@ static inline void op_push(VM *vm, const char *frame_name)
         vm_debug_panic("[VM] PUSH: destinazione non è stack/channel!\n");
 
     if (sv->T == TYPE_STACK) {
-        sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int));
+        sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int64_t));
         if (!sv->value) vm_debug_panic("realloc failed\n");
         sv->value[sv->stack_len++] = val;
     } else {
         pthread_mutex_lock(&sv->channel->mtx);
-        sv->channel->buf = realloc(sv->channel->buf, (sv->channel->buf_len + 1) * sizeof(int));
+        sv->channel->buf = realloc(sv->channel->buf, (sv->channel->buf_len + 1) * sizeof(int64_t));
         if (!sv->channel->buf) vm_debug_panic("realloc failed\n");
         sv->channel->buf[sv->channel->buf_len++] = val;
         pthread_mutex_unlock(&sv->channel->mtx);
@@ -247,7 +247,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
                        frame_name, C_dest, C_stack, vm->inversion_depth);
 
     ThreadArgs *sender_to_wake = NULL;
-    int           popped;
+    int64_t       popped;
 
     if (sv->T == TYPE_CHANNEL) {
         /* op_wait abbina questo recv al sender giusto e imposta sender_args.
@@ -272,9 +272,9 @@ static inline void op_pop(VM *vm, const char *frame_name)
         popped = sv->channel->buf[0];
         sv->channel->buf_len--;
         if (sv->channel->buf_len > 0)
-            memmove(sv->channel->buf, sv->channel->buf + 1, sv->channel->buf_len * sizeof(int));
+            memmove(sv->channel->buf, sv->channel->buf + 1, sv->channel->buf_len * sizeof(int64_t));
         if (sv->channel->buf_len > 0)
-            sv->channel->buf = realloc(sv->channel->buf, sv->channel->buf_len * sizeof(int));
+            sv->channel->buf = realloc(sv->channel->buf, sv->channel->buf_len * sizeof(int64_t));
         pthread_mutex_unlock(&sv->channel->mtx);
     } else {
         if (vm->invert_hist_guard_var && sv == vm->invert_hist_guard_var &&
@@ -285,7 +285,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
                 "[VM] POP: __mn_hist sotto il pavimento mnemo (manca __mn_hist_floor_snap?)\n");
         popped = sv->value[--sv->stack_len];
         if (sv->stack_len > 0)
-            sv->value = realloc(sv->value, sv->stack_len * sizeof(int));
+            sv->value = realloc(sv->value, sv->stack_len * sizeof(int64_t));
     }
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
@@ -328,14 +328,14 @@ static inline void op_ssend(VM *vm, const char *frame_name)
 
     int encoded_len = 0;
     int encoded_cap = 16;
-    int *encoded = malloc((size_t)encoded_cap * sizeof(int));
+    int64_t *encoded = malloc((size_t)encoded_cap * sizeof(int64_t));
     if (!encoded)
         vm_debug_panic("[VM] SSEND: malloc fallita\n");
 
 #define ENC_PUSH(_v) do { \
         if (encoded_len >= encoded_cap) { \
             encoded_cap *= 2; \
-            int *tmp = realloc(encoded, (size_t)encoded_cap * sizeof(int)); \
+            int64_t *tmp = realloc(encoded, (size_t)encoded_cap * sizeof(int64_t)); \
             if (!tmp) { free(encoded); vm_debug_panic("realloc failed\n"); } \
             encoded = tmp; \
         } \
@@ -351,7 +351,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
                 vm_debug_panic("[VM] SSEND: non puoi inviare il canale su se stesso\n");
             }
             if (src->T == TYPE_INT) {
-                int val;
+                int64_t val;
                 var_par_mut_acquire(src);
                 val = *(src->value);
                 *(src->value) = 0;
@@ -389,13 +389,13 @@ static inline void op_ssend(VM *vm, const char *frame_name)
 
     pthread_mutex_lock(&chv->channel->mtx);
     if (encoded_len > 0) {
-        chv->channel->buf = realloc(chv->channel->buf, (chv->channel->buf_len + (size_t)encoded_len) * sizeof(int));
+        chv->channel->buf = realloc(chv->channel->buf, (chv->channel->buf_len + (size_t)encoded_len) * sizeof(int64_t));
         if (!chv->channel->buf) {
             pthread_mutex_unlock(&chv->channel->mtx);
             free(encoded);
             vm_debug_panic("realloc failed\n");
         }
-        memcpy(chv->channel->buf + chv->channel->buf_len, encoded, (size_t)encoded_len * sizeof(int));
+        memcpy(chv->channel->buf + chv->channel->buf_len, encoded, (size_t)encoded_len * sizeof(int64_t));
         chv->channel->buf_len += (size_t)encoded_len;
     }
     /* Un SRECV su __mn_mtx_* può essere già in op_wait(recv) con buffer vuoto; dopo
@@ -487,13 +487,13 @@ mutex_mailbox_retry:
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: payload insufficiente sul channel\n");
             }
-            int marker = chv->channel->buf[read_idx++];
+            int64_t marker = chv->channel->buf[read_idx++];
             if (marker == (int)TYPE_INT) {
                 if (read_idx >= chv->channel->buf_len) {
                     pthread_mutex_unlock(&chv->channel->mtx);
                     vm_debug_panic("[VM] SRECV: payload int incompleto\n");
                 }
-                int popped = chv->channel->buf[read_idx++];
+                int64_t popped = chv->channel->buf[read_idx++];
                 if (dest->T != TYPE_INT) {
                     pthread_mutex_unlock(&chv->channel->mtx);
                     vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
@@ -538,7 +538,7 @@ mutex_mailbox_retry:
                     pthread_mutex_unlock(&chv->channel->mtx);
                     vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
                 }
-                int n = chv->channel->buf[read_idx++];
+                int64_t n = chv->channel->buf[read_idx++];
                 if (n < 0 || read_idx + (size_t)n > chv->channel->buf_len) {
                     pthread_mutex_unlock(&chv->channel->mtx);
                     vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
@@ -548,12 +548,12 @@ mutex_mailbox_retry:
                     vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
                 }
                 if (n > 0) {
-                    dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int));
+                    dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int64_t));
                     if (!dest->value) {
                         pthread_mutex_unlock(&chv->channel->mtx);
                         vm_debug_panic("realloc failed\n");
                     }
-                    memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int));
+                    memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int64_t));
                     dest->stack_len += (size_t)n;
                 }
                 read_idx += (size_t)n;
@@ -572,10 +572,10 @@ mutex_mailbox_retry:
         }
         size_t remaining = chv->channel->buf_len - read_idx;
         if (remaining > 0)
-            memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int));
+            memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int64_t));
         chv->channel->buf_len = remaining;
         if (remaining > 0) {
-            chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int));
+            chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int64_t));
             if (!chv->channel->buf) {
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("realloc failed\n");
@@ -669,12 +669,12 @@ mutex_mailbox_retry:
                 vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
             }
             if (n > 0) {
-                dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int));
+                dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int64_t));
                 if (!dest->value) {
                     pthread_mutex_unlock(&chv->channel->mtx);
                     vm_debug_panic("realloc failed\n");
                 }
-                memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int));
+                memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int64_t));
                 dest->stack_len += (size_t)n;
             }
             read_idx += (size_t)n;
@@ -686,10 +686,10 @@ mutex_mailbox_retry:
 
     size_t remaining = chv->channel->buf_len - read_idx;
     if (remaining > 0)
-        memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int));
+        memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int64_t));
     chv->channel->buf_len = remaining;
     if (remaining > 0) {
-        chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int));
+        chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int64_t));
         if (!chv->channel->buf) {
             pthread_mutex_unlock(&chv->channel->mtx);
             vm_debug_panic("realloc failed\n");
@@ -743,7 +743,7 @@ static inline void op_show(VM *vm, const char *frame_name)
             vm->show_char_pending = 1;
         } else {
             op_show_flush_char_line(vm);
-            vm_printf("%s: %d\n", ID, *(v->value));
+            vm_printf("%s: %lld\n", ID, (long long)*(v->value));
         }
     } else if (v->T == TYPE_STACK) {
         if (as_char)
@@ -753,7 +753,7 @@ static inline void op_show(VM *vm, const char *frame_name)
         char clos = (v->T == TYPE_STACK) ? ']' : '>';
         vm_printf("%s: %c", ID, open);
         for (size_t k = 0; k < v->stack_len; k++) {
-            vm_printf("%d", v->value[k]);
+            vm_printf("%lld", (long long)v->value[k]);
             if (k + 1 < v->stack_len) vm_printf(", ");
         }
         vm_printf("%c\n", clos);
@@ -764,7 +764,7 @@ static inline void op_show(VM *vm, const char *frame_name)
         vm_printf("%s: <", ID);
         pthread_mutex_lock(&v->channel->mtx);
         for (size_t k = 0; k < v->channel->buf_len; k++) {
-            vm_printf("%d", v->channel->buf[k]);
+            vm_printf("%lld", (long long)v->channel->buf[k]);
             if (k + 1 < v->channel->buf_len) vm_printf(", ");
         }
         pthread_mutex_unlock(&v->channel->mtx);
@@ -779,7 +779,7 @@ static inline void op_show(VM *vm, const char *frame_name)
  *  Usato sia da op_eval che da op_assert.
  * ====================================================================== */
 
-static inline int eval_cond(int lval, const char *op, int rval)
+static inline int eval_cond(int64_t lval, const char *op, int64_t rval)
 {
     if (!strcmp(op, "==")) return lval == rval;
     if (!strcmp(op, "!=")) return lval != rval;
@@ -810,8 +810,8 @@ static inline void op_eval(VM *vm, const char *frame_name)
     }
 
     uint fi   = get_findex(frame_name);
-    int  lval = resolve_value(vm, fi, lhs_tok);
-    int  rval = resolve_value(vm, fi, rhs);
+    int64_t lval = resolve_value(vm, fi, lhs_tok);
+    int64_t rval = resolve_value(vm, fi, rhs);
 
     thread_val_IF = eval_cond(lval, op_tok, rval);
 }
@@ -864,8 +864,8 @@ static inline void op_assert(VM *vm, const char *frame_name)
 
     /* Fallback conservativo fuori dal contesto IF. */
     uint fi = get_findex(frame_name);
-    int  lval = resolve_value(vm, fi, lhs_tok);
-    int  rval = resolve_value(vm, fi, rhs);
+    int64_t lval = resolve_value(vm, fi, lhs_tok);
+    int64_t rval = resolve_value(vm, fi, rhs);
     if (!eval_cond(lval, op_tok, rval)) {
         vm_debug_panic("[VM] ASSERT fallita: %s %s %s\n", lhs_tok, op_tok, rhs);
     }
@@ -956,7 +956,7 @@ static inline void op_local(VM *vm, const char *frame_name)
             *(dst->value) = *(src->value);
         else if (src->T == TYPE_STACK) {
             dst->stack_len = src->stack_len;
-            memcpy(dst->value, src->value, src->stack_len * sizeof(int));
+            memcpy(dst->value, src->value, src->stack_len * sizeof(int64_t));
         } else {
             vm_debug_panic("[VM] LOCAL: copia da PARAM non linkato\n");
         }
