@@ -22,7 +22,7 @@ _ASSIGN_OPS = {
 }
 
 # Chiamate tipo foo(x) senza `call`: opcode VM diretto, non CALL nome_proc.
-_BUILTIN_CALL_OPCODES = frozenset({'show', 'push', 'pop', 'ssend', 'srecv'})
+_BUILTIN_CALL_OPCODES = frozenset({'show', 'push', 'pop', 'ssend', 'srecv', 'mnhalve'})
 
 class ByteCode_Compiler:
     def __init__(self):

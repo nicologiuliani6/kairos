@@ -63,7 +63,7 @@ typedef enum {
 
 enum InvOpTag {
     INVOP_UNKNOWN = 0,
-    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP,
+    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP, INVOP_MNHALVE,
     INVOP_PUSH, INVOP_POP, INVOP_SSEND, INVOP_SRECV,
     INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW,
     INVOP_CALL, INVOP_UNCALL,
@@ -84,7 +84,10 @@ static inline uint8_t classify_op(const char *fw)
             if (!strcmp(fw, "PAR_START")) return INVOP_PAR_START;
             if (!strcmp(fw, "PAR_END"))   return INVOP_PAR_END;
             break;
-        case 'M': if (!strcmp(fw, "MINEQ")) return INVOP_MINEQ; break;
+        case 'M':
+            if (!strcmp(fw, "MINEQ")) return INVOP_MINEQ;
+            if (!strcmp(fw, "MNHALVE")) return INVOP_MNHALVE;
+            break;
         case 'X': if (!strcmp(fw, "XOREQ")) return INVOP_XOREQ; break;
         case 'S':
             if (!strcmp(fw, "SWAP"))  return INVOP_SWAP;
@@ -1369,6 +1372,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             case INVOP_PUSHEQ:  op_pusheq_inv(vm, cur_frame); break;
             case INVOP_MINEQ:   op_mineq_inv (vm, cur_frame); break;
             case INVOP_XOREQ:   op_xoreq_inv (vm, cur_frame); break;
+            case INVOP_MNHALVE: op_mnhalve_inv(vm, cur_frame); break;
             case INVOP_SWAP:    op_swap_inv  (vm, cur_frame); break;
             case INVOP_PUSH:    op_pop       (vm, cur_frame); break;
             case INVOP_POP:     op_push      (vm, cur_frame); break;
@@ -1688,6 +1692,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
             else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
+            else if (!strcmp(fw, "MNHALVE")) op_mnhalve_inv(vm, frame_name);
             else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
@@ -1864,6 +1869,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
             else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
+            else if (!strcmp(fw, "MNHALVE")) op_mnhalve_inv(vm, frame_name);
             else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);

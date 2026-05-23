@@ -429,6 +429,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "PUSHEQ"))  op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
+        else if (!strcmp(fw, "MNHALVE")) op_mnhalve(vm, fname);
         else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
         else if (!strcmp(fw, "PUSH"))  op_push (vm, fname);
         else if (!strcmp(fw, "POP"))   op_pop  (vm, fname);
