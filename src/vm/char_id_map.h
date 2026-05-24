@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define CHAR_ID_MAP_SIZE 256
+#define CHAR_ID_MAP_SIZE 8192
 #define CHAR_ID_MAP_NAME_LEN 128
 
 typedef struct {
