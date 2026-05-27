@@ -84,6 +84,7 @@ $(VERSCRIPT): $(VM_SOURCES)
 	@for sym in \
 	    vm_run_from_string \
 	    vm_run_from_string_quiet \
+	    vm_set_native_arith \
 	    vm_debug_new \
 	    vm_debug_free \
 	    vm_debug_start \

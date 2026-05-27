@@ -1,0 +1,24 @@
+// Smoke: call + uncall __mn_mul_into with native arith (KAIROS_NATIVE_ARITH=1).
+procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    local int i = 0
+    if b != 0 then
+        from i == 0 loop
+            i += 1
+            dst += a
+        until i == b
+    fi b != 0
+    delocal int i = b
+
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int dst = 0
+    local int a = 0
+    local int b = 0
+    a += 7
+    b += 6
+    call __mn_mul_into(dst, a, b, __mn_hist, __mn_scratch)
+    uncall __mn_mul_into(dst, a, b, __mn_hist, __mn_scratch)
+    delocal int b = 6
+    delocal int a = 7
+    delocal int dst = 0

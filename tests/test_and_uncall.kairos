@@ -1,0 +1,49 @@
+// Smoke: opt-uncall-style inversion of CALL __mn_and_into under native arith.
+// Direct `uncall __mn_and_into` uses Janus UNCALL; this tests invert_op_to_line
+// INVOP_CALL → mn_native_arith_uncall_inverse (encrypt / --opt-uncall-user-calls).
+
+procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    local int k = 0
+    local int pow = 1
+    from k == 0 loop
+        local int abit = 0
+        local int bbit = 0
+        local int s = 0
+        s += abit
+        s += bbit
+        if s == 2 then
+            dst += pow
+        fi s == 2
+        k += 1
+        local int next_pow = 0
+        next_pow += pow
+        next_pow += pow
+        push(pow, __mn_hist)
+        push(next_pow, __mn_hist)
+        delocal int next_pow = 0
+        push(bbit, __mn_hist)
+        delocal int bbit = 0
+        push(abit, __mn_hist)
+        delocal int abit = 0
+    until k == 31
+    push(pow, __mn_hist)
+    delocal int pow = 0
+    push(k, __mn_hist)
+    delocal int k = 0
+
+procedure use_and(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    call __mn_and_into(dst, a, b, __mn_hist, __mn_scratch)
+
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int dst = 0
+    local int a = 0
+    local int b = 0
+    a += 22
+    b += 10
+    call use_and(dst, a, b, __mn_hist, __mn_scratch)
+    uncall use_and(dst, a, b, __mn_hist, __mn_scratch)
+    delocal int b = 10
+    delocal int a = 22
+    delocal int dst = 0

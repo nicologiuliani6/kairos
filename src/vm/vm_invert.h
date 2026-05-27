@@ -9,6 +9,7 @@
 #include "vm_helpers.h"
 #include "vm_ops.h"
 #include "vm_debug.h"
+#include "mn_native_arith.h"
 
 /* Forward — vm_run_BT è definita in Kairos.c */
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
@@ -63,7 +64,7 @@ typedef enum {
 
 enum InvOpTag {
     INVOP_UNKNOWN = 0,
-    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP, INVOP_MNHALVE,
+    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP, INVOP_MNHALVE, INVOP_MNSPLIT32,
     INVOP_PUSH, INVOP_POP, INVOP_SSEND, INVOP_SRECV,
     INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW,
     INVOP_CALL, INVOP_UNCALL,
@@ -87,6 +88,7 @@ static inline uint8_t classify_op(const char *fw)
         case 'M':
             if (!strcmp(fw, "MINEQ")) return INVOP_MINEQ;
             if (!strcmp(fw, "MNHALVE")) return INVOP_MNHALVE;
+            if (!strcmp(fw, "MNSPLIT32")) return INVOP_MNSPLIT32;
             break;
         case 'X': if (!strcmp(fw, "XOREQ")) return INVOP_XOREQ; break;
         case 'S':
@@ -525,14 +527,14 @@ static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
                            const char *val)
 {
     uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
-    int  lval = *(vm->frames[fi].vars[vi]->value);
-    int  rval = resolve_expr(vm, fi, val);
+    int64_t lval = *(vm->frames[fi].vars[vi]->value);
+    int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
 }
 
 /* IF su snapshot local (saved_r, ts, …): in inversa il delocal può azzerare la copia
    prima del JMPF; usare il parametro sorgente ancora intatto (a, t, …). */
-static inline int invert_if_entry_lval(VM *vm, uint fi, const char *id, int current)
+static inline int64_t invert_if_entry_lval(VM *vm, uint fi, const char *id, int64_t current)
 {
     if (!strcmp(id, "saved_r")) {
         if (char_id_map_exists(&vm->frames[fi].VarIndexer, "saved_r")) {
@@ -566,14 +568,14 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
 {
     /* `id` può essere un letterale numerico (es. `from 0 == 0 loop ...`): in tal caso
        lval = atoi(id), niente lookup in VarIndexer (eviterebbe SEGV). */
-    int lval;
+    int64_t lval;
     if (id && (id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))) {
-        lval = (int)strtol(id, NULL, 10);
+        lval = (int64_t)strtoll(id, NULL, 10);
     } else {
         uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
         lval = invert_if_entry_lval(vm, fi, id, *(vm->frames[fi].vars[vi]->value));
     }
-    int  rval = resolve_expr(vm, fi, val);
+    int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
 }
 
@@ -584,7 +586,7 @@ static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
     return !strcmp(L[li].eval_entry_op, "==") && !strcmp(L[li].eval_entry_val, "0");
 }
 
-static inline int loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
+static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
 {
     const char *eid = L[li].eval_entry_id;
     if (!char_id_map_exists(&vm->frames[fi].VarIndexer, eid)) return 0;
@@ -595,7 +597,7 @@ static inline int loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *
 /* __mn_divmod_nonneg: IF saved_r >= b — se forward non entrò nel loop, non invertire il corpo. */
 static inline int divmod_saved_r_loop_skipped_forward(VM *vm, uint fi)
 {
-    int sr = 0;
+    int64_t sr = 0;
     if (char_id_map_exists(&vm->frames[fi].VarIndexer, "saved_r")) {
         uint si = char_id_map_get(&vm->frames[fi].VarIndexer, "saved_r");
         Var *sv = vm->frames[fi].vars[si];
@@ -875,7 +877,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     (void)start_ln;
     /* Cache: strstr(frame_name, X) chiamato in più punti dell'hot loop interno.
        frame_name è invariante per chiamata di invert_op_to_line. */
-    int _is_divmod_nonneg = (strstr(frame_name, "divmod_nonneg") != NULL);
+    /* Match esatto: NON `divmod_nonneg_fast` (struttura diversa, no saved_r,
+     * usa MNHALVE invece di sottrazione lineare). */
+    int _is_divmod_nonneg = (!strncmp(frame_name, "__mn_divmod_nonneg", 18) &&
+                             strncmp(frame_name, "__mn_divmod_nonneg_fast", 23) != 0);
     int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
 
     char *lp[MAX_LINES]; uint ln[MAX_LINES]; uint8_t lp_op[MAX_LINES]; int nl = 0;
@@ -1260,8 +1265,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     trace_did_pop_x = 1;
                 }
             }
-            invert_op_to_line(vm, target, orig, vm->frames[cfi].end_addr - 1,
-                              vm->frames[cfi].addr + 1, 1);
+            /* Forward CALL may have used native O(1) (no __mn_hist pushes). Invert
+             * must use the matching native inverse, not full bytecode inversion. */
+            if (!mn_native_arith_uncall_inverse(vm, pn, cfi)) {
+                invert_op_to_line(vm, target, orig, vm->frames[cfi].end_addr - 1,
+                                  vm->frames[cfi].addr + 1, 1);
+            }
             if (trace_did_pop_x) {
                 vm->frames[base_fi_x].trace_window_start = saved_base_win_start_x;
                 vm->frames[base_fi_x].trace_window_cursor = saved_base_win_cursor_x;
@@ -1373,6 +1382,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             case INVOP_MINEQ:   op_mineq_inv (vm, cur_frame); break;
             case INVOP_XOREQ:   op_xoreq_inv (vm, cur_frame); break;
             case INVOP_MNHALVE: op_mnhalve_inv(vm, cur_frame); break;
+            case INVOP_MNSPLIT32: op_mnsplit32_inv(vm, cur_frame); break;
             case INVOP_SWAP:    op_swap_inv  (vm, cur_frame); break;
             case INVOP_PUSH:    op_pop       (vm, cur_frame); break;
             case INVOP_POP:     op_push      (vm, cur_frame); break;
@@ -1524,7 +1534,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     }
 
     if (branch_span_has_from_loop(original_buffer, from_line, to_line)) {
-        if (strstr(frame_name, "divmod_nonneg") &&
+        if (!strncmp(frame_name, "__mn_divmod_nonneg", 18) &&
+            strncmp(frame_name, "__mn_divmod_nonneg_fast", 23) != 0 &&
             divmod_saved_r_loop_skipped_forward(vm, cfi)) {
             /* forward non entrò nel from q==0: il ramo THEN va saltato */
         } else {
@@ -1693,6 +1704,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
             else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
             else if (!strcmp(fw, "MNHALVE")) op_mnhalve_inv(vm, frame_name);
+            else if (!strcmp(fw, "MNSPLIT32")) op_mnsplit32_inv(vm, frame_name);
             else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
@@ -1870,6 +1882,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
             else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
             else if (!strcmp(fw, "MNHALVE")) op_mnhalve_inv(vm, frame_name);
+            else if (!strcmp(fw, "MNSPLIT32")) op_mnsplit32_inv(vm, frame_name);
             else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);

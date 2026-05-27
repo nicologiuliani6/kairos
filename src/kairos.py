@@ -125,4 +125,10 @@ if __name__ == '__main__':
     lib = ctypes.CDLL(lib_path)
     lib.vm_run_from_string.argtypes = [ctypes.c_char_p]
     lib.vm_run_from_string.restype  = None
+    if hasattr(lib, 'vm_set_native_arith'):
+        lib.vm_set_native_arith.argtypes = [ctypes.c_int]
+        lib.vm_set_native_arith.restype = None
+        na = os.environ.get('KAIROS_NATIVE_ARITH', '')
+        if na and na[0] in '1yYtT':
+            lib.vm_set_native_arith(1)
     lib.vm_run_from_string(bytecode_str.encode('utf-8'))

@@ -979,7 +979,7 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     } else {
         if (dst->T == TYPE_INT)
-            *(dst->value) = c_val ? (int)strtol(c_val, NULL, 10) : 0;
+            *(dst->value) = c_val ? (int64_t)strtoull(c_val, NULL, 10) : 0;
         else if (dst->T == TYPE_STACK) {
             if (c_val && strcmp(c_val, "nil") != 0)
                 vm_debug_panic("[VM] LOCAL: valore stack non compatibile\n");
@@ -997,12 +997,12 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     uint  fi    = get_findex(frame_name);
 
     /* ── 1. Valore atteso ── */
-    int Vvalue = 0;
+    int64_t Vvalue = 0;
     if (c_val) {
         if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
             Vvalue = resolve_value(vm, fi, c_val);
         } else {
-            Vvalue = (int)strtol(c_val, NULL, 10);
+            Vvalue = (int64_t)strtoull(c_val, NULL, 10);
         }
     }
 
@@ -1060,8 +1060,8 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     if (!ok) {
         if (V->T == TYPE_INT)
             vm_debug_panic(
-                "[VM] DELOCAL: valore finale errato! (frame=%s var=%s, atteso=%d, trovato=%d, c_val=%s)\n",
-                frame_name, Vname, Vvalue, *(V->value), c_val ? c_val : "NULL");
+                "[VM] DELOCAL: valore finale errato! (frame=%s var=%s, atteso=%lld, trovato=%lld, c_val=%s)\n",
+                frame_name, Vname, (long long)Vvalue, (long long)*(V->value), c_val ? c_val : "NULL");
         else
             vm_debug_panic("[VM] DELOCAL: %s non è nil/empty!\n", Vname);
         

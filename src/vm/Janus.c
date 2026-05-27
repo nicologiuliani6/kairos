@@ -14,11 +14,19 @@
 #include "vm_par.h"      /* deve venire prima: definisce ParBlock, scan_par_block, exec_par_threads */
 #include "vm_invert.h"   /* usa ParBlock e exec_par_threads definiti sopra */
 #include "vm_debug.h"    /* debug hook, dump JSON, breakpoint management  */
+#include "mn_native_arith.h"
 #include "Kairos_core.h"
 
 
 /* Puntatore alla VM corrente — usato da vm_printf in DAP_MODE */
 VM *g_current_vm = NULL;
+/* 1 = esegui procedure Mnemo mul/div/bitwise in C O(1) (KAIROS_NATIVE_ARITH=1 / vm_set_native_arith). */
+int g_vm_native_arith = 0;
+
+void vm_set_native_arith(int enabled)
+{
+    g_vm_native_arith = enabled ? 1 : 0;
+}
 /* ── thread-local state (dichiarate extern in vm_types.h) ── */
 __thread ThreadArgs *current_thread_args = NULL;
 __thread char       *strtok_saveptr      = NULL;
@@ -329,6 +337,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 }
             }
             strncpy(fname, nfname, VAR_NAME_LENGTH - 1);
+            fname[VAR_NAME_LENGTH - 1] = '\0';
+            if (pn && mn_native_arith_call_forward(vm, pn, cfi)) {
+                for (int k = 0; k < cs[cs_top].saved_param_count; k++)
+                    vm->frames[cfi].vars[vm->frames[cfi].param_indices[k]] =
+                        cs[cs_top].saved_params[k];
+                vm->frames[cfi].LocalVariables = cs[cs_top].saved_local_vars;
+                ptr = cs[cs_top].return_ptr;
+                strncpy(fname, cs[cs_top].caller_frame, VAR_NAME_LENGTH - 1);
+                fname[VAR_NAME_LENGTH - 1] = '\0';
+                cs_top--;
+                *nl = '\n';
+                continue;
+            }
             ptr = go_to_line(orig, vm->frames[cfi].addr + 1);
             if (!ptr) vm_debug_panic("[VM] CALL: indirizzo non trovato!\n");
             continue;
@@ -399,8 +420,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
                ancora attivo qui la scan si fermerebbe prematuramente. */
             *nl = '\n';
-            invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1,
-                              vm->frames[cfi].addr + 1, 1);
+            if (!pn || !mn_native_arith_uncall_inverse(vm, pn, cfi))
+                invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1,
+                                  vm->frames[cfi].addr + 1, 1);
             vm->invert_hist_guard_var = NULL;
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
@@ -430,6 +452,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
         else if (!strcmp(fw, "MNHALVE")) op_mnhalve(vm, fname);
+        else if (!strcmp(fw, "MNSPLIT32")) op_mnsplit32(vm, fname);
         else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
         else if (!strcmp(fw, "PUSH"))  op_push (vm, fname);
         else if (!strcmp(fw, "POP"))   op_pop  (vm, fname);
@@ -633,6 +656,10 @@ void vm_dump(VM *vm)
 
 static void vm_run_from_string_impl(const char *bytecode, int dump_after)
 {
+    const char *na = getenv("KAIROS_NATIVE_ARITH");
+    if (na && (na[0] == '1' || na[0] == 'y' || na[0] == 'Y' || na[0] == 't' || na[0] == 'T'))
+        g_vm_native_arith = 1;
+
     char *ast = normalize_bytecode_physical_lines(bytecode);
     if (!ast) {
         fprintf(stderr, "Errore: normalizzazione bytecode fallita.\n");

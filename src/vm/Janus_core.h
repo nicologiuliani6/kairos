@@ -6,5 +6,6 @@
 void vm_exec(VM *vm, char *buffer);
 void vm_dump(VM *vm);
 void vm_free(VM *vm);
+void vm_set_native_arith(int enabled);
 
 #endif /* JANUS_CORE_H */

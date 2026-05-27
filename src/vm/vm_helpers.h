@@ -61,7 +61,11 @@ static inline int64_t resolve_atom(VM *vm, uint fi, const char *s)
     if (idx >= 0) {
         return *(vm->frames[fi].vars[idx]->value);
     }
-    return (int64_t)strtoll(s, NULL, 10);
+    /* strtoull preserva bit-pattern per costanti unsigned > 2^63 (es. 0x8...
+     * stored come 0x8000000000000000 = INT64_MIN). strtoll saturerebbe a
+     * INT64_MAX perdendo l'high bit. Per "-N" strtoull accetta segno e
+     * ritorna two's complement. */
+    return (int64_t)strtoull(s, NULL, 10);
 }
 
 /*

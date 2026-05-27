@@ -92,10 +92,12 @@ static inline void op_mnhalve(VM *vm, const char *frame_name)
     Var  *vp = get_var(vm, Findex, ID_p,   "MNHALVE");
     if (vs->T != TYPE_INT || vq->T != TYPE_INT || vp->T != TYPE_INT)
         vm_debug_panic("[VM] MNHALVE: tutti gli args devono essere INT\n");
-    int64_t s = *(vs->value);
-    int64_t par = s & 1;
-    if (par < 0) par += 2;
-    int64_t qv = (s - par) / 2;
+    /* Semantica unsigned: necessario per stampa u64 (high bit set = neg signed)
+     * e per estrarre bit pattern reale di int64. Per valori >= 0 unsigned e
+     * signed coincidono, quindi safe per existing callers (divmod_fast,...). */
+    uint64_t su = (uint64_t)*(vs->value);
+    int64_t par = (int64_t)(su & 1ULL);
+    int64_t qv = (int64_t)(su >> 1);
     *(vq->value) += qv;
     *(vp->value) += par;
     *(vs->value) = 0;
@@ -112,11 +114,57 @@ static inline void op_mnhalve_inv(VM *vm, const char *frame_name)
     Var  *vs = get_var(vm, Findex, ID_src, "MNHALVE_INV");
     Var  *vq = get_var(vm, Findex, ID_q,   "MNHALVE_INV");
     Var  *vp = get_var(vm, Findex, ID_p,   "MNHALVE_INV");
-    int64_t qv = *(vq->value);
-    int64_t par = *(vp->value);
-    *(vs->value) += qv * 2 + par;
+    uint64_t qu = (uint64_t)*(vq->value);
+    uint64_t pu = (uint64_t)*(vp->value);
+    *(vs->value) += (int64_t)((qu << 1) | (pu & 1ULL));
     *(vq->value) = 0;
     *(vp->value) = 0;
+}
+
+/* ======================================================================
+ *  MNSPLIT32  src  dst_hi  dst_lo
+ *  Forward: dst_hi += (u64(src) >> 32); dst_lo += (src & 0xFFFFFFFF); src = 0.
+ *  Inverse: src += ((u64)dst_hi << 32) | (dst_lo & 0xFFFFFFFF); dst_hi = 0; dst_lo = 0.
+ *  Permette stampa u64 hex via split + print(hi) + print(lo padded).
+ * ====================================================================== */
+
+static inline void op_mnsplit32(VM *vm, const char *frame_name)
+{
+    char *ID_src = strtok(NULL, " \t");
+    char *ID_h   = strtok(NULL, " \t");
+    char *ID_l   = strtok(NULL, " \t");
+    if (!ID_src || !ID_h || !ID_l)
+        vm_debug_panic("[VM] MNSPLIT32: 3 args (src dst_hi dst_lo)\n");
+    uint  Findex = get_findex(frame_name);
+    Var  *vs = get_var(vm, Findex, ID_src, "MNSPLIT32");
+    Var  *vh = get_var(vm, Findex, ID_h,   "MNSPLIT32");
+    Var  *vl = get_var(vm, Findex, ID_l,   "MNSPLIT32");
+    if (vs->T != TYPE_INT || vh->T != TYPE_INT || vl->T != TYPE_INT)
+        vm_debug_panic("[VM] MNSPLIT32: tutti gli args devono essere INT\n");
+    uint64_t su = (uint64_t)*(vs->value);
+    int64_t hi = (int64_t)(su >> 32);
+    int64_t lo = (int64_t)(su & 0xFFFFFFFFULL);
+    *(vh->value) += hi;
+    *(vl->value) += lo;
+    *(vs->value) = 0;
+}
+
+static inline void op_mnsplit32_inv(VM *vm, const char *frame_name)
+{
+    char *ID_src = strtok(NULL, " \t");
+    char *ID_h   = strtok(NULL, " \t");
+    char *ID_l   = strtok(NULL, " \t");
+    if (!ID_src || !ID_h || !ID_l)
+        vm_debug_panic("[VM] MNSPLIT32_INV: 3 args\n");
+    uint  Findex = get_findex(frame_name);
+    Var  *vs = get_var(vm, Findex, ID_src, "MNSPLIT32_INV");
+    Var  *vh = get_var(vm, Findex, ID_h,   "MNSPLIT32_INV");
+    Var  *vl = get_var(vm, Findex, ID_l,   "MNSPLIT32_INV");
+    uint64_t hu = (uint64_t)*(vh->value);
+    uint64_t lu = (uint64_t)*(vl->value);
+    *(vs->value) += (int64_t)((hu << 32) | (lu & 0xFFFFFFFFULL));
+    *(vh->value) = 0;
+    *(vl->value) = 0;
 }
 
 /* ======================================================================

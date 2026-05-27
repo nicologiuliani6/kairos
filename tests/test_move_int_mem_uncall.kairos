@@ -1,0 +1,16 @@
+procedure __mn_move_int(int dst, int src, stack __mn_hist, stack __mn_scratch)
+    local stack __mn_g = nil
+    push(src, __mn_g)
+    pop(dst, __mn_g)
+    delocal stack __mn_g = nil
+
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_mem0 = 0
+    local int __mn_mem1 = 0
+    __mn_mem1 += 10
+    call __mn_move_int(__mn_mem0, __mn_mem1, __mn_hist, __mn_scratch)
+    uncall __mn_move_int(__mn_mem0, __mn_mem1, __mn_hist, __mn_scratch)
+    delocal int __mn_mem1 = 10
+    delocal int __mn_mem0 = 0
