@@ -131,4 +131,6 @@ if __name__ == '__main__':
         na = os.environ.get('KAIROS_NATIVE_ARITH', '')
         if na and na[0] in '1yYtT':
             lib.vm_set_native_arith(1)
+    if "--vm-stats" in sys.argv:
+        os.environ["KAIROS_VM_STATS"] = "1"
     lib.vm_run_from_string(bytecode_str.encode('utf-8'))

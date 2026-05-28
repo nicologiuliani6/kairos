@@ -650,6 +650,47 @@ void vm_dump(VM *vm)
     }
 }
 
+/* --vm-stats: post-execution stats su tutti gli int cell rimasti.
+ * Mean abs e max abs value of int cells (across all frames).
+ * Anche stack cells inclusi (ogni elemento conta).
+ * Trigger via env KAIROS_VM_STATS=1 (no symbol export). */
+static int g_vm_stats_enabled = 0;
+
+void vm_print_stats(VM *vm)
+{
+    if (!g_vm_stats_enabled) return;
+    uint64_t count = 0;
+    uint64_t sum_abs = 0;
+    int64_t max_abs = 0;
+    for (int i = 0; i <= vm->frame_top; i++) {
+        Frame *f = &vm->frames[i];
+        for (int j = 0; j < f->var_count; j++) {
+            Var *v = f->vars[j]; if (!v) continue;
+            if (v->T == TYPE_INT) {
+                int64_t val = *(v->value);
+                int64_t a = val < 0 ? -val : val;
+                sum_abs += (uint64_t)a;
+                if (a > max_abs) max_abs = a;
+                count++;
+            } else if (v->T == TYPE_STACK) {
+                size_t n = v->stack_len;
+                for (size_t k = 0; k < n; k++) {
+                    int64_t val = v->value[k];
+                    int64_t a = val < 0 ? -val : val;
+                    sum_abs += (uint64_t)a;
+                    if (a > max_abs) max_abs = a;
+                    count++;
+                }
+            }
+        }
+    }
+    double mean = count ? (double)sum_abs / (double)count : 0.0;
+    vm_printf("=== VM stats ===\n");
+    vm_printf("cells: %llu\n", (unsigned long long)count);
+    vm_printf("mean_abs: %.2f\n", mean);
+    vm_printf("max_abs: %lld\n", (long long)max_abs);
+}
+
 /* ======================================================================
  *  Entry point — esecuzione normale (invariato)
  * ====================================================================== */
@@ -659,6 +700,9 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     const char *na = getenv("KAIROS_NATIVE_ARITH");
     if (na && (na[0] == '1' || na[0] == 'y' || na[0] == 'Y' || na[0] == 't' || na[0] == 'T'))
         g_vm_native_arith = 1;
+    const char *st = getenv("KAIROS_VM_STATS");
+    if (st && (st[0] == '1' || st[0] == 'y' || st[0] == 'Y' || st[0] == 't' || st[0] == 'T'))
+        g_vm_stats_enabled = 1;
 
     char *ast = normalize_bytecode_physical_lines(bytecode);
     if (!ast) {
@@ -671,6 +715,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm_exec(&vm, ast);
     if (dump_after)
         vm_dump(&vm);
+    vm_print_stats(&vm);
     vm_free(&vm);
     free(ast);
 }
