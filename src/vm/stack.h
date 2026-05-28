@@ -9,7 +9,7 @@ void vm_debug_panic(const char *fmt, ...);
 
 /* Profondità stack Var* per LOCAL annidati / sequenza di local all’ingresso procedura.
  * Mnemo + --opt-uncall-user-calls può emettere >100 `local int` consecutivi sul main. */
-#define STACK_MAX 512
+#define STACK_MAX 4096
 
 // ===== Forward declaration =====
 typedef struct Var Var;

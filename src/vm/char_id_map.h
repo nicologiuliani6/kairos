@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define CHAR_ID_MAP_SIZE 8192
-#define CHAR_ID_MAP_NAME_LEN 128
+#define CHAR_ID_MAP_SIZE 16384
+#define CHAR_ID_MAP_NAME_LEN 64
 
 typedef struct {
     char names[CHAR_ID_MAP_SIZE][CHAR_ID_MAP_NAME_LEN];

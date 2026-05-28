@@ -111,7 +111,7 @@ static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_lin
         char *nline = strchr(cursor_after_snap_line_nl, '\n');
         size_t L    = nline ? (size_t)(nline - cursor_after_snap_line_nl)
                            : strlen(cursor_after_snap_line_nl);
-        char  linebuf[2048];
+        char  linebuf[16384];
 
         if (L >= sizeof(linebuf))
             vm_debug_panic("[VM] __mn_hist_floor_snap: riga bytecode troppo lunga\n");
@@ -161,19 +161,20 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     typedef struct {
         char *return_ptr;
         char  caller_frame[VAR_NAME_LENGTH];
-        Var  *saved_params[64];
+        Var  *saved_params[MAX_PROC_PARAMS];
         int   saved_param_count, callee_findex;
         Stack saved_local_vars;
         int   is_recursive_clone;
     } CallRecord;
-    CallRecord cs[MAX_FRAMES]; int cs_top = -1;
+    CallRecord *cs = malloc(sizeof(CallRecord) * MAX_FRAMES);
+    int cs_top = -1;
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si].addr + 1);
-    if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); free(orig); return; }
+    if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); free(cs); free(orig); return; }
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
         lb[sizeof(lb)-1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
 
@@ -365,7 +366,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                                             : char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
             int   pc  = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var  *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            Var  *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
             Stack slv = vm->frames[cfi].LocalVariables;
             stack_init(&vm->frames[cfi].LocalVariables);
             char *p = NULL; int ii = 0;
@@ -491,6 +492,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
 done:
     free(orig);
+    free(cs);
 }
 
 /* ======================================================================
@@ -730,14 +732,16 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
         return;
     }
 
-    VM vm; memset(&vm, 0, sizeof(VM));
-    vm.dbg = NULL;   /* modalità normale: nessun debugger */
-    vm_exec(&vm, ast);
+    VM *vm = calloc(1, sizeof(VM));
+    if (!vm) { fprintf(stderr, "VM alloc failed\n"); free(ast); return; }
+    vm->dbg = NULL;
+    vm_exec(vm, ast);
     if (dump_after)
-        vm_dump(&vm);
-    vm_print_stats(&vm);
-    vm_free(&vm);
+        vm_dump(vm);
+    vm_print_stats(vm);
+    vm_free(vm);
     free(ast);
+    free(vm);
 }
 
 void vm_run_from_string(const char *bytecode)

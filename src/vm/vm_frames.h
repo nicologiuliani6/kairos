@@ -28,6 +28,16 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
 
     for (int k = 0; k < clone->param_count; k++) {
         int pidx = clone->param_indices[k];
+        if (pidx < 0 || pidx >= MAX_VARS) {
+            fprintf(stderr, "[VM] init_clone_frame: pidx %d out of range (k=%d pc=%d frame=%s base_pc=%d)\n",
+                pidx, k, clone->param_count, key, base->param_count);
+            exit(1);
+        }
+        if (!base->vars[pidx]) {
+            fprintf(stderr, "[VM] init_clone_frame: base vars[%d] NULL (k=%d pc=%d frame=%s var_count=%d)\n",
+                pidx, k, clone->param_count, key, base->var_count);
+            exit(1);
+        }
         clone->vars[pidx] = calloc(1, sizeof(Var));
         strncpy(clone->vars[pidx]->name, base->vars[pidx]->name, VAR_NAME_LENGTH - 1);
         clone->vars[pidx]->T = TYPE_PARAM;

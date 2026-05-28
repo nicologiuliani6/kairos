@@ -184,8 +184,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break;
         size_t llen = (size_t)(nl - ptr);
-        if (llen >= 2047) llen = 2047;
-        char lb[2048]; memcpy(lb, ptr, llen); lb[llen] = '\0';
+        if (llen >= 16383) llen = 16383;
+        char lb[16384]; memcpy(lb, ptr, llen); lb[llen] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { ptr = nl + 1; continue; }
@@ -278,8 +278,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         char *nl = strchr(ptr, '\n');
         if (!nl) break;
         size_t llen = (size_t)(nl - ptr);
-        if (llen >= 2047) llen = 2047;
-        char lb[2048]; memcpy(lb, ptr, llen); lb[llen] = '\0';
+        if (llen >= 16383) llen = 16383;
+        char lb[16384]; memcpy(lb, ptr, llen); lb[llen] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { ptr = nl + 1; continue; }
@@ -307,10 +307,10 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                 char *n2 = strchr(nl + 1, '\n');
                 int  nx_asrt = 0;
                 if (n2 && (size_t)(n2 - (nl + 1)) < sizeof(lb)) {
-                    char peekb[2048];
+                    char peekb[16384];
                     memcpy(peekb, nl + 1, (size_t)(n2 - (nl + 1)));
                     peekb[(size_t)(n2 - (nl + 1))] = '\0';
-                    char ptmp[2048];
+                    char ptmp[16384];
                     strncpy(ptmp, peekb, sizeof(ptmp) - 1);
                     ptmp[sizeof(ptmp) - 1] = '\0';
                     char *p1 = strtok(skip_lineno(ptmp), " \t");
@@ -494,10 +494,10 @@ static inline int lp_row_first_jmpf_from_start(uint line, char **lp, uint *ln, i
 {
     for (int j = 0; j < nl; j++) {
         if (ln[j] != line) continue;
-        char buf[2048];
+        char buf[16384];
         strncpy(buf, lp[j], sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
-        char scan[2048];
+        char scan[16384];
         strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
         scan[sizeof(scan) - 1] = '\0';
         char *ff = strtok(scan, " \t");
@@ -511,10 +511,10 @@ static inline int lp_row_first_eval_at_line(uint line, char **lp, uint *ln, int 
 {
     for (int j = 0; j < nl; j++) {
         if (ln[j] != line) continue;
-        char buf[2048];
+        char buf[16384];
         strncpy(buf, lp[j], sizeof(buf) - 1);
         buf[sizeof(buf) - 1] = '\0';
-        char scan[2048];
+        char scan[16384];
         strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
         scan[sizeof(scan) - 1] = '\0';
         char *ff = strtok(scan, " \t");
@@ -720,7 +720,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= proc_end) { *nl = '\n'; break; }
-        char tmp[2048]; strncpy(tmp, ptr, sizeof(tmp) - 1);
+        char tmp[16384]; strncpy(tmp, ptr, sizeof(tmp) - 1);
         tmp[sizeof(tmp) - 1] = '\0';
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "PAR_START")) {
@@ -733,7 +733,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
                 char *nl2 = strchr(scan, '\n'); if (!nl2) break; *nl2 = '\0';
                 uint  cur2 = (uint)atoi(scan);
                 if (cur2 > max_inner) max_inner = cur2;
-                char tmp2[2048]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
+                char tmp2[16384]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
                 tmp2[sizeof(tmp2) - 1] = '\0';
                 char *fw2  = strtok(skip_lineno(tmp2), " \t");
                 if (fw2) {
@@ -962,10 +962,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         size_t _clean_len = strlen(clean);
         /* exe_line: copia indipendente per strtok finale (dopo dispatch early-skip).
            zbuf: copia indipendente per strtok early (fw_cls/arg1_cls). */
-        char exe_line[2048];
+        char exe_line[16384];
         if (_clean_len >= sizeof(exe_line)) _clean_len = sizeof(exe_line) - 1;
         memcpy(exe_line, clean, _clean_len); exe_line[_clean_len] = '\0';
-        char zbuf[2048];
+        char zbuf[16384];
         memcpy(zbuf, clean, _clean_len); zbuf[_clean_len] = '\0';
         char *fw_cls = strtok(zbuf, " \t");
         char *arg1_cls = strtok(NULL, " \t");
@@ -1222,7 +1222,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                                                      : char_id_map_get(&FrameIndexer, pn));
             uint curi = get_findex(frame_name);
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
             char *p = NULL; int j = 0;
             while ((p = strtok(NULL, " \t")) && j < pc) {
                 int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
@@ -1303,7 +1303,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                                                      : char_id_map_get(&FrameIndexer, pn));
             uint curi = fi;
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
             char *p = NULL; int j = 0;
             while ((p = strtok(NULL, " \t")) && j < pc) {
                 int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
@@ -1441,7 +1441,7 @@ static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_l
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
         lb[sizeof(lb) - 1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
@@ -1468,7 +1468,7 @@ static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_l
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
         lb[sizeof(lb) - 1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
@@ -1490,7 +1490,7 @@ static inline int branch_span_has_call(char *buf, uint from_line, uint to_line)
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
         lb[sizeof(lb) - 1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) {
@@ -1571,7 +1571,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         int idx = nl - 1;
         while (idx >= 0) {
             uint cur = ln[idx];
-            char ob[2048]; strncpy(ob, lp[idx], sizeof(ob) - 1); ob[sizeof(ob) - 1] = '\0';
+            char ob[16384]; strncpy(ob, lp[idx], sizeof(ob) - 1); ob[sizeof(ob) - 1] = '\0';
             char *fw = strtok(skip_lineno(ob), " \t");
             if (!fw) { idx--; continue; }
 
@@ -1727,7 +1727,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             }
         }
         for (int i = count - 1; i >= 0; i--) {
-            char ob[2048]; strncpy(ob, lines[i], sizeof(ob) - 1);
+            char ob[16384]; strncpy(ob, lines[i], sizeof(ob) - 1);
             ob[sizeof(ob) - 1] = '\0';
             char *clean = skip_lineno(ob);
             char *fw = strtok(clean, " \t");
@@ -1841,7 +1841,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                                         : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                                : char_id_map_get(&FrameIndexer, pn));
                 int  pc = vm->frames[callee_fi].param_count, *pi = vm->frames[callee_fi].param_indices;
-                Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi].vars[pi[k]];
+                Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi].vars[pi[k]];
                 Stack slv = vm->frames[callee_fi].LocalVariables;
                 stack_init(&vm->frames[callee_fi].LocalVariables);
                 char *p3 = NULL; int jj = 0;

@@ -61,9 +61,9 @@ typedef struct Var {
     pthread_t  ref_lock_owner;
 } Var;
 
-#define MAX_VARS   512
-#define MAX_LABEL  256
-#define MAX_NESTED 256
+#define MAX_VARS   2048
+#define MAX_LABEL  8192
+#define MAX_NESTED 1024
 
 typedef struct {
     CharIdMap VarIndexer;
@@ -74,7 +74,8 @@ typedef struct {
     uint      label[MAX_LABEL];
     char      name[VAR_NAME_LENGTH];
     uint      addr, end_addr;
-    int       param_indices[64];
+#define MAX_PROC_PARAMS 1024
+    int       param_indices[MAX_PROC_PARAMS];
     int       param_count;
     int       loop_restart_i[MAX_NESTED];
     int       loop_bottom_i[MAX_NESTED];
@@ -92,7 +93,7 @@ typedef struct {
     int       trace_window_cursor;
 } Frame;
 
-#define MAX_FRAMES 100
+#define MAX_FRAMES 200
 
 /* ======================================================================
  *  Debug

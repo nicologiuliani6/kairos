@@ -205,7 +205,8 @@ static inline void op_push(VM *vm, const char *frame_name)
     uint  si = char_id_map_get(&vm->frames[fi].VarIndexer, C_stack);
     Var  *sv = vm->frames[fi].vars[si];
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL)
-        vm_debug_panic("[VM] PUSH: destinazione non è stack/channel!\n");
+        vm_debug_panic("[VM] PUSH: destinazione '%s' non e' stack/channel (T=%d) frame=%s\n",
+            C_stack, sv->T, frame_name);
 
     if (sv->T == TYPE_STACK) {
         sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int64_t));

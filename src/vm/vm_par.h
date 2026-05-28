@@ -45,7 +45,7 @@ static inline ParBlock scan_par_block(char *par_ptr)
         char *nl = strchr(scan, '\n');
         if (!nl) break;
         *nl = '\0';
-        char tmp[2048];
+        char tmp[16384];
         strncpy(tmp, scan, sizeof(tmp) - 1);
         tmp[sizeof(tmp) - 1] = '\0';
         char *fw = strtok(skip_lineno(tmp), " \t");
@@ -125,7 +125,7 @@ static void *thread_entry(void *arg)
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
 
     if (args->is_inverse) {
-        char lines[512][2048];
+        char (*lines)[16384] = malloc(sizeof(char[512][16384]));
         int nlines = 0;
         int has_complex = 0;
         char *scan = args->start_ptr;
@@ -135,7 +135,7 @@ static void *thread_entry(void *arg)
             *nl = '\0';
             strncpy(lines[nlines], scan, sizeof(lines[nlines]) - 1);
             lines[nlines][sizeof(lines[nlines]) - 1] = '\0';
-            char lb[2048];
+            char lb[16384];
             strncpy(lb, scan, sizeof(lb) - 1);
             lb[sizeof(lb) - 1] = '\0';
             char *fw = strtok(skip_lineno(lb), " \t");
@@ -153,7 +153,7 @@ static void *thread_entry(void *arg)
 
         if (!has_complex) {
             for (int i = nlines - 1; i >= 0; i--) {
-                char lb[2048];
+                char lb[16384];
                 strncpy(lb, lines[i], sizeof(lb) - 1);
                 lb[sizeof(lb) - 1] = '\0';
                 char *fw = strtok(skip_lineno(lb), " \t");
@@ -173,15 +173,17 @@ static void *thread_entry(void *arg)
                          !strcmp(fw, "LABEL") || !strcmp(fw, "DECL")) { /* skip */ }
                 else { vm_debug_panic("[THREAD-INV] op sconosciuta: '%s'\n", fw); }
             }
+            free(lines);
             goto thread_exit;
         }
+        free(lines);
     }
 
     char *ptr = args->start_ptr;
 
     while (ptr && *ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[2048]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
         lb[sizeof(lb) - 1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
 
@@ -246,7 +248,7 @@ static void *thread_entry(void *arg)
             uint  cfi_cur = get_findex(fname);
             uint cfi = clone_frame_for_thread(vm, pn);
             int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[64]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
             Stack slv = vm->frames[cfi].LocalVariables; stack_init(&vm->frames[cfi].LocalVariables);
             char thread_key[VAR_NAME_LENGTH]; make_thread_frame_key(pn, thread_key, sizeof(thread_key));
             char *p = NULL; int ii = 0;
