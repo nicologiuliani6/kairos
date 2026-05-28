@@ -148,6 +148,8 @@ static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_lin
  *  vm_run_BT — loop principale di esecuzione
  * ====================================================================== */
 
+void vm_stats_sample(VM *vm);
+
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 {
     g_current_vm = vm;
@@ -181,6 +183,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         if (strcmp(fw, "PROC") != 0 && strcmp(fw, "PARAM") != 0 &&
             strcmp(fw, "HALT") != 0) {
             DEBUG_HOOK(ptr, lb);
+            vm_stats_sample(vm);
         }
 
         if (!strcmp(fw, "END_PROC")) {
@@ -656,39 +659,56 @@ void vm_dump(VM *vm)
  * Trigger via env KAIROS_VM_STATS=1 (no symbol export). */
 static int g_vm_stats_enabled = 0;
 
-void vm_print_stats(VM *vm)
+/* Live cell count tracking. Aggiornato dal dispatch loop via vm_stats_sample().
+ * Conta tutti gli int var + total stack elements vivi a quel tick. */
+static uint64_t g_vm_cells_sample_sum = 0;
+static uint64_t g_vm_cells_sample_count = 0;
+static uint64_t g_vm_cells_sample_max = 0;
+static uint64_t g_vm_tick_counter = 0;
+#define VM_STATS_SAMPLE_EVERY 256
+
+static uint64_t vm_count_live_cells(VM *vm)
 {
-    if (!g_vm_stats_enabled) return;
     uint64_t count = 0;
-    uint64_t sum_abs = 0;
-    int64_t max_abs = 0;
     for (int i = 0; i <= vm->frame_top; i++) {
         Frame *f = &vm->frames[i];
         for (int j = 0; j < f->var_count; j++) {
             Var *v = f->vars[j]; if (!v) continue;
-            if (v->T == TYPE_INT) {
-                int64_t val = *(v->value);
-                int64_t a = val < 0 ? -val : val;
-                sum_abs += (uint64_t)a;
-                if (a > max_abs) max_abs = a;
-                count++;
-            } else if (v->T == TYPE_STACK) {
-                size_t n = v->stack_len;
-                for (size_t k = 0; k < n; k++) {
-                    int64_t val = v->value[k];
-                    int64_t a = val < 0 ? -val : val;
-                    sum_abs += (uint64_t)a;
-                    if (a > max_abs) max_abs = a;
-                    count++;
-                }
-            }
+            if (v->T == TYPE_INT) count++;
+            else if (v->T == TYPE_STACK) count += (uint64_t)v->stack_len;
         }
     }
-    double mean = count ? (double)sum_abs / (double)count : 0.0;
+    return count;
+}
+
+void vm_stats_sample(VM *vm)
+{
+    if (!g_vm_stats_enabled) return;
+    g_vm_tick_counter++;
+    if ((g_vm_tick_counter & (VM_STATS_SAMPLE_EVERY - 1)) != 0) return;
+    uint64_t c = vm_count_live_cells(vm);
+    g_vm_cells_sample_sum += c;
+    g_vm_cells_sample_count++;
+    if (c > g_vm_cells_sample_max) g_vm_cells_sample_max = c;
+}
+
+void vm_print_stats(VM *vm)
+{
+    if (!g_vm_stats_enabled) return;
+    uint64_t final_cells = vm_count_live_cells(vm);
+    /* Sample finale per garantire copertura anche su run brevissimi. */
+    if (final_cells > g_vm_cells_sample_max) g_vm_cells_sample_max = final_cells;
+    if (g_vm_cells_sample_count == 0) {
+        g_vm_cells_sample_sum += final_cells;
+        g_vm_cells_sample_count++;
+    }
+    double mean = g_vm_cells_sample_count
+        ? (double)g_vm_cells_sample_sum / (double)g_vm_cells_sample_count
+        : 0.0;
     vm_printf("=== VM stats ===\n");
-    vm_printf("cells: %llu\n", (unsigned long long)count);
-    vm_printf("mean_abs: %.2f\n", mean);
-    vm_printf("max_abs: %lld\n", (long long)max_abs);
+    vm_printf("cells_final: %llu\n", (unsigned long long)final_cells);
+    vm_printf("cells_mean:  %.2f\n", mean);
+    vm_printf("cells_max:   %llu\n", (unsigned long long)g_vm_cells_sample_max);
 }
 
 /* ======================================================================
