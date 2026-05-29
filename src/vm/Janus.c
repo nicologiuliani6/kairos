@@ -240,6 +240,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 MnemoHistFloorSnapEntry *ent =
                     &vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp];
                 ent->hist_len_floor = hv->stack_len;
+                ent->frame_indexer_count_at_snap = FrameIndexer.count;
                 mn_hist_floor_snap_peek_next_call_callee(nl + 1, ent->opt_call_callee,
                                                         sizeof(ent->opt_call_callee));
                 vm->mn_hist_floor_snap_sp++;
@@ -398,6 +399,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
             int matched_opt_uncall = 0;
+            int frame_indexer_floor_to_restore = -1;
             if (histv && vm->mn_hist_floor_snap_sp > 0 &&
                 !strcmp(vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp - 1].opt_call_callee, pn)) {
                 MnemoHistFloorSnapEntry *top =
@@ -407,6 +409,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 strncpy(vm->mn_hist_floor_pop_guard_anchor, inv_name, VAR_NAME_LENGTH - 1);
                 vm->mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH - 1] = '\0';
                 matched_opt_uncall = 1;
+                frame_indexer_floor_to_restore = top->frame_indexer_count_at_snap;
             }
             /* Fix P3 trace: pop callee clone trace_window stack, imposta
              * trace_window_start corrente. Cursor reset = 0. Copia anche
@@ -436,6 +439,26 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 if (vm->branch_trace_active == 0) {
                     vm->branch_trace_top = 0;
                 }
+            }
+            /* Rilascia frames generati durante il pattern opt-uncall (forward +
+             * inverse). Permette riuso slot vm->frames per cicli call+uncall
+             * consecutivi. Necessario per `printer(5); printer(10);` con
+             * `__mn_putd_uint@N` auto-ricorsivo che cresce indefinitamente
+             * tra cicli. */
+            if (matched_opt_uncall && frame_indexer_floor_to_restore >= 0 &&
+                frame_indexer_floor_to_restore < FrameIndexer.count) {
+                pthread_mutex_lock(&var_indexer_mtx);
+                /* Sanity: non scendere sotto floor. */
+                if (frame_indexer_floor_to_restore < FrameIndexer.count) {
+                    FrameIndexer.count = frame_indexer_floor_to_restore;
+                    /* I frame [floor..count) restano allocati con Var* dangling.
+                     * Reset name slot per evitare match futuri su chiave stale. */
+                    for (int fi = frame_indexer_floor_to_restore;
+                         fi < MAX_FRAMES; fi++) {
+                        FrameIndexer.names[fi][0] = '\0';
+                    }
+                }
+                pthread_mutex_unlock(&var_indexer_mtx);
             }
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];

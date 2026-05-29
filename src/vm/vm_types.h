@@ -47,6 +47,13 @@ typedef struct {
 typedef struct {
     size_t hist_len_floor;
     char   opt_call_callee[VAR_NAME_LENGTH];
+    /* Floor su FrameIndexer.count al momento dello snap. Dopo UNCALL match
+     * il `cleanup` ripristina FrameIndexer a questa lunghezza, liberando
+     * frame_indices generati durante il pattern (forward+inverse). Necessario
+     * per opt-uncall su user fn invertibili contenenti __mn_putd_uint
+     * (auto-ricorsivo): la depth cresce per digit e tra cicli consecutivi
+     * non veniva mai resettata → MAX_FRAMES overflow. */
+    int    frame_indexer_count_at_snap;
 } MnemoHistFloorSnapEntry;
 
 typedef struct Var {

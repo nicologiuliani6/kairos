@@ -11,6 +11,11 @@
 
 static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const char *key)
 {
+    if (clone_fi >= MAX_FRAMES) {
+        fprintf(stderr, "[VM] init_clone_frame: clone_fi %u >= MAX_FRAMES %d (frame=%s)\n",
+            clone_fi, MAX_FRAMES, key);
+        exit(1);
+    }
     Frame *base  = &vm->frames[base_fi];
     Frame *clone = &vm->frames[clone_fi];
 
