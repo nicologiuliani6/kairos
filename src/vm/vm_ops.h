@@ -41,7 +41,7 @@ extern VM *g_current_vm;
   #define vm_printf(...) printf(__VA_ARGS__)
 #endif
 
-#define IF_BRANCH_STACK_MAX 256
+#define IF_BRANCH_STACK_MAX 65536
 static __thread int if_branch_stack[IF_BRANCH_STACK_MAX];
 static __thread int if_branch_has_call_stack[IF_BRANCH_STACK_MAX];
 static __thread int if_branch_top = -1;

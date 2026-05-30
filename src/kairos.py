@@ -1,6 +1,13 @@
 import os
 import sys
 import ctypes
+
+# Kairos frontend (parser/bytecode) walks AST ricorsivamente. Programmi
+# Mnemo con array grandi unrollati possono produrre file .kairos da decine
+# di migliaia di righe → AST nodes ricorsivi → eccede recursion limit
+# default 1000. Bump a 200k così files fino a ~10MB compilano.
+sys.setrecursionlimit(200000)
+
 from src.frontend.bytecode import ByteCode_Compiler
 
 

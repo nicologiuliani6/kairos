@@ -70,7 +70,13 @@ typedef struct Var {
 
 #define MAX_VARS   2048
 #define MAX_LABEL  8192
-#define MAX_NESTED 1024
+/* MAX_NESTED: profondità max nested if/loop in singolo Frame. Programmi
+ * Mnemo con array grandi unrollati emettono cascate `if==0 else if==1
+ * else ...` 1500-deep → 1024 piccolo. Bumped a 65536. Allocato per Frame
+ * (loop_restart_i[MAX_NESTED] + loop_bottom_i[MAX_NESTED] = 512KB per
+ * Frame). Frame stesso ora heap-allocato (VM_FRAMES_INIT_CAP), non
+ * 200 statici. */
+#define MAX_NESTED 65536
 
 typedef struct {
     CharIdMap VarIndexer;
