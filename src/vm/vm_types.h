@@ -68,15 +68,14 @@ typedef struct Var {
     pthread_t  ref_lock_owner;
 } Var;
 
-#define MAX_VARS   2048
-#define MAX_LABEL  8192
-/* MAX_NESTED: profondità max nested if/loop in singolo Frame. Programmi
- * Mnemo con array grandi unrollati emettono cascate `if==0 else if==1
- * else ...` 1500-deep → 1024 piccolo. Bumped a 65536. Allocato per Frame
- * (loop_restart_i[MAX_NESTED] + loop_bottom_i[MAX_NESTED] = 512KB per
- * Frame). Frame stesso ora heap-allocato (VM_FRAMES_INIT_CAP), non
- * 200 statici. */
-#define MAX_NESTED 65536
+/* Cap statici dei Frame. NOTA: rendere dinamici è TODO; il bump di
+ * MAX_NESTED causa realloc pointer movement che rompe ex33 parallel2_fib
+ * (multithread con pointer-into-frame). Lasciati ai valori storici;
+ * IF_BRANCH_STACK_MAX (in vm_ops.h) è bumped a 65536 per array grandi. */
+#define MAX_VARS         2048
+#define MAX_LABEL        8192
+#define MAX_NESTED       1024
+#define MAX_PROC_PARAMS  1024
 
 typedef struct {
     CharIdMap VarIndexer;
@@ -87,7 +86,6 @@ typedef struct {
     uint      label[MAX_LABEL];
     char      name[VAR_NAME_LENGTH];
     uint      addr, end_addr;
-#define MAX_PROC_PARAMS 1024
     int       param_indices[MAX_PROC_PARAMS];
     int       param_count;
     int       loop_restart_i[MAX_NESTED];
