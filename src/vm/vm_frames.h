@@ -2,8 +2,31 @@
 #define VM_FRAMES_H
 
 #include <string.h>
+#include <stdlib.h>
 #include "vm_types.h"
 #include "vm_helpers.h"
+
+/* ======================================================================
+ *  Frames dynamic capacity
+ * ======================================================================
+ *  vm->frames cresce on-demand (raddoppia). Zero-fill della nuova
+ *  regione necessario perché init_clone_frame fa memset(clone, 0, sizeof)
+ *  ma altri call site leggono campi prima di init.
+ */
+static inline void vm_ensure_frame_cap(VM *vm, uint needed)
+{
+    if (needed < vm->frames_cap) return;
+    uint new_cap = vm->frames_cap ? vm->frames_cap : VM_FRAMES_INIT_CAP;
+    while (new_cap <= needed) new_cap *= 2;
+    Frame *nf = (Frame *)realloc(vm->frames, sizeof(Frame) * new_cap);
+    if (!nf) {
+        fprintf(stderr, "[VM] vm_ensure_frame_cap: realloc(%u) fallita\n", new_cap);
+        exit(1);
+    }
+    memset(nf + vm->frames_cap, 0, sizeof(Frame) * (new_cap - vm->frames_cap));
+    vm->frames = nf;
+    vm->frames_cap = new_cap;
+}
 
 /* ======================================================================
  *  Clone frame — corpo comune estratto
@@ -11,11 +34,7 @@
 
 static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const char *key)
 {
-    if (clone_fi >= MAX_FRAMES) {
-        fprintf(stderr, "[VM] init_clone_frame: clone_fi %u >= MAX_FRAMES %d (frame=%s)\n",
-            clone_fi, MAX_FRAMES, key);
-        exit(1);
-    }
+    vm_ensure_frame_cap(vm, clone_fi);
     Frame *base  = &vm->frames[base_fi];
     Frame *clone = &vm->frames[clone_fi];
 

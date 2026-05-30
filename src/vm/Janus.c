@@ -166,8 +166,18 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         Stack saved_local_vars;
         int   is_recursive_clone;
     } CallRecord;
-    CallRecord *cs = malloc(sizeof(CallRecord) * MAX_FRAMES);
+    /* Call stack dinamico: cresce on-demand (raddoppia). Nessun hard cap. */
+    uint cs_cap = VM_FRAMES_INIT_CAP;
+    CallRecord *cs = malloc(sizeof(CallRecord) * cs_cap);
     int cs_top = -1;
+#define VM_CS_ENSURE(needed) do { \
+    if ((uint)(needed) >= cs_cap) { \
+        uint _nc = cs_cap; while (_nc <= (uint)(needed)) _nc *= 2; \
+        CallRecord *_nb = (CallRecord *)realloc(cs, sizeof(CallRecord) * _nc); \
+        if (!_nb) vm_debug_panic("[VM] CALL: realloc(%u) fallita\n", _nc); \
+        cs = _nb; cs_cap = _nc; \
+    } \
+} while (0)
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si].addr + 1);
     if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); free(cs); free(orig); return; }
@@ -275,7 +285,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
                               : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                      : char_id_map_get(&FrameIndexer, pn));
-            if (cs_top + 1 >= MAX_FRAMES) vm_debug_panic("[VM] CALL: stack overflow!\n");
+            VM_CS_ENSURE((uint)(cs_top + 1));
             cs_top++;
             *nl = '\n';
             cs[cs_top].return_ptr         = nl + 1;
@@ -450,11 +460,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 pthread_mutex_lock(&var_indexer_mtx);
                 /* Sanity: non scendere sotto floor. */
                 if (frame_indexer_floor_to_restore < FrameIndexer.count) {
+                    int old_count = FrameIndexer.count;
                     FrameIndexer.count = frame_indexer_floor_to_restore;
-                    /* I frame [floor..count) restano allocati con Var* dangling.
-                     * Reset name slot per evitare match futuri su chiave stale. */
+                    /* I frame [floor..old_count) restano allocati con Var*
+                     * dangling. Reset name slot per evitare match futuri su
+                     * chiave stale. */
                     for (int fi = frame_indexer_floor_to_restore;
-                         fi < MAX_FRAMES; fi++) {
+                         fi < old_count; fi++) {
                         FrameIndexer.names[fi][0] = '\0';
                     }
                 }
@@ -544,6 +556,7 @@ void vm_exec(VM *vm, char *buffer)
             } else if (!strcmp(fw, "PROC")) {
                 char *name = strtok(NULL, " \t");
                 uint  idx  = char_id_map_get(&FrameIndexer, name);
+                vm_ensure_frame_cap(vm, idx);
                 vm->frame_top = idx;
                 char_id_map_init(&vm->frames[idx].VarIndexer);
                 stack_init(&vm->frames[idx].LocalVariables);
@@ -604,7 +617,8 @@ void vm_exec(VM *vm, char *buffer)
 void vm_free(VM *vm)
 {
     if (!vm) return;
-    size_t freed_cap = (size_t)MAX_FRAMES * (size_t)MAX_VARS;
+    size_t freed_cap = (size_t)vm->frames_cap * (size_t)MAX_VARS;
+    if (freed_cap == 0) freed_cap = (size_t)VM_FRAMES_INIT_CAP * (size_t)MAX_VARS;
     Var **freed = (Var **)calloc(freed_cap, sizeof(Var *));
     if (!freed) return;
     int freed_count = 0;
@@ -646,6 +660,11 @@ void vm_free(VM *vm)
         f->var_count = 0;
     }
     free(freed);
+    if (vm->frames) {
+        free(vm->frames);
+        vm->frames = NULL;
+        vm->frames_cap = 0;
+    }
 }
 
 /* ======================================================================
@@ -758,6 +777,10 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     VM *vm = calloc(1, sizeof(VM));
     if (!vm) { fprintf(stderr, "VM alloc failed\n"); free(ast); return; }
     vm->dbg = NULL;
+    /* Init frames dinamico (cresce on-demand via vm_ensure_frame_cap). */
+    vm->frames = (Frame *)calloc(VM_FRAMES_INIT_CAP, sizeof(Frame));
+    if (!vm->frames) { fprintf(stderr, "VM frames alloc failed\n"); free(ast); free(vm); return; }
+    vm->frames_cap = VM_FRAMES_INIT_CAP;
     vm_exec(vm, ast);
     if (dump_after)
         vm_dump(vm);

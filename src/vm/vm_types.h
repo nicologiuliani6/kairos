@@ -100,7 +100,10 @@ typedef struct {
     int       trace_window_cursor;
 } Frame;
 
-#define MAX_FRAMES 200
+/* Capacità iniziale di vm->frames; cresce dinamicamente (raddoppia)
+ * via vm_ensure_frame_cap quando clone_frame_for_* o vm_exec creano
+ * un nuovo frame indice oltre vm->frames_cap. Nessun hard cap. */
+#define VM_FRAMES_INIT_CAP 256
 
 /* ======================================================================
  *  Debug
@@ -158,7 +161,8 @@ typedef struct {
 } VMDebugState;
 
 typedef struct {
-    Frame frames[MAX_FRAMES];
+    Frame *frames;       /* heap-allocated, cresce on-demand */
+    uint   frames_cap;   /* capacità allocata corrente */
     int   frame_top;
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
     int   inversion_depth;
