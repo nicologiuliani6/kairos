@@ -910,9 +910,13 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
             char *pb_at = strchr(proc_base, '@');
             if (pb_at) *pb_at = '\0';
             if (!strcmp(proc_base, vm->branch_trace_proc)) {
-                if (vm->branch_trace_top >= VM_BRANCH_TRACE_MAX)
-                    vm_debug_panic("[VM] branch_trace overflow (max=%d)\n",
-                                   VM_BRANCH_TRACE_MAX);
+                if ((uint)vm->branch_trace_top >= vm->branch_trace_cap) {
+                    uint new_cap = vm->branch_trace_cap ? vm->branch_trace_cap * 2 : VM_BRANCH_TRACE_INIT_CAP;
+                    int *nb = (int *)realloc(vm->branch_trace, sizeof(int) * new_cap);
+                    if (!nb) vm_debug_panic("[VM] branch_trace realloc(%u) fallita\n", new_cap);
+                    vm->branch_trace = nb;
+                    vm->branch_trace_cap = new_cap;
+                }
                 vm->branch_trace[vm->branch_trace_top++] = thread_val_IF ? 1 : 0;
             }
         }

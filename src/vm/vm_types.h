@@ -187,8 +187,10 @@ typedef struct {
      * vm_invert JMPF_ELSE handler pop una entry e replay quel branch
      * specifico. Cosi non interferisce con path inverse legacy
      * (divmod ecc. che usano replay basato su recursion_depth). */
-#define VM_BRANCH_TRACE_MAX 131072
-    int    branch_trace[VM_BRANCH_TRACE_MAX];
+/* branch_trace heap-allocato, cresce on-demand via vm_ensure_branch_trace_cap. */
+#define VM_BRANCH_TRACE_INIT_CAP 1024
+    int   *branch_trace;
+    uint   branch_trace_cap;
     int    branch_trace_top;
     int    branch_trace_active;
     /* Proc name (base) di cui le chiamate ricorsive partecipano alla

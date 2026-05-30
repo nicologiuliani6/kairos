@@ -665,6 +665,11 @@ void vm_free(VM *vm)
         vm->frames = NULL;
         vm->frames_cap = 0;
     }
+    if (vm->branch_trace) {
+        free(vm->branch_trace);
+        vm->branch_trace = NULL;
+        vm->branch_trace_cap = 0;
+    }
 }
 
 /* ======================================================================
@@ -781,6 +786,9 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm->frames = (Frame *)calloc(VM_FRAMES_INIT_CAP, sizeof(Frame));
     if (!vm->frames) { fprintf(stderr, "VM frames alloc failed\n"); free(ast); free(vm); return; }
     vm->frames_cap = VM_FRAMES_INIT_CAP;
+    vm->branch_trace = (int *)calloc(VM_BRANCH_TRACE_INIT_CAP, sizeof(int));
+    if (!vm->branch_trace) { fprintf(stderr, "VM branch_trace alloc failed\n"); free(vm->frames); free(ast); free(vm); return; }
+    vm->branch_trace_cap = VM_BRANCH_TRACE_INIT_CAP;
     vm_exec(vm, ast);
     if (dump_after)
         vm_dump(vm);
