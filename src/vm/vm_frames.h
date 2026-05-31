@@ -6,6 +6,18 @@
 #include "vm_types.h"
 #include "vm_helpers.h"
 
+void vm_debug_panic(const char *fmt, ...);
+
+/* Cap di sicurezza per la profondità di ricorsione dei frame clonati.
+ * Forward la profondità reale è piccola (cifre ≤ 19 per __mn_putd_uint,
+ * divmod mnhalve ≤ ~64). L'inverse (UNCALL) col fallback recursion_depth-replay
+ * (vm_invert.h ~riga 1130) NON termina per procedure con struttura
+ * "1×THEN per livello poi base ELSE" (es. __mn_putd_uint): clona @1,@2,@3,…
+ * all'infinito → OOM/hang. Questo cap non si attiva mai su inversione corretta;
+ * trasforma il runaway in errore pulito (exit 1). Fix definitivo (branch_trace
+ * whole-program o putd non-ricorsivo) in TODO. */
+#define MN_CLONE_MAX_DEPTH 512
+
 /* ======================================================================
  *  Frames dynamic capacity
  * ======================================================================
@@ -121,6 +133,12 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
 
 static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 {
+    if (depth > MN_CLONE_MAX_DEPTH)
+        vm_debug_panic(
+            "[VM] clone depth %d > %d su '%s' — ricorsione inversa non "
+            "terminante (recursion_depth-replay non adatto a questa proc, "
+            "es. __mn_putd_uint/printf sotto --check-invertibility). Vedi TODO.\n",
+            depth, MN_CLONE_MAX_DEPTH, proc);
     pthread_mutex_lock(&var_indexer_mtx);
     char key[VAR_NAME_LENGTH];
     if (current_thread_args)
