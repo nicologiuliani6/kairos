@@ -76,9 +76,9 @@ typedef struct Var {
  * parallel2_fib (multithread cross-frame pointer holds).
  * Valori storici lasciati intatti per ora; ulteriore dyn alloc per-Frame
  * field rimane TODO (richiede realloc per-Frame inline). */
-#define MAX_VARS         2048
-#define MAX_LABEL        8192
-#define MAX_NESTED       1024
+#define MAX_VARS         4096
+#define MAX_LABEL        16384
+#define MAX_NESTED       4096
 #define MAX_PROC_PARAMS  1024
 
 typedef struct {
