@@ -814,7 +814,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     stack_init(&vm->frames[fi_reset]->LocalVariables);
 
 #define MAX_LOOPS 32
-#define MAX_IFS   32
+#define MAX_IFS   256
 #define MAX_LINES 1024
 #define MAX_PARS  32
 
@@ -1565,8 +1565,13 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
          * hist. Collect_ifs sull'intero frame, itera righe del branch in reverse,
          * skippa quelle interne a nested IF e dispatch ai loro JMPF ELSE_<uid>
          * con recurse exec_branch_inverse sul ramo che era vero in forward. */
-        IfDescriptor   ifs[32];
-        int nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, 32);
+        /* Heap (non stack): exec_branch_inverse ricorre per ogni livello di
+         * nested IF; un IfDescriptor[256] sullo stack × profondità rischia
+         * overflow. Cap 256 allineato a MAX_IFS (32 troncava i frame con molte
+         * disj-chain runtime-index → collect_ifs parziale → POP sbilanciato). */
+        enum { LOCAL_MAX_IFS = 256 };
+        IfDescriptor  *ifs = calloc(LOCAL_MAX_IFS, sizeof(IfDescriptor));
+        int nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, LOCAL_MAX_IFS);
 
         char *lp[512]; uint ln[512]; int nl = 0;
         char *p3 = go_to_line(original_buffer, from_line);
@@ -1743,6 +1748,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             idx--;
         }
         for (int j = 0; j < nl; j++) free(lp[j]);
+        free(ifs);
     } else {
         char *lines[512]; int count = 0;
         char *p2 = go_to_line(original_buffer, from_line);
