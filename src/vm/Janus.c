@@ -245,8 +245,17 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 Var  *hv = vm->frames[cfi_snap].vars[si];
                 if (!hv || hv->T != TYPE_STACK)
                     vm_debug_panic("[VM] __mn_hist_floor_snap: non stack\n");
-                if (vm->mn_hist_floor_snap_sp >= MNEMO_HIST_SNAP_DEPTH)
-                    vm_debug_panic("[VM] __mn_hist_floor_snap overflow\n");
+                if ((uint)vm->mn_hist_floor_snap_sp >= vm->mn_hist_floor_snaps_cap) {
+                    uint new_cap = vm->mn_hist_floor_snaps_cap
+                        ? vm->mn_hist_floor_snaps_cap * 2 : MNEMO_HIST_SNAP_INIT_CAP;
+                    MnemoHistFloorSnapEntry *ns = (MnemoHistFloorSnapEntry *)realloc(
+                        vm->mn_hist_floor_snaps, sizeof(MnemoHistFloorSnapEntry) * new_cap);
+                    if (!ns) vm_debug_panic("[VM] __mn_hist_floor_snap realloc %u fallita\n", new_cap);
+                    memset(ns + vm->mn_hist_floor_snaps_cap, 0,
+                           sizeof(MnemoHistFloorSnapEntry) * (new_cap - vm->mn_hist_floor_snaps_cap));
+                    vm->mn_hist_floor_snaps = ns;
+                    vm->mn_hist_floor_snaps_cap = new_cap;
+                }
                 MnemoHistFloorSnapEntry *ent =
                     &vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp];
                 ent->hist_len_floor = hv->stack_len;
@@ -670,6 +679,11 @@ void vm_free(VM *vm)
         vm->branch_trace = NULL;
         vm->branch_trace_cap = 0;
     }
+    if (vm->mn_hist_floor_snaps) {
+        free(vm->mn_hist_floor_snaps);
+        vm->mn_hist_floor_snaps = NULL;
+        vm->mn_hist_floor_snaps_cap = 0;
+    }
 }
 
 /* ======================================================================
@@ -789,6 +803,13 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm->branch_trace = (int *)calloc(VM_BRANCH_TRACE_INIT_CAP, sizeof(int));
     if (!vm->branch_trace) { fprintf(stderr, "VM branch_trace alloc failed\n"); free(vm->frames); free(ast); free(vm); return; }
     vm->branch_trace_cap = VM_BRANCH_TRACE_INIT_CAP;
+    vm->mn_hist_floor_snaps = (MnemoHistFloorSnapEntry *)calloc(
+        MNEMO_HIST_SNAP_INIT_CAP, sizeof(MnemoHistFloorSnapEntry));
+    if (!vm->mn_hist_floor_snaps) {
+        fprintf(stderr, "VM mn_hist_floor_snaps alloc failed\n");
+        free(vm->branch_trace); free(vm->frames); free(ast); free(vm); return;
+    }
+    vm->mn_hist_floor_snaps_cap = MNEMO_HIST_SNAP_INIT_CAP;
     vm_exec(vm, ast);
     if (dump_after)
         vm_dump(vm);

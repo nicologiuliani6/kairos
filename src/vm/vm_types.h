@@ -11,8 +11,10 @@
 
 #define uint     unsigned int
 
-/* Mnemo --opt-uncall-user-calls: vedere MnemoHistFloorSnapEntry sotto VAR_NAME_LENGTH. */
-#define MNEMO_HIST_SNAP_DEPTH 384
+/* Mnemo --opt-uncall-user-calls: vedere MnemoHistFloorSnapEntry sotto VAR_NAME_LENGTH.
+ * Capacità iniziale di vm->mn_hist_floor_snaps (heap, cresce raddoppiando
+ * via vm_ensure_hist_floor_snap_cap). Nessun hard cap. */
+#define MNEMO_HIST_SNAP_INIT_CAP 384
 
 typedef enum {
     TYPE_INT     = 0,
@@ -177,7 +179,8 @@ typedef struct {
     /* Vincolo pop: solo mentre si invierte la proc. UNCALL Mnemo (`inv_name`), non i figli invert_op_to_line. */
     char   mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH];
     char   mn_hist_floor_pop_guard_cur_inv_proc[VAR_NAME_LENGTH];
-    MnemoHistFloorSnapEntry mn_hist_floor_snaps[MNEMO_HIST_SNAP_DEPTH];
+    MnemoHistFloorSnapEntry *mn_hist_floor_snaps;
+    uint   mn_hist_floor_snaps_cap;
     int    mn_hist_floor_snap_sp;
     /* Fix P3 execution trace: attivato SOLO dentro opt-uncall pattern
      * Mnemo (delimitato da CALL __mn_hist_floor_snap … UNCALL match).
