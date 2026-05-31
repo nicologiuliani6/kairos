@@ -24,6 +24,8 @@ VM *g_current_vm = NULL;
 int g_vm_native_arith = 0;
 
 void vm_dump_active(VM *vm, const char *frame_name);  /* fwd: opcode DUMP (dump mid-run) */
+void vm_print_stats(VM *vm);          /* fwd: --vm-stats (def più sotto) */
+static int g_vm_stats_enabled;        /* tentative decl (def con =0 più sotto) */
 
 void vm_set_native_arith(int enabled)
 {
@@ -745,7 +747,12 @@ void vm_dump_active(VM *vm, const char *frame_name)
     /* get_findex: stesso indice usato da op_local per allocare le celle. */
     uint fi = get_findex(frame_name);
     vm_dump_frame(vm->frames[fi]);
-    vm->mn_dumped = 1;  /* salta il dump finale post-uncall (vuoto) */
+    /* Stats sullo stato forward (live cells qui, prima che uncall reverta/liberi).
+     * Stampate qui perché un uncall che fallisce (es. ssend) abortisce prima
+     * del vm_print_stats finale. */
+    if (g_vm_stats_enabled)
+        vm_print_stats(vm);
+    vm->mn_dumped = 1;  /* salta dump+stats finali post-uncall */
 }
 
 /* --vm-stats: post-execution stats su tutti gli int cell rimasti.
@@ -845,7 +852,8 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm_exec(vm, ast);
     if (dump_after && !vm->mn_dumped)
         vm_dump(vm);
-    vm_print_stats(vm);
+    if (!vm->mn_dumped)
+        vm_print_stats(vm);
     vm_free(vm);
     free(ast);
     free(vm);
