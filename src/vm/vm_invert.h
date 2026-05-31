@@ -1933,7 +1933,20 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             free(tmp_alloc[v]->value); free(tmp_alloc[v]); vm->frames[cfi]->vars[v] = NULL;
         }
 
-    memcpy(vm->frames[cfi]->vars, saved, sizeof(Var *) * MAX_VARS);
+    /* Restore SOLO gli slot param relinkati al caller (vedi 1525-1531).
+     * Il vecchio blanket `memcpy(vars, saved)` reinstaurava OGNI slot,
+     * inclusi quelli che il branch ha legittimamente liberato via op_delocal
+     * (op_local/op_delocal fanno free+realloc del Var): sotto la recursion
+     * annidata `exec_branch_inverse → invert_op_to_line → exec_branch_inverse`
+     * lo snapshot raw `saved[v]` puntava al Var dell'outer poi liberato dal
+     * branch interno → restore reinstaurava un puntatore freed → use-after-free
+     * al successivo op_local (SIGSEGV su loop annidati). Gli slot non-param
+     * vanno lasciati com'è il branch li ha lasciati (op_delocal li ha già
+     * messi a NULL; i tmp sono stati liberati sopra). */
+    for (int p = 0; p < vm->frames[cfi]->param_count; p++) {
+        int pidx = vm->frames[cfi]->param_indices[p];
+        vm->frames[cfi]->vars[pidx] = saved[pidx];
+    }
     vm->frames[cfi]->LocalVariables = saved_lv;
 }
 
