@@ -66,7 +66,7 @@ enum InvOpTag {
     INVOP_UNKNOWN = 0,
     INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP, INVOP_MNHALVE, INVOP_MNSPLIT32,
     INVOP_PUSH, INVOP_POP, INVOP_SSEND, INVOP_SRECV,
-    INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW,
+    INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW, INVOP_DUMP,
     INVOP_CALL, INVOP_UNCALL,
     INVOP_PAR_START, INVOP_PAR_END,
     INVOP_JMP, INVOP_JMPF, INVOP_EVAL, INVOP_LABEL, INVOP_ASSERT, INVOP_DECL,
@@ -105,6 +105,7 @@ static inline uint8_t classify_op(const char *fw)
         case 'D':
             if (!strcmp(fw, "DELOCAL")) return INVOP_DELOCAL;
             if (!strcmp(fw, "DECL"))    return INVOP_DECL;
+            if (!strcmp(fw, "DUMP"))    return INVOP_DUMP;
             break;
         case 'C': if (!strcmp(fw, "CALL"))   return INVOP_CALL;   break;
         case 'U': if (!strcmp(fw, "UNCALL")) return INVOP_UNCALL; break;
@@ -1391,6 +1392,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             case INVOP_LOCAL:   op_delocal   (vm, cur_frame); break;
             case INVOP_DELOCAL: op_local     (vm, cur_frame); break;
             case INVOP_SHOW:    /* no-op in inverse */ break;
+            case INVOP_DUMP:    /* no-op in inverse */ break;
             case INVOP_START: case INVOP_PARAM: case INVOP_LABEL:
             case INVOP_EVAL:  case INVOP_JMPF:  case INVOP_JMP:
             case INVOP_ASSERT: case INVOP_DECL: case INVOP_HALT:

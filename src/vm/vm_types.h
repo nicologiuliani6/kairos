@@ -175,6 +175,7 @@ typedef struct {
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
     int   inversion_depth;
     int   suppress_show; /* 1 durante vm_run_BT di replay (inverso di UNCALL): no op_show */
+    int   mn_dumped;     /* 1 = opcode DUMP (--check-invertibility) ha già stampato il dump mid-run: salta il dump finale post-uncall (vuoto) */
     int   show_char_pending; /* ultimo SHOW è stato show(x,char): il prossimo show classico prefissa \n */
     Var  *invert_hist_guard_var;   /* NULL = nessun vincolo pop su hist */
     size_t invert_hist_floor_min;

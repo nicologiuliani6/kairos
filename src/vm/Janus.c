@@ -23,6 +23,8 @@ VM *g_current_vm = NULL;
 /* 1 = esegui procedure Mnemo mul/div/bitwise in C O(1) (KAIROS_NATIVE_ARITH=1 / vm_set_native_arith). */
 int g_vm_native_arith = 0;
 
+void vm_dump_active(VM *vm, const char *frame_name);  /* fwd: opcode DUMP (dump mid-run) */
+
 void vm_set_native_arith(int enabled)
 {
     g_vm_native_arith = enabled ? 1 : 0;
@@ -496,6 +498,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
         else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
         else if (!strcmp(fw, "SHOW"))    op_show   (vm, fname);
+        else if (!strcmp(fw, "DUMP"))    vm_dump_active(vm, fname);
         else if (!strcmp(fw, "PUSHEQ"))  op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
@@ -697,30 +700,52 @@ void vm_free(VM *vm)
  *  vm_dump
  * ====================================================================== */
 
+/* Dump dei var di un singolo frame (senza header). */
+static void vm_dump_frame(Frame *f)
+{
+    if (!f) return;
+    for (int j = 0; j < f->var_count; j++) {
+        Var *v = f->vars[j]; if (!v) continue;
+        vm_printf("%s: ", v->name);
+        if (v->T == TYPE_INT) {
+            vm_printf("%lld", (long long)*(v->value));
+        } else {
+            vm_printf("[");
+            size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
+            int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
+            for (size_t k = 0; k < n; k++) {
+                vm_printf("%lld", (long long)arr[k]);
+                if (k + 1 < n) vm_printf(", ");
+            }
+            vm_printf("]");
+        }
+        vm_printf("\n");
+    }
+}
+
 void vm_dump(VM *vm)
 {
     vm_printf("=== VM dump ===\n");
     for (int i = 0; i <= vm->frame_top; i++) {
         Frame *f = vm->frames[i];
         if (strcmp(f->name, "main") != 0) continue;
-        for (int j = 0; j < f->var_count; j++) {
-            Var *v = f->vars[j]; if (!v) continue;
-            vm_printf("%s: ", v->name);
-            if (v->T == TYPE_INT) {
-                vm_printf("%lld", (long long)*(v->value));
-            } else {
-                vm_printf("[");
-                size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
-                int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
-                for (size_t k = 0; k < n; k++) {
-                    vm_printf("%lld", (long long)arr[k]);
-                    if (k + 1 < n) vm_printf(", ");
-                }
-                vm_printf("]");
-            }
-            vm_printf("\n");
-        }
+        vm_dump_frame(f);
     }
+}
+
+/* op `dump` (MNDUMP): dump dello stato del frame attivo a metà esecuzione.
+ * Usato da --check-invertibility: lo stato forward viene stampato PRIMA
+ * dell'uncall (che reverte tutto), così il dump esce sempre — anche se
+ * l'inverso fallisce (es. ssend/channel) o se l'uncall azzera la memoria.
+ * Soppresso durante il replay inverso (come op_show) per non duplicare. */
+void vm_dump_active(VM *vm, const char *frame_name)
+{
+    if (vm->suppress_show) return;
+    vm_printf("=== VM dump ===\n");
+    /* get_findex: stesso indice usato da op_local per allocare le celle. */
+    uint fi = get_findex(frame_name);
+    vm_dump_frame(vm->frames[fi]);
+    vm->mn_dumped = 1;  /* salta il dump finale post-uncall (vuoto) */
 }
 
 /* --vm-stats: post-execution stats su tutti gli int cell rimasti.
@@ -818,7 +843,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     }
     vm->mn_hist_floor_snaps_cap = MNEMO_HIST_SNAP_INIT_CAP;
     vm_exec(vm, ast);
-    if (dump_after)
+    if (dump_after && !vm->mn_dumped)
         vm_dump(vm);
     vm_print_stats(vm);
     vm_free(vm);
