@@ -1202,6 +1202,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
+            /* Output-primitive `__mn_put*` (putd/putx/puto + varianti): identità
+             * sullo stato (divmod self-uncalled, show no-op, locali delocal'd →
+             * net __mn_hist = 0). L'inverse del CALL è quindi un no-op CORRETTO.
+             * Saltarlo evita la ricorsione inversa non-terminante (struttura
+             * "1×THEN poi base ELSE" che il recursion_depth-replay non gestisce)
+             * → --check-invertibility funziona su programmi con printf. */
+            if (pn && strncmp(pn, "__mn_put", 8) == 0) { i--; continue; }
             char base_cur[VAR_NAME_LENGTH];
             strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
             base_cur[VAR_NAME_LENGTH - 1] = '\0';
