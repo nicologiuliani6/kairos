@@ -1592,6 +1592,25 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 if (ifs[k].assert_line >= to_line) continue;
                 if (cur == ifs[k].jmpf_else_line) { matched = k; break; }
             }
+            /* Dispatch SOLO IF immediatamente nel branch. Una else-if chain
+             * (`if C0 else if C1 else if C2 ...`) annida ogni IF nell'ELSE del
+             * precedente: C2,C3,... matchano il filtro (jmpf_else in span) ma
+             * sono enclosed dentro C1. La recursion del parent li gestisce già;
+             * dispatcharli anche qui = doppia inversione → hist sbilanciato
+             * (pop extra). Skip se enclosed da un altro nested IF dello span. */
+            if (matched >= 0) {
+                uint el = ifs[matched].jmpf_else_line;
+                for (int k = 0; k < nifs2; k++) {
+                    if (k == matched) continue;
+                    if (ifs[k].jmpf_else_line <= from_line) continue;
+                    if (ifs[k].assert_line >= to_line) continue;
+                    if ((el > ifs[k].jmpf_else_line && el < ifs[k].jmp_fi_line) ||
+                        (el > ifs[k].else_label_line && el < ifs[k].fi_label_line)) {
+                        matched = -1; break;
+                    }
+                }
+                if (matched < 0) { idx--; continue; }
+            }
             if (matched >= 0) {
                 do_eval_if_entry(vm, cfi, ifs[matched].eval_entry_id,
                                  ifs[matched].eval_entry_op, ifs[matched].eval_entry_val);
