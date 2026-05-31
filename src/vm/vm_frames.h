@@ -15,17 +15,27 @@
  */
 static inline void vm_ensure_frame_cap(VM *vm, uint needed)
 {
-    if (needed < vm->frames_cap) return;
-    uint new_cap = vm->frames_cap ? vm->frames_cap : VM_FRAMES_INIT_CAP;
-    while (new_cap <= needed) new_cap *= 2;
-    Frame *nf = (Frame *)realloc(vm->frames, sizeof(Frame) * new_cap);
-    if (!nf) {
-        fprintf(stderr, "[VM] vm_ensure_frame_cap: realloc(%u) fallita\n", new_cap);
-        exit(1);
+    /* Grow del pointer array vm->frames se needed >= cap. Ogni slot vuoto. */
+    if (needed >= vm->frames_cap) {
+        uint new_cap = vm->frames_cap ? vm->frames_cap : VM_FRAMES_INIT_CAP;
+        while (new_cap <= needed) new_cap *= 2;
+        Frame **nf = (Frame **)realloc(vm->frames, sizeof(Frame *) * new_cap);
+        if (!nf) {
+            fprintf(stderr, "[VM] vm_ensure_frame_cap: realloc(%u) fallita\n", new_cap);
+            exit(1);
+        }
+        memset(nf + vm->frames_cap, 0, sizeof(Frame *) * (new_cap - vm->frames_cap));
+        vm->frames = nf;
+        vm->frames_cap = new_cap;
     }
-    memset(nf + vm->frames_cap, 0, sizeof(Frame) * (new_cap - vm->frames_cap));
-    vm->frames = nf;
-    vm->frames_cap = new_cap;
+    /* Alloca Frame individuale per lo slot needed se ancora NULL. */
+    if (!vm->frames[needed]) {
+        vm->frames[needed] = (Frame *)calloc(1, sizeof(Frame));
+        if (!vm->frames[needed]) {
+            fprintf(stderr, "[VM] vm_ensure_frame_cap: calloc Frame fallita\n");
+            exit(1);
+        }
+    }
 }
 
 /* ======================================================================
@@ -35,8 +45,9 @@ static inline void vm_ensure_frame_cap(VM *vm, uint needed)
 static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const char *key)
 {
     vm_ensure_frame_cap(vm, clone_fi);
-    Frame *base  = &vm->frames[base_fi];
-    Frame *clone = &vm->frames[clone_fi];
+    vm_ensure_frame_cap(vm, base_fi);
+    Frame *base  = vm->frames[base_fi];
+    Frame *clone = vm->frames[clone_fi];
 
     memset(clone, 0, sizeof(Frame));
     clone->VarIndexer   = base->VarIndexer;

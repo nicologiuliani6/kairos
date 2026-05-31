@@ -57,9 +57,9 @@ static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok);
 
 static inline int64_t resolve_atom(VM *vm, uint fi, const char *s)
 {
-    int idx = char_id_map_lookup(&vm->frames[fi].VarIndexer, s);
+    int idx = char_id_map_lookup(&vm->frames[fi]->VarIndexer, s);
     if (idx >= 0) {
-        return *(vm->frames[fi].vars[idx]->value);
+        return *(vm->frames[fi]->vars[idx]->value);
     }
     /* strtoull preserva bit-pattern per costanti unsigned > 2^63 (es. 0x8...
      * stored come 0x8000000000000000 = INT64_MIN). strtoll saturerebbe a
@@ -149,14 +149,14 @@ static inline void read_rest_of_expr(char *out, size_t outsz)
 
 static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op)
 {
-    int idx = char_id_map_lookup(&vm->frames[fi].VarIndexer, name);
+    int idx = char_id_map_lookup(&vm->frames[fi]->VarIndexer, name);
     if (idx < 0) {
         vm_debug_panic("[VM] %s: variabile '%s' non definita!\n", op, name);
     }
-    if (!vm->frames[fi].vars[idx]) {
+    if (!vm->frames[fi]->vars[idx]) {
         vm_debug_panic("[VM] %s: variabile '%s' è NULL\n", op, name);
     }
-    return vm->frames[fi].vars[idx];
+    return vm->frames[fi]->vars[idx];
 }
 
 static inline char *go_to_line(char *buf, uint line)

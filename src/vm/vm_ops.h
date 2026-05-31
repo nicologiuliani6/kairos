@@ -189,7 +189,7 @@ static inline void op_push(VM *vm, const char *frame_name)
     uint fi  = get_findex(frame_name);
     int64_t val;
 
-    if (char_id_map_exists(&vm->frames[fi].VarIndexer, C_val)) {
+    if (char_id_map_exists(&vm->frames[fi]->VarIndexer, C_val)) {
         Var *src = get_var(vm, fi, C_val, "PUSH");
         var_par_mut_acquire(src);
         val = *(src->value);
@@ -199,11 +199,11 @@ static inline void op_push(VM *vm, const char *frame_name)
         val = (int64_t)strtoull(C_val, NULL, 10);
     }
 
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, C_stack))
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, C_stack))
         vm_debug_panic("[VM] PUSH: stack destinazione non trovato!\n");
 
-    uint  si = char_id_map_get(&vm->frames[fi].VarIndexer, C_stack);
-    Var  *sv = vm->frames[fi].vars[si];
+    uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
+    Var  *sv = vm->frames[fi]->vars[si];
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] PUSH: destinazione '%s' non e' stack/channel (T=%d) frame=%s\n",
             C_stack, sv->T, frame_name);
@@ -231,11 +231,11 @@ static inline void op_pop(VM *vm, const char *frame_name)
     if (strtok(NULL, " \t")) vm_debug_panic("[VM] POP: troppi parametri!\n");
 
     uint fi = get_findex(frame_name);
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, C_stack))
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, C_stack))
         vm_debug_panic("[VM] POP: stack non trovato!\n");
 
-    uint  si = char_id_map_get(&vm->frames[fi].VarIndexer, C_stack);
-    Var  *sv = vm->frames[fi].vars[si];
+    uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
+    Var  *sv = vm->frames[fi]->vars[si];
 
     if (vm->inversion_depth > 0) {
         strncpy(vm->mn_hist_floor_pop_guard_cur_inv_proc, frame_name, VAR_NAME_LENGTH - 1);
@@ -320,10 +320,10 @@ static inline void op_ssend(VM *vm, const char *frame_name)
     int payload_count = ntok - 1;
     uint fi = get_findex(frame_name);
 
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, ch_name))
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, ch_name))
         vm_debug_panic("[VM] SSEND: canale non trovato!\n");
-    uint chi = char_id_map_get(&vm->frames[fi].VarIndexer, ch_name);
-    Var *chv = vm->frames[fi].vars[chi];
+    uint chi = char_id_map_get(&vm->frames[fi]->VarIndexer, ch_name);
+    Var *chv = vm->frames[fi]->vars[chi];
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SSEND: destinazione non è channel!\n");
 
@@ -345,7 +345,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
 
     for (int i = 0; i < payload_count; i++) {
         char *src_tok = tokv[i];
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, src_tok)) {
+        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, src_tok)) {
             Var *src = get_var(vm, fi, src_tok, "SSEND");
             if (src == chv) {
                 free(encoded);
@@ -468,10 +468,10 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     int recv_count = ntok - 1;
     uint fi = get_findex(frame_name);
 
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, ch_name))
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, ch_name))
         vm_debug_panic("[VM] SRECV: channel non trovato!\n");
-    uint chi = char_id_map_get(&vm->frames[fi].VarIndexer, ch_name);
-    Var *chv = vm->frames[fi].vars[chi];
+    uint chi = char_id_map_get(&vm->frames[fi]->VarIndexer, ch_name);
+    Var *chv = vm->frames[fi]->vars[chi];
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
 
@@ -880,10 +880,10 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
 {
     char *lbl    = strtok(NULL, " \t");
     uint  fi     = get_findex(fname);
-    uint  li     = char_id_map_get(&vm->frames[fi].LabelIndexer, lbl);
-    char *newptr = go_to_line(buf, vm->frames[fi].label[li] + 1);
+    uint  li     = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);
+    char *newptr = go_to_line(buf, vm->frames[fi]->label[li] + 1);
     if (!newptr) vm_debug_panic("[VM] JMP: label '%s' non trovata (frame='%s' fi=%u li=%u line=%u)!\n",
-                                lbl ? lbl : "(null)", fname, fi, li, vm->frames[fi].label[li]);
+                                lbl ? lbl : "(null)", fname, fi, li, vm->frames[fi]->label[li]);
     return newptr;
 }
 
@@ -924,9 +924,9 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
 
     if (thread_val_IF) return NULL;
     uint fi = get_findex(fname);
-    if (!char_id_map_exists(&vm->frames[fi].LabelIndexer, lbl)) vm_debug_panic("EXIT_FAILURE");
-    uint  li     = char_id_map_get(&vm->frames[fi].LabelIndexer, lbl);
-    char *newptr = go_to_line(buf, vm->frames[fi].label[li] + 1);
+    if (!char_id_map_exists(&vm->frames[fi]->LabelIndexer, lbl)) vm_debug_panic("EXIT_FAILURE");
+    uint  li     = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);
+    char *newptr = go_to_line(buf, vm->frames[fi]->label[li] + 1);
     if (!newptr) vm_debug_panic("[VM] JMPF: label non trovata!\n");
     return newptr;
 }
@@ -943,22 +943,22 @@ static inline void op_local(VM *vm, const char *frame_name)
     uint  fi    = get_findex(frame_name);
 
     pthread_mutex_lock(&var_indexer_mtx);
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
+    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
     pthread_mutex_unlock(&var_indexer_mtx);
 
     /* Se vm_exec ha già allocato questa variabile tramite DECL, la
        liberiamo: LOCAL è l'allocazione runtime autorevole. */
-    if (vm->frames[fi].vars[vi])
-        delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count, (int)vi);
+    if (vm->frames[fi]->vars[vi])
+        delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
 
-    vm->frames[fi].vars[vi] = malloc(sizeof(Var));
-    if (!vm->frames[fi].vars[vi]) vm_debug_panic("[VM] LOCAL: malloc fallita\n");
-    alloc_var(vm->frames[fi].vars[vi], Vtype, Vname);
+    vm->frames[fi]->vars[vi] = malloc(sizeof(Var));
+    if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: malloc fallita\n");
+    alloc_var(vm->frames[fi]->vars[vi], Vtype, Vname);
 
-    if (vi >= (uint)vm->frames[fi].var_count)
-        vm->frames[fi].var_count = vi + 1;
+    if (vi >= (uint)vm->frames[fi]->var_count)
+        vm->frames[fi]->var_count = vi + 1;
 
-    Var *dst = vm->frames[fi].vars[vi];
+    Var *dst = vm->frames[fi]->vars[vi];
 
     if (dst->T == TYPE_CHANNEL && vm->inversion_depth > 0) {
         Channel *restored = channel_restore_pop(frame_name, Vname);
@@ -970,9 +970,9 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     }
 
-    if (c_val && char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
-        uint  si  = char_id_map_get(&vm->frames[fi].VarIndexer, c_val);
-        Var  *src = vm->frames[fi].vars[si];
+    if (c_val && char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val)) {
+        uint  si  = char_id_map_get(&vm->frames[fi]->VarIndexer, c_val);
+        Var  *src = vm->frames[fi]->vars[si];
         if (!src) vm_debug_panic("[VM] LOCAL: sorgente NULL\n");
         if (src->T == TYPE_INT)
             *(dst->value) = *(src->value);
@@ -991,7 +991,7 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     }
 
-    stack_push(&vm->frames[fi].LocalVariables, dst);
+    stack_push(&vm->frames[fi]->LocalVariables, dst);
 }
 
 static inline void op_delocal(VM *vm, const char *frame_name)
@@ -1004,7 +1004,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     /* ── 1. Valore atteso ── */
     int64_t Vvalue = 0;
     if (c_val) {
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, c_val)) {
+        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val)) {
             Vvalue = resolve_value(vm, fi, c_val);
         } else {
             Vvalue = (int64_t)strtoull(c_val, NULL, 10);
@@ -1012,7 +1012,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     }
 
     /* ── 2. Pop ── */
-    Var *V = stack_pop(&vm->frames[fi].LocalVariables);
+    Var *V = stack_pop(&vm->frames[fi]->LocalVariables);
 
     /* ── 3. Ordine LIFO ── */
     if (strcmp(V->name, Vname) != 0) {
@@ -1074,7 +1074,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     /* ── 6. Distruggi ── */
     pthread_mutex_lock(&var_indexer_mtx);
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, Vname);
+    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
     pthread_mutex_unlock(&var_indexer_mtx);
 
     if (V->T == TYPE_CHANNEL && vm->inversion_depth == 0) {
@@ -1089,7 +1089,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
             channel_restore_push(frame_name, Vname, V->channel);
     }
 
-    delete_var(vm->frames[fi].vars, &vm->frames[fi].var_count, (int)vi);
+    delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
 }
 
 #endif /* VM_OPS_H */

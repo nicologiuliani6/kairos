@@ -179,7 +179,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     } \
 } while (0)
     uint  si  = char_id_map_get(&FrameIndexer, fname);
-    char *ptr = go_to_line(orig, vm->frames[si].addr + 1);
+    char *ptr = go_to_line(orig, vm->frames[si]->addr + 1);
     if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); free(cs); free(orig); return; }
 
     while (*ptr) {
@@ -199,7 +199,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
         if (!strcmp(fw, "END_PROC")) {
             uint fi = get_findex(fname);
-            if (stack_size(&vm->frames[fi].LocalVariables) > -1) {
+            if (stack_size(&vm->frames[fi]->LocalVariables) > -1) {
                 #ifdef MNEMO_AGENT_LOG
                 {
                     FILE *_ep = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
@@ -208,7 +208,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                                 "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"H\",\"location\":\"end_proc\","
                                 "\"message\":\"open_locals\",\"data\":{\"frame\":\"%s\",\"loc_sz\":%d},"
                                 "\"timestamp\":%lld}\n",
-                                fname, stack_size(&vm->frames[fi].LocalVariables),
+                                fname, stack_size(&vm->frames[fi]->LocalVariables),
                                 (long long)time(NULL) * 1000);
                         fclose(_ep);
                     }
@@ -220,8 +220,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             if (cs_top >= 0) {
                 int cfi = cs[cs_top].callee_findex;
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
-                    vm->frames[cfi].vars[vm->frames[cfi].param_indices[k]] = cs[cs_top].saved_params[k];
-                vm->frames[cfi].LocalVariables = cs[cs_top].saved_local_vars;
+                    vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] = cs[cs_top].saved_params[k];
+                vm->frames[cfi]->LocalVariables = cs[cs_top].saved_local_vars;
                 /* Non liberare i Var PARAM dei cloni ricorsivi qui: sono guscio allocato
                  * in init_clone_frame; free() tra restore e ripresa del chiamante può
                  * corrompere l'heap o interferire con alias ancora attivi. vm_free() a
@@ -241,8 +241,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 char *hn = strtok(NULL, " \t");
                 if (!hn) vm_debug_panic("[VM] __mn_hist_floor_snap: manca stack\n");
                 uint  cfi_snap = get_findex(fname);
-                uint  si = char_id_map_get(&vm->frames[cfi_snap].VarIndexer, hn);
-                Var  *hv = vm->frames[cfi_snap].vars[si];
+                uint  si = char_id_map_get(&vm->frames[cfi_snap]->VarIndexer, hn);
+                Var  *hv = vm->frames[cfi_snap]->vars[si];
                 if (!hv || hv->T != TYPE_STACK)
                     vm_debug_panic("[VM] __mn_hist_floor_snap: non stack\n");
                 if ((uint)vm->mn_hist_floor_snap_sp >= vm->mn_hist_floor_snaps_cap) {
@@ -287,7 +287,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     cd = atoi(at2 + 1);
                 else {
                     uint cur_fi = get_findex(fname);
-                    cd          = vm->frames[cur_fi].recursion_depth;
+                    cd          = vm->frames[cur_fi]->recursion_depth;
                 }
                 new_depth = cd + 1;
             }
@@ -302,31 +302,31 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             cs[cs_top].callee_findex      = cfi;
             strncpy(cs[cs_top].caller_frame, fname, VAR_NAME_LENGTH - 1);
             cs[cs_top].caller_frame[VAR_NAME_LENGTH - 1] = '\0';
-            int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
+            int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
             cs[cs_top].saved_param_count = pc;
-            cs[cs_top].saved_local_vars  = vm->frames[cfi].LocalVariables;
-            stack_init(&vm->frames[cfi].LocalVariables);
-            for (int k = 0; k < pc; k++) cs[cs_top].saved_params[k] = vm->frames[cfi].vars[pi[k]];
+            cs[cs_top].saved_local_vars  = vm->frames[cfi]->LocalVariables;
+            stack_init(&vm->frames[cfi]->LocalVariables);
+            for (int k = 0; k < pc; k++) cs[cs_top].saved_params[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
-                if (!char_id_map_exists(&vm->frames[cfi_cur].VarIndexer, p))
+                if (!char_id_map_exists(&vm->frames[cfi_cur]->VarIndexer, p))
                     { vm_debug_panic("[VM] CALL: '%s' non def\n", p);}
-                int src = char_id_map_get(&vm->frames[cfi_cur].VarIndexer, p);
-                if (!vm->frames[cfi_cur].vars[src])
+                int src = char_id_map_get(&vm->frames[cfi_cur]->VarIndexer, p);
+                if (!vm->frames[cfi_cur]->vars[src])
                     { vm_debug_panic("[VM] CALL: '%s' NULL\n", p);}
-                vm->frames[cfi].vars[pi[ii++]] = vm->frames[cfi_cur].vars[src];
+                vm->frames[cfi]->vars[pi[ii++]] = vm->frames[cfi_cur]->vars[src];
             }
             if (ii != pc) { 
                 vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn); 
             }
             if (is_rec) {
-                vm->frames[cfi].recursion_depth = new_depth;
+                vm->frames[cfi]->recursion_depth = new_depth;
                 /* invert_op_to_line spesso riceve solo il nome base (UNCALL): il frame
                  * template deve riflettere la profondità corrente. Nei worker PAR non
                  * aggiorniamo il template condiviso (altri thread / altre proc). */
                 if (!current_thread_args) {
                     uint bfi = char_id_map_get(&FrameIndexer, pn);
-                    vm->frames[bfi].recursion_depth = new_depth;
+                    vm->frames[bfi]->recursion_depth = new_depth;
                 }
             }
             /* Fix P3 trace: push trace_top corrente sullo stack del clone.
@@ -340,9 +340,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 char *pb_at2 = strchr(p_base, '@');
                 if (pb_at2) *pb_at2 = '\0';
                 if (!strcmp(p_base, vm->branch_trace_proc)) {
-                    if (vm->frames[cfi].trace_window_top >= VM_TRACE_WIN_STACK_MAX)
+                    if (vm->frames[cfi]->trace_window_top >= VM_TRACE_WIN_STACK_MAX)
                         vm_debug_panic("[VM] trace_window_stack overflow\n");
-                    vm->frames[cfi].trace_window_stack[vm->frames[cfi].trace_window_top++] =
+                    vm->frames[cfi]->trace_window_stack[vm->frames[cfi]->trace_window_top++] =
                         vm->branch_trace_top;
                 }
             }
@@ -364,9 +364,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             fname[VAR_NAME_LENGTH - 1] = '\0';
             if (pn && mn_native_arith_call_forward(vm, pn, cfi)) {
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
-                    vm->frames[cfi].vars[vm->frames[cfi].param_indices[k]] =
+                    vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] =
                         cs[cs_top].saved_params[k];
-                vm->frames[cfi].LocalVariables = cs[cs_top].saved_local_vars;
+                vm->frames[cfi]->LocalVariables = cs[cs_top].saved_local_vars;
                 ptr = cs[cs_top].return_ptr;
                 strncpy(fname, cs[cs_top].caller_frame, VAR_NAME_LENGTH - 1);
                 fname[VAR_NAME_LENGTH - 1] = '\0';
@@ -374,7 +374,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 *nl = '\n';
                 continue;
             }
-            ptr = go_to_line(orig, vm->frames[cfi].addr + 1);
+            ptr = go_to_line(orig, vm->frames[cfi]->addr + 1);
             if (!ptr) vm_debug_panic("[VM] CALL: indirizzo non trovato!\n");
             continue;
         }
@@ -385,20 +385,20 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             uint  cfi = current_thread_args ? clone_frame_for_thread(vm, pn)
                                             : char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
-            int   pc  = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var  *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
-            Stack slv = vm->frames[cfi].LocalVariables;
-            stack_init(&vm->frames[cfi].LocalVariables);
+            int   pc  = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
+            Var  *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+            Stack slv = vm->frames[cfi]->LocalVariables;
+            stack_init(&vm->frames[cfi]->LocalVariables);
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
-                int src = char_id_map_get(&vm->frames[curi].VarIndexer, p);
-                vm->frames[cfi].vars[pi[ii++]] = vm->frames[curi].vars[src];
+                int src = char_id_map_get(&vm->frames[curi]->VarIndexer, p);
+                vm->frames[cfi]->vars[pi[ii++]] = vm->frames[curi]->vars[src];
             }
             if (ii != pc) {
                 vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn);
             }
             VMLOG("[UNCALL] param linkati: %d, end_addr=%u addr=%u\n",
-                    ii, vm->frames[cfi].end_addr, vm->frames[cfi].addr);
+                    ii, vm->frames[cfi]->end_addr, vm->frames[cfi]->addr);
             char inv_name[VAR_NAME_LENGTH];
             if (current_thread_args)
                 make_thread_frame_key(pn, inv_name, sizeof(inv_name));
@@ -408,7 +408,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             Var *histv = NULL;
             for (int hk = 0; hk < pc; hk++) {
-                Var *cv = vm->frames[cfi].vars[pi[hk]];
+                Var *cv = vm->frames[cfi]->vars[pi[hk]];
                 if (cv && cv->T == TYPE_STACK) {
                     histv = cv;
                     break;
@@ -434,21 +434,21 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
              * trace_window_start corrente. Cursor reset = 0. Copia anche
              * sul BASE frame perché invert_op_to_line riceve frame_name
              * base e get_findex(base) → base fi. */
-            if (vm->branch_trace_active > 0 && vm->frames[cfi].trace_window_top > 0) {
-                int win = vm->frames[cfi].trace_window_stack[--vm->frames[cfi].trace_window_top];
-                vm->frames[cfi].trace_window_start = win;
-                vm->frames[cfi].trace_window_cursor = 0;
+            if (vm->branch_trace_active > 0 && vm->frames[cfi]->trace_window_top > 0) {
+                int win = vm->frames[cfi]->trace_window_stack[--vm->frames[cfi]->trace_window_top];
+                vm->frames[cfi]->trace_window_start = win;
+                vm->frames[cfi]->trace_window_cursor = 0;
                 uint base_fi_t = char_id_map_get(&FrameIndexer, pn);
-                vm->frames[base_fi_t].trace_window_start = win;
-                vm->frames[base_fi_t].trace_window_cursor = 0;
+                vm->frames[base_fi_t]->trace_window_start = win;
+                vm->frames[base_fi_t]->trace_window_cursor = 0;
             }
             /* Restore '\n' su orig prima del recursive scan: invert_op_to_line ->
                collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
                ancora attivo qui la scan si fermerebbe prematuramente. */
             *nl = '\n';
             if (!pn || !mn_native_arith_uncall_inverse(vm, pn, cfi))
-                invert_op_to_line(vm, inv_name, orig, vm->frames[cfi].end_addr - 1,
-                                  vm->frames[cfi].addr + 1, 1);
+                invert_op_to_line(vm, inv_name, orig, vm->frames[cfi]->end_addr - 1,
+                                  vm->frames[cfi]->addr + 1, 1);
             vm->invert_hist_guard_var = NULL;
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
@@ -482,8 +482,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 pthread_mutex_unlock(&var_indexer_mtx);
             }
             VMLOG("[UNCALL] invert_op_to_line completata\n");
-            for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
-            vm->frames[cfi].LocalVariables = slv;
+            for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
+            vm->frames[cfi]->LocalVariables = slv;
             ptr = nl + 1; continue;
         }
         else if (!strcmp(fw, "PAR_START")) {
@@ -567,49 +567,49 @@ void vm_exec(VM *vm, char *buffer)
                 uint  idx  = char_id_map_get(&FrameIndexer, name);
                 vm_ensure_frame_cap(vm, idx);
                 vm->frame_top = idx;
-                char_id_map_init(&vm->frames[idx].VarIndexer);
-                stack_init(&vm->frames[idx].LocalVariables);
-                strncpy(vm->frames[idx].name, name, VAR_NAME_LENGTH - 1);
-                vm->frames[idx].addr = line;
+                char_id_map_init(&vm->frames[idx]->VarIndexer);
+                stack_init(&vm->frames[idx]->LocalVariables);
+                strncpy(vm->frames[idx]->name, name, VAR_NAME_LENGTH - 1);
+                vm->frames[idx]->addr = line;
                 VMLOG("[EXEC] PROC '%s' addr=%u\n", name, line);
 
             } else if (!strcmp(fw, "END_PROC")) {
                 char *name = strtok(NULL, " \t");
-                vm->frames[vm->frame_top].end_addr = line;
+                vm->frames[vm->frame_top]->end_addr = line;
                 VMLOG("[EXEC] END_PROC '%s' addr=%u end_addr=%u\n",
                     name,
-                    vm->frames[vm->frame_top].addr,
-                    vm->frames[vm->frame_top].end_addr);
+                    vm->frames[vm->frame_top]->addr,
+                    vm->frames[vm->frame_top]->end_addr);
                 if (!strcmp(name, "main"))
                     vm_run_BT(vm, orig, "main");
 
             } else if (!strcmp(fw, "DECL")) {
                 char *type = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
-                int   vi   = char_id_map_get(&vm->frames[vm->frame_top].VarIndexer, vn);
-                if (vm->frames[vm->frame_top].vars[vi]) vm_debug_panic("[VM] Variabile già definita!\n");
-                vm->frames[vm->frame_top].vars[vi] = malloc(sizeof(Var));
-                alloc_var(vm->frames[vm->frame_top].vars[vi], type, vn);
-                vm->frames[vm->frame_top].vars[vi]->is_local = 0;
-                if (vi >= vm->frames[vm->frame_top].var_count)
-                    vm->frames[vm->frame_top].var_count = vi + 1;
+                int   vi   = char_id_map_get(&vm->frames[vm->frame_top]->VarIndexer, vn);
+                if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] Variabile già definita!\n");
+                vm->frames[vm->frame_top]->vars[vi] = malloc(sizeof(Var));
+                alloc_var(vm->frames[vm->frame_top]->vars[vi], type, vn);
+                vm->frames[vm->frame_top]->vars[vi]->is_local = 0;
+                if (vi >= vm->frames[vm->frame_top]->var_count)
+                    vm->frames[vm->frame_top]->var_count = vi + 1;
 
             } else if (!strcmp(fw, "PARAM")) {
                 char *vtype = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
-                int   vi    = char_id_map_get(&vm->frames[vm->frame_top].VarIndexer, vn);
-                if (vm->frames[vm->frame_top].vars[vi]) vm_debug_panic("[VM] PARAM già definito!\n");
-                vm->frames[vm->frame_top].vars[vi]          = calloc(1, sizeof(Var));
-                vm->frames[vm->frame_top].vars[vi]->T        = TYPE_PARAM;
-                vm->frames[vm->frame_top].vars[vi]->is_local = 0;
-                strncpy(vm->frames[vm->frame_top].vars[vi]->name, vn, VAR_NAME_LENGTH - 1);
+                int   vi    = char_id_map_get(&vm->frames[vm->frame_top]->VarIndexer, vn);
+                if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] PARAM già definito!\n");
+                vm->frames[vm->frame_top]->vars[vi]          = calloc(1, sizeof(Var));
+                vm->frames[vm->frame_top]->vars[vi]->T        = TYPE_PARAM;
+                vm->frames[vm->frame_top]->vars[vi]->is_local = 0;
+                strncpy(vm->frames[vm->frame_top]->vars[vi]->name, vn, VAR_NAME_LENGTH - 1);
                 (void)vtype;
-                if (vi >= vm->frames[vm->frame_top].var_count)
-                    vm->frames[vm->frame_top].var_count = vi + 1;
-                vm->frames[vm->frame_top].param_indices[vm->frames[vm->frame_top].param_count++] = vi;
+                if (vi >= vm->frames[vm->frame_top]->var_count)
+                    vm->frames[vm->frame_top]->var_count = vi + 1;
+                vm->frames[vm->frame_top]->param_indices[vm->frames[vm->frame_top]->param_count++] = vi;
 
             } else if (!strcmp(fw, "LABEL")) {
                 char *ln = strtok(NULL, " \t");
-                uint  li = char_id_map_get(&vm->frames[vm->frame_top].LabelIndexer, ln);
-                vm->frames[vm->frame_top].label[li] = line;
+                uint  li = char_id_map_get(&vm->frames[vm->frame_top]->LabelIndexer, ln);
+                vm->frames[vm->frame_top]->label[li] = line;
 
             } else if (!strcmp(fw, "HALT")) { /* nop */
             }
@@ -632,7 +632,8 @@ void vm_free(VM *vm)
     if (!freed) return;
     int freed_count = 0;
     for (int i = 0; i <= vm->frame_top; i++) {
-        Frame *f = &vm->frames[i];
+        Frame *f = vm->frames[i];
+        if (!f) continue;
         for (int j = 0; j < f->var_count; j++) {
             Var *v = f->vars[j];
             if (v) {
@@ -670,6 +671,12 @@ void vm_free(VM *vm)
     }
     free(freed);
     if (vm->frames) {
+        for (uint i = 0; i < vm->frames_cap; i++) {
+            if (vm->frames[i]) {
+                free(vm->frames[i]);
+                vm->frames[i] = NULL;
+            }
+        }
         free(vm->frames);
         vm->frames = NULL;
         vm->frames_cap = 0;
@@ -694,7 +701,7 @@ void vm_dump(VM *vm)
 {
     vm_printf("=== VM dump ===\n");
     for (int i = 0; i <= vm->frame_top; i++) {
-        Frame *f = &vm->frames[i];
+        Frame *f = vm->frames[i];
         if (strcmp(f->name, "main") != 0) continue;
         for (int j = 0; j < f->var_count; j++) {
             Var *v = f->vars[j]; if (!v) continue;
@@ -734,7 +741,7 @@ static uint64_t vm_count_live_cells(VM *vm)
 {
     uint64_t count = 0;
     for (int i = 0; i <= vm->frame_top; i++) {
-        Frame *f = &vm->frames[i];
+        Frame *f = vm->frames[i];
         for (int j = 0; j < f->var_count; j++) {
             Var *v = f->vars[j]; if (!v) continue;
             if (v->T == TYPE_INT) count++;
@@ -797,7 +804,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     if (!vm) { fprintf(stderr, "VM alloc failed\n"); free(ast); return; }
     vm->dbg = NULL;
     /* Init frames dinamico (cresce on-demand via vm_ensure_frame_cap). */
-    vm->frames = (Frame *)calloc(VM_FRAMES_INIT_CAP, sizeof(Frame));
+    vm->frames = (Frame **)calloc(VM_FRAMES_INIT_CAP, sizeof(Frame *));
     if (!vm->frames) { fprintf(stderr, "VM frames alloc failed\n"); free(ast); free(vm); return; }
     vm->frames_cap = VM_FRAMES_INIT_CAP;
     vm->branch_trace = (int *)calloc(VM_BRANCH_TRACE_INIT_CAP, sizeof(int));

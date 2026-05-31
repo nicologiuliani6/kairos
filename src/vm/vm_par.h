@@ -247,29 +247,29 @@ static void *thread_entry(void *arg)
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
             uint cfi = clone_frame_for_thread(vm, pn);
-            int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
-            Stack slv = vm->frames[cfi].LocalVariables; stack_init(&vm->frames[cfi].LocalVariables);
+            int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
+            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+            Stack slv = vm->frames[cfi]->LocalVariables; stack_init(&vm->frames[cfi]->LocalVariables);
             char thread_key[VAR_NAME_LENGTH]; make_thread_frame_key(pn, thread_key, sizeof(thread_key));
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
-                int si = char_id_map_get(&vm->frames[cfi_cur].VarIndexer, p);
-                vm->frames[cfi].vars[pi[ii++]] = vm->frames[cfi_cur].vars[si];
+                int si = char_id_map_get(&vm->frames[cfi_cur]->VarIndexer, p);
+                vm->frames[cfi]->vars[pi[ii++]] = vm->frames[cfi_cur]->vars[si];
             }
             /* Restore '\n' before any recursive scan on args->buffer (collect_ifs /
                vm_run_BT scan it line-by-line; an active '\0' would short-circuit strchr). */
             *nl = '\n';
             if (do_invert)
                 invert_op_to_line(vm, thread_key, args->buffer,
-                                  vm->frames[cfi].end_addr - 1, vm->frames[cfi].addr + 1, 1);
+                                  vm->frames[cfi]->end_addr - 1, vm->frames[cfi]->addr + 1, 1);
             else {
                 int ss = vm->suppress_show;
                 if (args->is_inverse) vm->suppress_show = 1;
                 vm_run_BT(vm, args->buffer, thread_key);
                 vm->suppress_show = ss;
             }
-            for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
-            vm->frames[cfi].LocalVariables = slv;
+            for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
+            vm->frames[cfi]->LocalVariables = slv;
         }
         else if (!strcmp(fw, "START") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }

@@ -14,7 +14,7 @@ extern int g_vm_native_arith;
 static inline int64_t *mn_formal_int(VM *vm, uint cfi, const char *formal)
 {
     char proc[VAR_NAME_LENGTH];
-    strncpy(proc, vm->frames[cfi].name, sizeof(proc) - 1);
+    strncpy(proc, vm->frames[cfi]->name, sizeof(proc) - 1);
     proc[sizeof(proc) - 1] = '\0';
     char *at = strchr(proc, '@');
     if (at)
@@ -22,14 +22,14 @@ static inline int64_t *mn_formal_int(VM *vm, uint cfi, const char *formal)
     if (!char_id_map_exists(&FrameIndexer, proc))
         return NULL;
     uint bfi = char_id_map_get(&FrameIndexer, proc);
-    if (!char_id_map_exists(&vm->frames[bfi].VarIndexer, formal))
+    if (!char_id_map_exists(&vm->frames[bfi]->VarIndexer, formal))
         return NULL;
-    int formal_vi = char_id_map_get(&vm->frames[bfi].VarIndexer, formal);
-    for (int k = 0; k < vm->frames[cfi].param_count; k++) {
-        if (vm->frames[bfi].param_indices[k] != formal_vi)
+    int formal_vi = char_id_map_get(&vm->frames[bfi]->VarIndexer, formal);
+    for (int k = 0; k < vm->frames[cfi]->param_count; k++) {
+        if (vm->frames[bfi]->param_indices[k] != formal_vi)
             continue;
-        int live_vi = vm->frames[cfi].param_indices[k];
-        Var *v      = vm->frames[cfi].vars[live_vi];
+        int live_vi = vm->frames[cfi]->param_indices[k];
+        Var *v      = vm->frames[cfi]->vars[live_vi];
         if (!v || (v->T != TYPE_INT && v->T != TYPE_PARAM))
             return NULL;
         return v->value;
@@ -40,7 +40,7 @@ static inline int64_t *mn_formal_int(VM *vm, uint cfi, const char *formal)
 static inline Var *mn_formal_stack(VM *vm, uint cfi, const char *formal)
 {
     char proc[VAR_NAME_LENGTH];
-    strncpy(proc, vm->frames[cfi].name, sizeof(proc) - 1);
+    strncpy(proc, vm->frames[cfi]->name, sizeof(proc) - 1);
     proc[sizeof(proc) - 1] = '\0';
     char *at = strchr(proc, '@');
     if (at)
@@ -48,13 +48,13 @@ static inline Var *mn_formal_stack(VM *vm, uint cfi, const char *formal)
     if (!char_id_map_exists(&FrameIndexer, proc))
         return NULL;
     uint bfi = char_id_map_get(&FrameIndexer, proc);
-    if (!char_id_map_exists(&vm->frames[bfi].VarIndexer, formal))
+    if (!char_id_map_exists(&vm->frames[bfi]->VarIndexer, formal))
         return NULL;
-    int formal_vi = char_id_map_get(&vm->frames[bfi].VarIndexer, formal);
-    for (int k = 0; k < vm->frames[cfi].param_count; k++) {
-        if (vm->frames[bfi].param_indices[k] != formal_vi)
+    int formal_vi = char_id_map_get(&vm->frames[bfi]->VarIndexer, formal);
+    for (int k = 0; k < vm->frames[cfi]->param_count; k++) {
+        if (vm->frames[bfi]->param_indices[k] != formal_vi)
             continue;
-        Var *v = vm->frames[cfi].vars[vm->frames[cfi].param_indices[k]];
+        Var *v = vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]];
         if (!v || v->T != TYPE_STACK)
             return NULL;
         return v;

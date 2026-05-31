@@ -150,7 +150,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
     char *at = strchr(base, '@'); if (at) *at = '\0';
     uint fi = char_id_map_get(&FrameIndexer, base);
-    char *ptr = go_to_line(buf, vm->frames[fi].addr + 1);
+    char *ptr = go_to_line(buf, vm->frames[fi]->addr + 1);
     int n = 0;
     /* Stack di loop aperti per UID. Layout Kairos:
      *   LOCAL → EVAL → JMPF FROM_ERR_<UID> → LABEL FROM_START_<UID> → body
@@ -259,7 +259,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
     char *at = strchr(base, '@'); if (at) *at = '\0';
     uint fi = char_id_map_get(&FrameIndexer, base);
-    char *ptr = go_to_line(buf, vm->frames[fi].addr + 1);
+    char *ptr = go_to_line(buf, vm->frames[fi]->addr + 1);
     int n = 0;
 
     /* Stack di IF aperti — match label per uid (ELSE_<uid>, FI_<uid>) per gestire
@@ -526,8 +526,8 @@ static inline int lp_row_first_eval_at_line(uint line, char **lp, uint *ln, int 
 static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
                            const char *val)
 {
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
-    int64_t lval = *(vm->frames[fi].vars[vi]->value);
+    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, id);
+    int64_t lval = *(vm->frames[fi]->vars[vi]->value);
     int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
 }
@@ -537,27 +537,27 @@ static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
 static inline int64_t invert_if_entry_lval(VM *vm, uint fi, const char *id, int64_t current)
 {
     if (!strcmp(id, "saved_r")) {
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, "saved_r")) {
-            uint si = char_id_map_get(&vm->frames[fi].VarIndexer, "saved_r");
-            Var *sv = vm->frames[fi].vars[si];
+        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "saved_r")) {
+            uint si = char_id_map_get(&vm->frames[fi]->VarIndexer, "saved_r");
+            Var *sv = vm->frames[fi]->vars[si];
             if (sv)
                 return *(sv->value);
         }
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, "a")) {
-            uint ai = char_id_map_get(&vm->frames[fi].VarIndexer, "a");
-            return *(vm->frames[fi].vars[ai]->value);
+        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "a")) {
+            uint ai = char_id_map_get(&vm->frames[fi]->VarIndexer, "a");
+            return *(vm->frames[fi]->vars[ai]->value);
         }
     }
     if (!strcmp(id, "ts")) {
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, "ts")) {
-            uint tsi = char_id_map_get(&vm->frames[fi].VarIndexer, "ts");
-            Var *tsv = vm->frames[fi].vars[tsi];
+        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "ts")) {
+            uint tsi = char_id_map_get(&vm->frames[fi]->VarIndexer, "ts");
+            Var *tsv = vm->frames[fi]->vars[tsi];
             if (tsv)
                 return *(tsv->value);
         }
-        if (char_id_map_exists(&vm->frames[fi].VarIndexer, "t")) {
-            uint ti = char_id_map_get(&vm->frames[fi].VarIndexer, "t");
-            return *(vm->frames[fi].vars[ti]->value);
+        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "t")) {
+            uint ti = char_id_map_get(&vm->frames[fi]->VarIndexer, "t");
+            return *(vm->frames[fi]->vars[ti]->value);
         }
     }
     return current;
@@ -572,8 +572,8 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
     if (id && (id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))) {
         lval = (int64_t)strtoll(id, NULL, 10);
     } else {
-        uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, id);
-        lval = invert_if_entry_lval(vm, fi, id, *(vm->frames[fi].vars[vi]->value));
+        uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, id);
+        lval = invert_if_entry_lval(vm, fi, id, *(vm->frames[fi]->vars[vi]->value));
     }
     int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
@@ -589,30 +589,30 @@ static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
 static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
 {
     const char *eid = L[li].eval_entry_id;
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, eid)) return 0;
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, eid);
-    return *(vm->frames[fi].vars[vi]->value);
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, eid)) return 0;
+    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, eid);
+    return *(vm->frames[fi]->vars[vi]->value);
 }
 
 /* __mn_divmod_nonneg: IF saved_r >= b — se forward non entrò nel loop, non invertire il corpo. */
 static inline int divmod_saved_r_loop_skipped_forward(VM *vm, uint fi)
 {
     int64_t sr = 0;
-    if (char_id_map_exists(&vm->frames[fi].VarIndexer, "saved_r")) {
-        uint si = char_id_map_get(&vm->frames[fi].VarIndexer, "saved_r");
-        Var *sv = vm->frames[fi].vars[si];
+    if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "saved_r")) {
+        uint si = char_id_map_get(&vm->frames[fi]->VarIndexer, "saved_r");
+        Var *sv = vm->frames[fi]->vars[si];
         if (sv)
             sr = *(sv->value);
-    } else if (char_id_map_exists(&vm->frames[fi].VarIndexer, "a")) {
-        uint ai = char_id_map_get(&vm->frames[fi].VarIndexer, "a");
-        sr = *(vm->frames[fi].vars[ai]->value);
+    } else if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "a")) {
+        uint ai = char_id_map_get(&vm->frames[fi]->VarIndexer, "a");
+        sr = *(vm->frames[fi]->vars[ai]->value);
     } else {
         return 0;
     }
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, "b"))
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, "b"))
         return 0;
-    uint bi = char_id_map_get(&vm->frames[fi].VarIndexer, "b");
-    Var *bv = vm->frames[fi].vars[bi];
+    uint bi = char_id_map_get(&vm->frames[fi]->VarIndexer, "b");
+    Var *bv = vm->frames[fi]->vars[bi];
     if (!bv || !bv->value)
         return 0;
     return sr < *(bv->value);
@@ -621,10 +621,10 @@ static inline int divmod_saved_r_loop_skipped_forward(VM *vm, uint fi)
 /* __mn_bit_k_signed: if k == 0 il from i==0 non gira in avanti. */
 static inline int bit_k_loop_skipped_forward(VM *vm, uint fi)
 {
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, "k"))
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, "k"))
         return 0;
-    uint ki = char_id_map_get(&vm->frames[fi].VarIndexer, "k");
-    Var *kv = vm->frames[fi].vars[ki];
+    uint ki = char_id_map_get(&vm->frames[fi]->VarIndexer, "k");
+    Var *kv = vm->frames[fi]->vars[ki];
     if (!kv || !kv->value)
         return 0;
     return *(kv->value) == 0;
@@ -641,9 +641,9 @@ static inline int loop_peel_more_at_until(VM *vm, uint fi, LoopDescriptor *L, in
 #ifdef MNEMO_AGENT_LOG
 static inline int mn_dbg_read_int(VM *vm, uint fi, const char *name)
 {
-    if (!char_id_map_exists(&vm->frames[fi].VarIndexer, name)) return -9999;
-    uint vi = char_id_map_get(&vm->frames[fi].VarIndexer, name);
-    Var *v = vm->frames[fi].vars[vi];
+    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, name)) return -9999;
+    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, name);
+    Var *v = vm->frames[fi]->vars[vi];
     if (!v || v->T != TYPE_INT) return -9998;
     return *(v->value);
 }
@@ -810,7 +810,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
     }
     #endif
-    stack_init(&vm->frames[fi_reset].LocalVariables);
+    stack_init(&vm->frames[fi_reset]->LocalVariables);
 
 #define MAX_LOOPS 32
 #define MAX_IFS   32
@@ -851,8 +851,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         _fa_cache[_fa_hit].nifs   = collect_ifs  (vm, frame_name, orig,
                                                   _fa_cache[_fa_hit].ifs,   MAX_IFS);
         _fa_cache[_fa_hit].npars  = collect_par_ranges(orig,
-                                                       vm->frames[fi_reset].addr + 1,
-                                                       vm->frames[fi_reset].end_addr,
+                                                       vm->frames[fi_reset]->addr + 1,
+                                                       vm->frames[fi_reset]->end_addr,
                                                        _fa_cache[_fa_hit].pars, MAX_PARS);
     }
     if (_fa_hit >= 0) {
@@ -867,13 +867,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         loops = _fb_loops; ifs = _fb_ifs; pars = _fb_pars;
         nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
         nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
-        npars  = collect_par_ranges(orig, vm->frames[fi_reset].addr + 1,
-                                    vm->frames[fi_reset].end_addr, pars, MAX_PARS);
+        npars  = collect_par_ranges(orig, vm->frames[fi_reset]->addr + 1,
+                                    vm->frames[fi_reset]->end_addr, pars, MAX_PARS);
     }
 
     char cur_frame[VAR_NAME_LENGTH]; strncpy(cur_frame, frame_name, VAR_NAME_LENGTH - 1);
     uint fi       = get_findex(cur_frame);
-    uint start_ln = vm->frames[fi_reset].addr + 1;
+    uint start_ln = vm->frames[fi_reset]->addr + 1;
     (void)start_ln;
     /* Cache: strstr(frame_name, X) chiamato in più punti dell'hot loop interno.
        frame_name è invariante per chiamata di invert_op_to_line. */
@@ -1100,12 +1100,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 if (!strcmp(fb, vm->branch_trace_proc)) trace_path_active = 1;
             }
             if (trace_path_active) {
-                int win_start = vm->frames[fi].trace_window_start;
-                int win_cursor = vm->frames[fi].trace_window_cursor;
+                int win_start = vm->frames[fi]->trace_window_start;
+                int win_cursor = vm->frames[fi]->trace_window_cursor;
                 int trace_idx = win_start + win_cursor;
                 if (trace_idx < vm->branch_trace_top) {
                     int branch_was_then = vm->branch_trace[trace_idx];
-                    vm->frames[fi].trace_window_cursor = win_cursor + 1;
+                    vm->frames[fi]->trace_window_cursor = win_cursor + 1;
                     uint branch_from = 0, branch_to = 0;
                     if (branch_was_then) {
                         branch_from = ifs[ii].jmpf_else_line + 1;
@@ -1115,10 +1115,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                         branch_to   = ifs[ii].fi_label_line;
                     }
                     if (branch_from < branch_to) {
-                        Stack sv = vm->frames[fi].LocalVariables;
-                        stack_init(&vm->frames[fi].LocalVariables);
+                        Stack sv = vm->frames[fi]->LocalVariables;
+                        stack_init(&vm->frames[fi]->LocalVariables);
                         exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
-                        vm->frames[fi].LocalVariables = sv;
+                        vm->frames[fi]->LocalVariables = sv;
                     }
                     int t = -1;
                     for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
@@ -1126,7 +1126,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     continue;
                 }
             }
-            int depth = vm->frames[fi_reset].recursion_depth;
+            int depth = vm->frames[fi_reset]->recursion_depth;
             if (depth > 0) {
                 /* Recursive procedure: the entry guard can be overwritten by nested calls.
                    Use recorded recursion depth to replay ELSE inversions, then base THEN. */
@@ -1134,18 +1134,18 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     uint else_from = ifs[ii].else_label_line + 1;
                     uint else_to = ifs[ii].fi_label_line;
                     if (else_from >= else_to) break;
-                    Stack sv = vm->frames[fi].LocalVariables;
-                    stack_init(&vm->frames[fi].LocalVariables);
+                    Stack sv = vm->frames[fi]->LocalVariables;
+                    stack_init(&vm->frames[fi]->LocalVariables);
                     exec_branch_inverse(vm, orig, cur_frame, else_from, else_to, fi);
-                    vm->frames[fi].LocalVariables = sv;
+                    vm->frames[fi]->LocalVariables = sv;
                 }
                 uint then_from = ifs[ii].jmpf_else_line + 1;
                 uint then_to = ifs[ii].jmp_fi_line;
                 if (then_from < then_to) {
-                    Stack sv = vm->frames[fi].LocalVariables;
-                    stack_init(&vm->frames[fi].LocalVariables);
+                    Stack sv = vm->frames[fi]->LocalVariables;
+                    stack_init(&vm->frames[fi]->LocalVariables);
                     exec_branch_inverse(vm, orig, cur_frame, then_from, then_to, fi);
-                    vm->frames[fi].LocalVariables = sv;
+                    vm->frames[fi]->LocalVariables = sv;
                 }
             } else {
                 do_eval_if_entry(vm, fi, ifs[ii].eval_entry_id, ifs[ii].eval_entry_op,
@@ -1166,10 +1166,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     i = (t >= 0) ? t - 1 : i - 1;
                     continue;
                 }
-                Stack sv = vm->frames[fi].LocalVariables;
-                stack_init(&vm->frames[fi].LocalVariables);
+                Stack sv = vm->frames[fi]->LocalVariables;
+                stack_init(&vm->frames[fi]->LocalVariables);
                 exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
-                vm->frames[fi].LocalVariables = sv;
+                vm->frames[fi]->LocalVariables = sv;
             }
             int t = -1;
             for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
@@ -1221,12 +1221,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                               : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                      : char_id_map_get(&FrameIndexer, pn));
             uint curi = get_findex(frame_name);
-            int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
+            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int j = 0;
             while ((p = strtok(NULL, " \t")) && j < pc) {
-                int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
-                vm->frames[cfi].vars[pi[j++]] = vm->frames[curi].vars[si];
+                int si = char_id_map_get(&vm->frames[curi]->VarIndexer, p);
+                vm->frames[cfi]->vars[pi[j++]] = vm->frames[curi]->vars[si];
             }
             char target[VAR_NAME_LENGTH];
             if (is_rec && current_thread_args) {
@@ -1247,35 +1247,35 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             int saved_base_win_cursor_x = 0;
             int trace_did_pop_x = 0;
             uint base_fi_x = 0;
-            if (vm->branch_trace_active > 0 && vm->frames[cfi].trace_window_top > 0) {
+            if (vm->branch_trace_active > 0 && vm->frames[cfi]->trace_window_top > 0) {
                 char pb_c[VAR_NAME_LENGTH];
                 strncpy(pb_c, pn, VAR_NAME_LENGTH - 1);
                 pb_c[VAR_NAME_LENGTH - 1] = '\0';
                 char *pbc_at = strchr(pb_c, '@');
                 if (pbc_at) *pbc_at = '\0';
                 if (!strcmp(pb_c, vm->branch_trace_proc)) {
-                    int win = vm->frames[cfi].trace_window_stack[--vm->frames[cfi].trace_window_top];
-                    vm->frames[cfi].trace_window_start = win;
-                    vm->frames[cfi].trace_window_cursor = 0;
+                    int win = vm->frames[cfi]->trace_window_stack[--vm->frames[cfi]->trace_window_top];
+                    vm->frames[cfi]->trace_window_start = win;
+                    vm->frames[cfi]->trace_window_cursor = 0;
                     base_fi_x = char_id_map_get(&FrameIndexer, pn);
-                    saved_base_win_start_x = vm->frames[base_fi_x].trace_window_start;
-                    saved_base_win_cursor_x = vm->frames[base_fi_x].trace_window_cursor;
-                    vm->frames[base_fi_x].trace_window_start = win;
-                    vm->frames[base_fi_x].trace_window_cursor = 0;
+                    saved_base_win_start_x = vm->frames[base_fi_x]->trace_window_start;
+                    saved_base_win_cursor_x = vm->frames[base_fi_x]->trace_window_cursor;
+                    vm->frames[base_fi_x]->trace_window_start = win;
+                    vm->frames[base_fi_x]->trace_window_cursor = 0;
                     trace_did_pop_x = 1;
                 }
             }
             /* Forward CALL may have used native O(1) (no __mn_hist pushes). Invert
              * must use the matching native inverse, not full bytecode inversion. */
             if (!mn_native_arith_uncall_inverse(vm, pn, cfi)) {
-                invert_op_to_line(vm, target, orig, vm->frames[cfi].end_addr - 1,
-                                  vm->frames[cfi].addr + 1, 1);
+                invert_op_to_line(vm, target, orig, vm->frames[cfi]->end_addr - 1,
+                                  vm->frames[cfi]->addr + 1, 1);
             }
             if (trace_did_pop_x) {
-                vm->frames[base_fi_x].trace_window_start = saved_base_win_start_x;
-                vm->frames[base_fi_x].trace_window_cursor = saved_base_win_cursor_x;
+                vm->frames[base_fi_x]->trace_window_start = saved_base_win_start_x;
+                vm->frames[base_fi_x]->trace_window_cursor = saved_base_win_cursor_x;
             }
-            for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
+            for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             i--; continue;
         }
         if (op_tag == INVOP_UNCALL) {
@@ -1302,12 +1302,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                               : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                      : char_id_map_get(&FrameIndexer, pn));
             uint curi = fi;
-            int  pc = vm->frames[cfi].param_count, *pi = vm->frames[cfi].param_indices;
-            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi].vars[pi[k]];
+            int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
+            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int j = 0;
             while ((p = strtok(NULL, " \t")) && j < pc) {
-                int si = char_id_map_get(&vm->frames[curi].VarIndexer, p);
-                vm->frames[cfi].vars[pi[j++]] = vm->frames[curi].vars[si];
+                int si = char_id_map_get(&vm->frames[curi]->VarIndexer, p);
+                vm->frames[cfi]->vars[pi[j++]] = vm->frames[curi]->vars[si];
             }
             char cn[VAR_NAME_LENGTH];
             if (is_rec && current_thread_args) {
@@ -1335,7 +1335,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                             "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"G\",\"location\":\"invert_uncall_replay\","
                             "\"message\":\"vm_run_BT\",\"data\":{\"parent\":\"%s\",\"callee\":\"%s\","
                             "\"loc_sz\":%d},\"timestamp\":%lld}\n",
-                            frame_name, cn, stack_size(&vm->frames[cfi].LocalVariables),
+                            frame_name, cn, stack_size(&vm->frames[cfi]->LocalVariables),
                             (long long)time(NULL) * 1000);
                     fclose(_uf);
                 }
@@ -1346,7 +1346,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             vm->invert_hist_guard_var = saved_g;
             vm->invert_hist_floor_min = saved_fm;
             vm->suppress_show = ss;
-            for (int k = 0; k < pc; k++) vm->frames[cfi].vars[pi[k]] = sv[k];
+            for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             i--; continue;
         }
 
@@ -1410,7 +1410,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"F\",\"location\":\"invert_done\","
                     "\"message\":\"invert_exit\",\"data\":{\"frame\":\"%s\",\"loc_sz\":%d},"
                     "\"timestamp\":%lld}\n",
-                    frame_name, stack_size(&vm->frames[fi_reset].LocalVariables),
+                    frame_name, stack_size(&vm->frames[fi_reset]->LocalVariables),
                     (long long)time(NULL) * 1000);
             fclose(_df);
         }
@@ -1509,27 +1509,27 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     if (from_line >= to_line) return;
 
     uint cfi = get_findex(frame_name);
-    Var *saved[MAX_VARS]; memcpy(saved, vm->frames[cfi].vars, sizeof(Var *) * MAX_VARS);
-    Stack saved_lv = vm->frames[cfi].LocalVariables;
-    stack_init(&vm->frames[cfi].LocalVariables);
+    Var *saved[MAX_VARS]; memcpy(saved, vm->frames[cfi]->vars, sizeof(Var *) * MAX_VARS);
+    Stack saved_lv = vm->frames[cfi]->LocalVariables;
+    stack_init(&vm->frames[cfi]->LocalVariables);
 
-    for (int p = 0; p < vm->frames[cfi].param_count; p++) {
-        int   pidx  = vm->frames[cfi].param_indices[p];
+    for (int p = 0; p < vm->frames[cfi]->param_count; p++) {
+        int   pidx  = vm->frames[cfi]->param_indices[p];
         char *pname = saved[pidx]->name;
-        if (char_id_map_exists(&vm->frames[caller_fi].VarIndexer, pname)) {
-            int src = char_id_map_get(&vm->frames[caller_fi].VarIndexer, pname);
-            vm->frames[cfi].vars[pidx] = vm->frames[caller_fi].vars[src];
+        if (char_id_map_exists(&vm->frames[caller_fi]->VarIndexer, pname)) {
+            int src = char_id_map_get(&vm->frames[caller_fi]->VarIndexer, pname);
+            vm->frames[cfi]->vars[pidx] = vm->frames[caller_fi]->vars[src];
         }
     }
 
     Var *tmp_alloc[MAX_VARS]; memset(tmp_alloc, 0, sizeof(tmp_alloc));
-    for (int v = 0; v < vm->frames[cfi].var_count; v++) {
-        if (!vm->frames[cfi].vars[v]) {
-            vm->frames[cfi].vars[v]        = calloc(1, sizeof(Var));
-            vm->frames[cfi].vars[v]->T     = TYPE_INT;
-            vm->frames[cfi].vars[v]->value = calloc(1, sizeof(int64_t));
-            if (saved[v]) strncpy(vm->frames[cfi].vars[v]->name, saved[v]->name, VAR_NAME_LENGTH - 1);
-            tmp_alloc[v] = vm->frames[cfi].vars[v];
+    for (int v = 0; v < vm->frames[cfi]->var_count; v++) {
+        if (!vm->frames[cfi]->vars[v]) {
+            vm->frames[cfi]->vars[v]        = calloc(1, sizeof(Var));
+            vm->frames[cfi]->vars[v]->T     = TYPE_INT;
+            vm->frames[cfi]->vars[v]->value = calloc(1, sizeof(int64_t));
+            if (saved[v]) strncpy(vm->frames[cfi]->vars[v]->name, saved[v]->name, VAR_NAME_LENGTH - 1);
+            tmp_alloc[v] = vm->frames[cfi]->vars[v];
         }
     }
 
@@ -1595,10 +1595,10 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     bt = ifs[matched].fi_label_line;
                 }
                 if (bf < bt) {
-                    Stack sv2 = vm->frames[cfi].LocalVariables;
-                    stack_init(&vm->frames[cfi].LocalVariables);
+                    Stack sv2 = vm->frames[cfi]->LocalVariables;
+                    stack_init(&vm->frames[cfi]->LocalVariables);
                     exec_branch_inverse(vm, original_buffer, frame_name, bf, bt, caller_fi);
-                    vm->frames[cfi].LocalVariables = sv2;
+                    vm->frames[cfi]->LocalVariables = sv2;
                 }
                 /* Jump idx a prima dell'EVAL del nested IF. */
                 int t = -1;
@@ -1647,17 +1647,17 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 uint callee_fi_c = is_rec_c ? clone_frame_for_depth(vm, pn, new_depth_c)
                                             : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                                    : char_id_map_get(&FrameIndexer, pn));
-                int pc_c = vm->frames[callee_fi_c].param_count;
-                int *pi_c = vm->frames[callee_fi_c].param_indices;
+                int pc_c = vm->frames[callee_fi_c]->param_count;
+                int *pi_c = vm->frames[callee_fi_c]->param_indices;
                 Var *sv_c[64];
-                for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c].vars[pi_c[k]];
-                Stack slv_c = vm->frames[callee_fi_c].LocalVariables;
-                stack_init(&vm->frames[callee_fi_c].LocalVariables);
+                for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c]->vars[pi_c[k]];
+                Stack slv_c = vm->frames[callee_fi_c]->LocalVariables;
+                stack_init(&vm->frames[callee_fi_c]->LocalVariables);
                 char *p3c = NULL; int jjc = 0;
                 while ((p3c = strtok(NULL, " \t")) && jjc < pc_c) {
-                    if (!char_id_map_exists(&vm->frames[cfi].VarIndexer, p3c)) { jjc++; continue; }
-                    int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
-                    vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
+                    if (!char_id_map_exists(&vm->frames[cfi]->VarIndexer, p3c)) { jjc++; continue; }
+                    int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3c);
+                    vm->frames[callee_fi_c]->vars[pi_c[jjc++]] = vm->frames[cfi]->vars[si];
                 }
                 char target_c[VAR_NAME_LENGTH];
                 if (is_rec_c && current_thread_args) make_frame_key_par_rec(pn, new_depth_c, target_c, sizeof(target_c));
@@ -1670,34 +1670,34 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 int saved_bws_eb = 0, saved_bwc_eb = 0, popped_eb = 0;
                 uint base_fi_eb = 0;
                 if (vm->branch_trace_active > 0 &&
-                    vm->frames[callee_fi_c].trace_window_top > 0) {
+                    vm->frames[callee_fi_c]->trace_window_top > 0) {
                     char pb_eb[VAR_NAME_LENGTH];
                     strncpy(pb_eb, pn, VAR_NAME_LENGTH - 1);
                     pb_eb[VAR_NAME_LENGTH - 1] = '\0';
                     char *pbeb_at = strchr(pb_eb, '@');
                     if (pbeb_at) *pbeb_at = '\0';
                     if (!strcmp(pb_eb, vm->branch_trace_proc)) {
-                        int win = vm->frames[callee_fi_c].trace_window_stack
-                                  [--vm->frames[callee_fi_c].trace_window_top];
-                        vm->frames[callee_fi_c].trace_window_start = win;
-                        vm->frames[callee_fi_c].trace_window_cursor = 0;
+                        int win = vm->frames[callee_fi_c]->trace_window_stack
+                                  [--vm->frames[callee_fi_c]->trace_window_top];
+                        vm->frames[callee_fi_c]->trace_window_start = win;
+                        vm->frames[callee_fi_c]->trace_window_cursor = 0;
                         base_fi_eb = char_id_map_get(&FrameIndexer, pn);
-                        saved_bws_eb = vm->frames[base_fi_eb].trace_window_start;
-                        saved_bwc_eb = vm->frames[base_fi_eb].trace_window_cursor;
-                        vm->frames[base_fi_eb].trace_window_start = win;
-                        vm->frames[base_fi_eb].trace_window_cursor = 0;
+                        saved_bws_eb = vm->frames[base_fi_eb]->trace_window_start;
+                        saved_bwc_eb = vm->frames[base_fi_eb]->trace_window_cursor;
+                        vm->frames[base_fi_eb]->trace_window_start = win;
+                        vm->frames[base_fi_eb]->trace_window_cursor = 0;
                         popped_eb = 1;
                     }
                 }
                 invert_op_to_line(vm, target_c, original_buffer,
-                                  vm->frames[callee_fi_c].end_addr - 1,
-                                  vm->frames[callee_fi_c].addr + 1, 1);
+                                  vm->frames[callee_fi_c]->end_addr - 1,
+                                  vm->frames[callee_fi_c]->addr + 1, 1);
                 if (popped_eb) {
-                    vm->frames[base_fi_eb].trace_window_start = saved_bws_eb;
-                    vm->frames[base_fi_eb].trace_window_cursor = saved_bwc_eb;
+                    vm->frames[base_fi_eb]->trace_window_start = saved_bws_eb;
+                    vm->frames[base_fi_eb]->trace_window_cursor = saved_bwc_eb;
                 }
-                for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
-                vm->frames[callee_fi_c].LocalVariables = slv_c;
+                for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c]->vars[pi_c[k]] = sv_c[k];
+                vm->frames[callee_fi_c]->LocalVariables = slv_c;
             }
             else if (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
@@ -1758,17 +1758,17 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 uint callee_fi_c = is_rec_c ? clone_frame_for_depth(vm, pn, new_depth_c)
                                             : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                                    : char_id_map_get(&FrameIndexer, pn));
-                int  pc_c = vm->frames[callee_fi_c].param_count;
-                int *pi_c = vm->frames[callee_fi_c].param_indices;
+                int  pc_c = vm->frames[callee_fi_c]->param_count;
+                int *pi_c = vm->frames[callee_fi_c]->param_indices;
                 Var *sv_c[64];
-                for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c].vars[pi_c[k]];
-                Stack slv_c = vm->frames[callee_fi_c].LocalVariables;
-                stack_init(&vm->frames[callee_fi_c].LocalVariables);
+                for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c]->vars[pi_c[k]];
+                Stack slv_c = vm->frames[callee_fi_c]->LocalVariables;
+                stack_init(&vm->frames[callee_fi_c]->LocalVariables);
                 char *p3c = NULL; int jjc = 0;
                 while ((p3c = strtok(NULL, " \t")) && jjc < pc_c) {
-                    if (!char_id_map_exists(&vm->frames[cfi].VarIndexer, p3c)) { jjc++; continue; }
-                    int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3c);
-                    vm->frames[callee_fi_c].vars[pi_c[jjc++]] = vm->frames[cfi].vars[si];
+                    if (!char_id_map_exists(&vm->frames[cfi]->VarIndexer, p3c)) { jjc++; continue; }
+                    int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3c);
+                    vm->frames[callee_fi_c]->vars[pi_c[jjc++]] = vm->frames[cfi]->vars[si];
                 }
                 char target_c[VAR_NAME_LENGTH];
                 if (is_rec_c && current_thread_args) {
@@ -1787,34 +1787,34 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 int saved_bws_eb2 = 0, saved_bwc_eb2 = 0, popped_eb2 = 0;
                 uint base_fi_eb2 = 0;
                 if (vm->branch_trace_active > 0 &&
-                    vm->frames[callee_fi_c].trace_window_top > 0) {
+                    vm->frames[callee_fi_c]->trace_window_top > 0) {
                     char pb_eb2[VAR_NAME_LENGTH];
                     strncpy(pb_eb2, pn, VAR_NAME_LENGTH - 1);
                     pb_eb2[VAR_NAME_LENGTH - 1] = '\0';
                     char *peb2_at = strchr(pb_eb2, '@');
                     if (peb2_at) *peb2_at = '\0';
                     if (!strcmp(pb_eb2, vm->branch_trace_proc)) {
-                        int win = vm->frames[callee_fi_c].trace_window_stack
-                                  [--vm->frames[callee_fi_c].trace_window_top];
-                        vm->frames[callee_fi_c].trace_window_start = win;
-                        vm->frames[callee_fi_c].trace_window_cursor = 0;
+                        int win = vm->frames[callee_fi_c]->trace_window_stack
+                                  [--vm->frames[callee_fi_c]->trace_window_top];
+                        vm->frames[callee_fi_c]->trace_window_start = win;
+                        vm->frames[callee_fi_c]->trace_window_cursor = 0;
                         base_fi_eb2 = char_id_map_get(&FrameIndexer, pn);
-                        saved_bws_eb2 = vm->frames[base_fi_eb2].trace_window_start;
-                        saved_bwc_eb2 = vm->frames[base_fi_eb2].trace_window_cursor;
-                        vm->frames[base_fi_eb2].trace_window_start = win;
-                        vm->frames[base_fi_eb2].trace_window_cursor = 0;
+                        saved_bws_eb2 = vm->frames[base_fi_eb2]->trace_window_start;
+                        saved_bwc_eb2 = vm->frames[base_fi_eb2]->trace_window_cursor;
+                        vm->frames[base_fi_eb2]->trace_window_start = win;
+                        vm->frames[base_fi_eb2]->trace_window_cursor = 0;
                         popped_eb2 = 1;
                     }
                 }
                 invert_op_to_line(vm, target_c, original_buffer,
-                                  vm->frames[callee_fi_c].end_addr - 1,
-                                  vm->frames[callee_fi_c].addr + 1, 1);
+                                  vm->frames[callee_fi_c]->end_addr - 1,
+                                  vm->frames[callee_fi_c]->addr + 1, 1);
                 if (popped_eb2) {
-                    vm->frames[base_fi_eb2].trace_window_start = saved_bws_eb2;
-                    vm->frames[base_fi_eb2].trace_window_cursor = saved_bwc_eb2;
+                    vm->frames[base_fi_eb2]->trace_window_start = saved_bws_eb2;
+                    vm->frames[base_fi_eb2]->trace_window_cursor = saved_bwc_eb2;
                 }
-                for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c].vars[pi_c[k]] = sv_c[k];
-                vm->frames[callee_fi_c].LocalVariables = slv_c;
+                for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c]->vars[pi_c[k]] = sv_c[k];
+                vm->frames[callee_fi_c]->LocalVariables = slv_c;
                 continue;
             }
 
@@ -1840,14 +1840,14 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 uint callee_fi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
                                         : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                                : char_id_map_get(&FrameIndexer, pn));
-                int  pc = vm->frames[callee_fi].param_count, *pi = vm->frames[callee_fi].param_indices;
-                Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi].vars[pi[k]];
-                Stack slv = vm->frames[callee_fi].LocalVariables;
-                stack_init(&vm->frames[callee_fi].LocalVariables);
+                int  pc = vm->frames[callee_fi]->param_count, *pi = vm->frames[callee_fi]->param_indices;
+                Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi]->vars[pi[k]];
+                Stack slv = vm->frames[callee_fi]->LocalVariables;
+                stack_init(&vm->frames[callee_fi]->LocalVariables);
                 char *p3 = NULL; int jj = 0;
                 while ((p3 = strtok(NULL, " \t")) && jj < pc) {
-                    int si = char_id_map_get(&vm->frames[cfi].VarIndexer, p3);
-                    vm->frames[callee_fi].vars[pi[jj++]] = vm->frames[cfi].vars[si];
+                    int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3);
+                    vm->frames[callee_fi]->vars[pi[jj++]] = vm->frames[cfi]->vars[si];
                 }
                 char cn[VAR_NAME_LENGTH];
                 if (is_rec && current_thread_args) {
@@ -1872,8 +1872,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 vm->invert_hist_guard_var = saved_g;
                 vm->invert_hist_floor_min = saved_fm;
                 vm->suppress_show = ss;
-                for (int k = 0; k < pc; k++) vm->frames[callee_fi].vars[pi[k]] = sv[k];
-                vm->frames[callee_fi].LocalVariables = slv;
+                for (int k = 0; k < pc; k++) vm->frames[callee_fi]->vars[pi[k]] = sv[k];
+                vm->frames[callee_fi]->LocalVariables = slv;
                 continue;
             }
 
@@ -1894,13 +1894,13 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         for (int i = 0; i < count; i++) free(lines[i]);
     }
 
-    for (int v = 0; v < vm->frames[cfi].var_count; v++)
-        if (tmp_alloc[v] && vm->frames[cfi].vars[v] == tmp_alloc[v]) {
-            free(tmp_alloc[v]->value); free(tmp_alloc[v]); vm->frames[cfi].vars[v] = NULL;
+    for (int v = 0; v < vm->frames[cfi]->var_count; v++)
+        if (tmp_alloc[v] && vm->frames[cfi]->vars[v] == tmp_alloc[v]) {
+            free(tmp_alloc[v]->value); free(tmp_alloc[v]); vm->frames[cfi]->vars[v] = NULL;
         }
 
-    memcpy(vm->frames[cfi].vars, saved, sizeof(Var *) * MAX_VARS);
-    vm->frames[cfi].LocalVariables = saved_lv;
+    memcpy(vm->frames[cfi]->vars, saved, sizeof(Var *) * MAX_VARS);
+    vm->frames[cfi]->LocalVariables = saved_lv;
 }
 
 #endif /* VM_INVERT_H */

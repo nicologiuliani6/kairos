@@ -274,7 +274,7 @@ static inline int vm_debug_dump_json(VM *vm, char *out, int outsz)
     JWRITE("\"frames\":[");
     int first_frame = 1;
     for (int fi = 0; fi <= vm->frame_top; fi++) {
-        Frame *f = &vm->frames[fi];
+        Frame *f = vm->frames[fi];
         if (f->name[0] == '\0') continue;
 
         if (!first_frame) JWRITE(",");
@@ -337,7 +337,7 @@ static inline int vm_debug_vars_json(VM *vm, const char *frame_name,
         return n;
     }
     uint fi = char_id_map_get(&FrameIndexer, frame_name);
-    Frame *f = &vm->frames[fi];
+    Frame *f = vm->frames[fi];
 
     JWRITE("[");
     int first = 1;

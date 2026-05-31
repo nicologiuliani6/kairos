@@ -70,10 +70,12 @@ typedef struct Var {
     pthread_t  ref_lock_owner;
 } Var;
 
-/* Cap statici dei Frame. NOTA: rendere dinamici è TODO; il bump di
- * MAX_NESTED causa realloc pointer movement che rompe ex33 parallel2_fib
- * (multithread con pointer-into-frame). Lasciati ai valori storici;
- * IF_BRANCH_STACK_MAX (in vm_ops.h) è bumped a 65536 per array grandi. */
+/* Cap statici dei Frame. Dopo Frame ** refactor (vm->frames = array di
+ * Frame*, ogni Frame heap-alloc separato) il realloc del pointer array
+ * NON sposta i Frame individuali → safe bumpare senza rompere ex33
+ * parallel2_fib (multithread cross-frame pointer holds).
+ * Valori storici lasciati intatti per ora; ulteriore dyn alloc per-Frame
+ * field rimane TODO (richiede realloc per-Frame inline). */
 #define MAX_VARS         2048
 #define MAX_LABEL        8192
 #define MAX_NESTED       1024
@@ -167,7 +169,7 @@ typedef struct {
 } VMDebugState;
 
 typedef struct {
-    Frame *frames;       /* heap-allocated, cresce on-demand */
+    Frame **frames;      /* heap array di Frame*, ogni Frame heap-allocato singolo */
     uint   frames_cap;   /* capacità allocata corrente */
     int   frame_top;
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
