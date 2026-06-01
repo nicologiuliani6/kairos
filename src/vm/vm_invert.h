@@ -587,6 +587,23 @@ static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
     return !strcmp(L[li].eval_entry_op, "==") && !strcmp(L[li].eval_entry_val, "0");
 }
 
+/* True se `line` cade nel corpo di un from-loop (tra FROM_START e l'EVAL until).
+ * Gli IF dentro un loop NON possono usare la branch_trace globale: il trace è
+ * FIFO per-window mentre l'inverse peela le iterazioni in ordine inverso, e la
+ * forward op_jmpf pusha una entry per OGNI livello di IF eseguito mentre
+ * l'inverse consuma una sola entry per IF outer (i nested vanno via
+ * exec_branch_inverse → do_eval_if_entry). Le due cose si disallineano su loop
+ * con IF data-dipendente a footprint variabile per iterazione. Dentro al loop il
+ * recompute (do_eval_if_entry) è invece affidabile: le var lette dalla guardia
+ * sono ripristinate dal peel prima che l'IF venga invertito. */
+static inline int line_inside_loop_body(uint line, const LoopDescriptor *L, int n)
+{
+    for (int i = 0; i < n; i++) {
+        if (line > L[i].from_start_line && line < L[i].eval_exit_line) return 1;
+    }
+    return 0;
+}
+
 static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
 {
     const char *eid = L[li].eval_entry_id;
@@ -1100,6 +1117,11 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 if (fb_at) *fb_at = '\0';
                 if (!strcmp(fb, vm->branch_trace_proc)) trace_path_active = 1;
             }
+            /* IF dentro un loop body: la branch_trace FIFO non si allinea al peel
+             * inverso; usa recompute (do_eval_if_entry), affidabile qui. */
+            if (trace_path_active &&
+                line_inside_loop_body(ifs[ii].jmpf_else_line, loops, nloops))
+                trace_path_active = 0;
             if (trace_path_active) {
                 int win_start = vm->frames[fi]->trace_window_start;
                 int win_cursor = vm->frames[fi]->trace_window_cursor;
