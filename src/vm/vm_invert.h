@@ -266,10 +266,17 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     /* Stack di IF aperti — match label per uid (ELSE_<uid>, FI_<uid>) per gestire
      * nested IF (es. Mnemo loop con IF di guard dentro body). Top dello stack =
      * IF correntemente in costruzione; chiuso da ASSERT (con sentinel handling
-     * per EVAL-FI seguita o no da ASSERT). */
-    int   stack_idx[64];          /* indice in out[] */
-    char  stack_uid[64][32];      /* uid dell'IF aperto (es. "42" da "ELSE_42") */
-    int   stack_eval_exit_set[64];/* 1 se EVAL FI già visto, attendiamo ASSERT */
+     * per EVAL-FI seguita o no da ASSERT).
+     *
+     * Heap-alloc a capacità `max`: la profondità di annidamento di una else-if
+     * chain (`if i==0 else if i==1 …`) generata da Mnemo per uno store a indice
+     * runtime su un array di N elementi è ~N. Con stack fissi [64] un array > 64
+     * elementi sotto --check-invertibility scriveva OOB → corruzione → NULL deref
+     * in resolve_atom. depth ≤ #IF aperti ≤ n < max, quindi `max` slot bastano. */
+    int    stack_cap          = max > 0 ? max : 1;
+    int   *stack_idx          = malloc(sizeof(*stack_idx) * (size_t)stack_cap);
+    char (*stack_uid)[32]     = malloc(sizeof(*stack_uid) * (size_t)stack_cap);
+    int   *stack_eval_exit_set= malloc(sizeof(*stack_eval_exit_set) * (size_t)stack_cap);
     int   top = -1;
 
     uint peval = 0; char pid[64] = {0}, pval[64] = {0};
@@ -326,7 +333,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         } else if (!strcmp(fw, "JMPF")) {
             char *ln = strtok(NULL, " \t");
             if (ln && !strncmp(ln, "ELSE_", 5)) {
-                if (top + 1 >= 64 || n >= max) { ptr = nl + 1; continue; }
+                if (top + 1 >= stack_cap || n >= max) { ptr = nl + 1; continue; }
                 int idx = n++;
                 top++;
                 stack_idx[top] = idx;
@@ -389,6 +396,9 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         }
         ptr = nl + 1;
     }
+    free(stack_idx);
+    free(stack_uid);
+    free(stack_eval_exit_set);
     return n;
 }
 
@@ -573,8 +583,18 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
     if (id && (id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))) {
         lval = (int64_t)strtoll(id, NULL, 10);
     } else {
-        uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, id);
-        lval = invert_if_entry_lval(vm, fi, id, *(vm->frames[fi]->vars[vi]->value));
+        /* Var fuori scope (slot delocal'd ma ancora nell'indexer) → lval=0
+         * invece di NULL-deref. Succede invertendo la guardia di un IF il cui
+         * id è un local già delocal'd a questo punto della reverse-walk (es.
+         * `if __mn_lc1 != 0` wrapper di un loop, con disj-chain profonda che
+         * sfasa l'ordine). Meglio un eval prudente (→ eventuale DELOCAL mismatch
+         * pulito) che un SIGSEGV. */
+        int vil = char_id_map_lookup(&vm->frames[fi]->VarIndexer, id);
+        Var *gv = (vil >= 0) ? vm->frames[fi]->vars[vil] : NULL;
+        if (gv && gv->value)
+            lval = invert_if_entry_lval(vm, fi, id, *(gv->value));
+        else
+            lval = invert_if_entry_lval(vm, fi, id, 0);
     }
     int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
@@ -839,11 +859,17 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
        bytecode per invocation. Encrypt opt-uncall fa molte UNCALL su
        stesse procedure (divmod, putd, bit_k_signed, …) → cache per
        base name evita N rescan. */
+    /* `ifs` heap-allocato a capacità = righe del frame: una else-if chain
+     * (store a indice runtime su array di N elementi) ha ~N IF annidati, con
+     * ARR_MAX=1024 fino a ~1024. Un `ifs[MAX_IFS=256]` fisso troncava la chain
+     * per array > ~256 → branch-pairing parziale → inverse rotto. nifs ≤ righe
+     * del frame, quindi la capacità per-frame è un bound esatto e compatto. */
     typedef struct {
         char base[VAR_NAME_LENGTH];
         int nloops, nifs, npars;
+        int ifs_cap;
         LoopDescriptor loops[MAX_LOOPS];
-        IfDescriptor   ifs  [MAX_IFS];
+        IfDescriptor  *ifs;
         ParRange       pars [MAX_PARS];
     } FrameAnalysisCache;
     /* Thread-local: due thread par (es. fib_left/fib_right) chiamano
@@ -860,31 +886,38 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     for (int _c = 0; _c < _fa_cache_n; _c++) {
         if (!strcmp(_fa_cache[_c].base, base)) { _fa_hit = _c; break; }
     }
+    /* Capacità IF = righe del frame (bound esatto su nifs). */
+    int _frame_ifs_cap = (int)(vm->frames[fi_reset]->end_addr -
+                               vm->frames[fi_reset]->addr) + 2;
+    if (_frame_ifs_cap < MAX_IFS) _frame_ifs_cap = MAX_IFS;
     if (_fa_hit < 0 && _fa_cache_n < (int)(sizeof(_fa_cache)/sizeof(_fa_cache[0]))) {
         _fa_hit = _fa_cache_n++;
         strncpy(_fa_cache[_fa_hit].base, base, VAR_NAME_LENGTH - 1);
         _fa_cache[_fa_hit].base[VAR_NAME_LENGTH - 1] = '\0';
+        _fa_cache[_fa_hit].ifs_cap = _frame_ifs_cap;
+        _fa_cache[_fa_hit].ifs = malloc(sizeof(IfDescriptor) * (size_t)_frame_ifs_cap);
         _fa_cache[_fa_hit].nloops = collect_loops(vm, frame_name, orig,
                                                   _fa_cache[_fa_hit].loops, MAX_LOOPS);
         _fa_cache[_fa_hit].nifs   = collect_ifs  (vm, frame_name, orig,
-                                                  _fa_cache[_fa_hit].ifs,   MAX_IFS);
+                                                  _fa_cache[_fa_hit].ifs,   _frame_ifs_cap);
         _fa_cache[_fa_hit].npars  = collect_par_ranges(orig,
                                                        vm->frames[fi_reset]->addr + 1,
                                                        vm->frames[fi_reset]->end_addr,
                                                        _fa_cache[_fa_hit].pars, MAX_PARS);
     }
+    IfDescriptor *_fb_ifs_heap = NULL;
     if (_fa_hit >= 0) {
         loops  = _fa_cache[_fa_hit].loops;  nloops = _fa_cache[_fa_hit].nloops;
         ifs    = _fa_cache[_fa_hit].ifs;    nifs   = _fa_cache[_fa_hit].nifs;
         pars   = _fa_cache[_fa_hit].pars;   npars  = _fa_cache[_fa_hit].npars;
     } else {
-        /* Cache piena: stack arrays di fallback */
-        static LoopDescriptor _fb_loops[MAX_LOOPS];
-        static IfDescriptor   _fb_ifs  [MAX_IFS];
-        static ParRange       _fb_pars [MAX_PARS];
-        loops = _fb_loops; ifs = _fb_ifs; pars = _fb_pars;
+        /* Cache piena: arrays di fallback (ifs heap per frame profondi). */
+        static __thread LoopDescriptor _fb_loops[MAX_LOOPS];
+        static __thread ParRange       _fb_pars [MAX_PARS];
+        _fb_ifs_heap = malloc(sizeof(IfDescriptor) * (size_t)_frame_ifs_cap);
+        loops = _fb_loops; ifs = _fb_ifs_heap; pars = _fb_pars;
         nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
-        nifs   = collect_ifs  (vm, frame_name, orig, ifs,   MAX_IFS);
+        nifs   = collect_ifs  (vm, frame_name, orig, ifs,   _frame_ifs_cap);
         npars  = collect_par_ranges(orig, vm->frames[fi_reset]->addr + 1,
                                     vm->frames[fi_reset]->end_addr, pars, MAX_PARS);
     }
@@ -901,7 +934,16 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                              strncmp(frame_name, "__mn_divmod_nonneg_fast", 23) != 0);
     int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
 
-    char *lp[MAX_LINES]; uint ln[MAX_LINES]; uint8_t lp_op[MAX_LINES]; int nl = 0;
+    /* Heap, dimensionato allo span del proc: con [MAX_LINES=1024] fisso una
+     * procedura > 1024 righe (es. fill con store a indice runtime su array di
+     * ~95+ elementi: disj-chain profonda) veniva troncata in coda → push/delocal
+     * del loop-guard esterno (lc1) fuori dalla collection → lc1 non ricreato in
+     * inverse → "MINEQ: variabile lc1 è NULL". span = start - stop. */
+    size_t lp_cap = (start > stop) ? (size_t)(start - stop) + 2 : MAX_LINES;
+    char   **lp    = malloc(sizeof(char *)  * lp_cap);
+    uint    *ln    = malloc(sizeof(uint)    * lp_cap);
+    uint8_t *lp_op = malloc(sizeof(uint8_t) * lp_cap);
+    int nl = 0;
     /* Arena: one malloc per invert call instead of N strdups.
        Upper bound = size of remaining buffer from stop+1 to END_PROC. */
     size_t _arena_cap = strlen(orig) + 1;
@@ -909,7 +951,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     if (!_arena) vm_debug_panic("[UNCALL] arena malloc fallita\n");
     char  *_arena_p = _arena;
     char *ptr = go_to_line(orig, stop + 1);   // ← CAMBIA: parti da dopo PROC
-    while (ptr && *ptr && nl < MAX_LINES) {
+    while (ptr && *ptr && (size_t)nl < lp_cap) {
         char *newline = strchr(ptr, '\n'); if (!newline) break;
         *newline = '\0';
         uint cur_ln = (uint)atoi(ptr);
@@ -938,7 +980,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
         *newline = '\n'; ptr = newline + 1;
     }
-    //fprintf(stderr, "[INVERT] start=%u stop=%u righe_raccolte=%d\n", start, stop, nl);
     #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "move_int")) {
         FILE *_mf = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
@@ -1432,6 +1473,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     }
 
     free(_arena);
+    free(lp); free(ln); free(lp_op);
+    free(_fb_ifs_heap);
     /* orig non strduped → niente free(orig) */
     #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "move_int")) {
@@ -1587,17 +1630,28 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
          * hist. Collect_ifs sull'intero frame, itera righe del branch in reverse,
          * skippa quelle interne a nested IF e dispatch ai loro JMPF ELSE_<uid>
          * con recurse exec_branch_inverse sul ramo che era vero in forward. */
-        /* Heap (non stack): exec_branch_inverse ricorre per ogni livello di
-         * nested IF; un IfDescriptor[256] sullo stack × profondità rischia
-         * overflow. Cap 256 allineato a MAX_IFS (32 troncava i frame con molte
-         * disj-chain runtime-index → collect_ifs parziale → POP sbilanciato). */
-        enum { LOCAL_MAX_IFS = 256 };
-        IfDescriptor  *ifs = calloc(LOCAL_MAX_IFS, sizeof(IfDescriptor));
-        int nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, LOCAL_MAX_IFS);
+        /* Heap, capacità = righe del frame (bound su nifs): un cap fisso (256)
+         * troncava le else-if chain di store a indice runtime su array grandi
+         * (> ~256 elementi, fino a ARR_MAX=1024) → collect_ifs parziale →
+         * branch-pairing errato → POP sbilanciato. */
+        uint _ebi_fi = get_findex(frame_name);
+        int local_max_ifs = (int)(vm->frames[_ebi_fi]->end_addr -
+                                  vm->frames[_ebi_fi]->addr) + 2;
+        if (local_max_ifs < 256) local_max_ifs = 256;
+        IfDescriptor  *ifs = calloc((size_t)local_max_ifs, sizeof(IfDescriptor));
+        int nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, local_max_ifs);
 
-        char *lp[512]; uint ln[512]; int nl = 0;
+        /* Heap, dimensionato allo span del branch: con [512] fisso un branch
+         * THEN/ELSE > 512 righe (es. `if lc1 != 0` che racchiude un from-loop con
+         * disj-chain runtime-index profonda, array > ~90 elementi) veniva troncato
+         * → la coda del loop (EVAL until, peel) cadeva fuori → peel zone mai
+         * rilevata → loop counter non invertito (DELOCAL lc0 atteso=0 trovato<0). */
+        int lp_cap = (to_line > from_line) ? (int)(to_line - from_line) + 2 : 2;
+        char **lp = malloc(sizeof(char *) * (size_t)lp_cap);
+        uint  *ln = malloc(sizeof(uint)   * (size_t)lp_cap);
+        int nl = 0;
         char *p3 = go_to_line(original_buffer, from_line);
-        while (p3 && *p3 && nl < 512) {
+        while (p3 && *p3 && nl < lp_cap) {
             char *nl3 = strchr(p3, '\n'); if (!nl3) break; *nl3 = '\0';
             uint cur_ln = (uint)atoi(p3);
             if (cur_ln >= to_line) { *nl3 = '\n'; break; }
@@ -1770,12 +1824,14 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             idx--;
         }
         for (int j = 0; j < nl; j++) free(lp[j]);
+        free(lp); free(ln);
         free(ifs);
     } else {
-        char *lines[512]; int count = 0;
+        int lines_cap = (to_line > from_line) ? (int)(to_line - from_line) + 2 : 2;
+        char **lines = malloc(sizeof(char *) * (size_t)lines_cap); int count = 0;
         char *p2 = go_to_line(original_buffer, from_line);
         if (p2 && *p2) {
-            while (p2 && *p2 && count < 512) {
+            while (p2 && *p2 && count < lines_cap) {
                 char *nl2 = strchr(p2, '\n'); if (!nl2) break; *nl2 = '\0';
                 if ((uint)atoi(p2) >= to_line) { *nl2 = '\n'; break; }
                 lines[count++] = strdup(p2);
@@ -1948,6 +2004,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
         }
         for (int i = 0; i < count; i++) free(lines[i]);
+        free(lines);
     }
 
     for (int v = 0; v < vm->frames[cfi]->var_count; v++)
