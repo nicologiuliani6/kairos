@@ -509,6 +509,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
         else if (!strcmp(fw, "PUSH"))  op_push (vm, fname);
         else if (!strcmp(fw, "POP"))   op_pop  (vm, fname);
+        else if (!strcmp(fw, "POOLADD"))    op_pooladd   (vm, fname);
+        else if (!strcmp(fw, "POOLSUB"))    op_poolsub   (vm, fname);
+        else if (!strcmp(fw, "POOLGETNEG")) op_poolgetneg(vm, fname);
+        else if (!strcmp(fw, "POOLGET"))    op_poolget   (vm, fname);
+        else if (!strcmp(fw, "POOLPUSH"))   op_poolpush  (vm, fname);
+        else if (!strcmp(fw, "POOLPOP"))    op_poolpop   (vm, fname);
         else if (!strcmp(fw, "SSEND")) op_ssend(vm, fname);
         else if (!strcmp(fw, "SRECV")) op_srecv(vm, fname);
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
@@ -695,6 +701,12 @@ void vm_free(VM *vm)
         free(vm->mn_hist_floor_snaps);
         vm->mn_hist_floor_snaps = NULL;
         vm->mn_hist_floor_snaps_cap = 0;
+    }
+    if (vm->mn_pool) {
+        free(vm->mn_pool);
+        vm->mn_pool = NULL;
+        vm->mn_pool_len = 0;
+        vm->mn_pool_cap = 0;
     }
 }
 

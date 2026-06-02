@@ -201,6 +201,14 @@ typedef struct {
      * trace. Settato da __mn_hist_floor_snap. op_jmpf push solo se
      * current proc base name matches. Procs diverse non interferiscono. */
     char   branch_trace_proc[VAR_NAME_LENGTH];
+    /* Mnemo dynamic pointer pool: heap reversibile indicizzato a runtime.
+     * Sostituisce le celle statiche __mn_mem* del pool puntatori — cresce
+     * on-demand (zero-filled, doubling), così malloc-in-loop a bound runtime
+     * senza free funziona senza --ptr-pool-size. Ops POOLPUSH/POOLPOP/POOLADD/
+     * POOLSUB/POOLGET/POOLGETNEG (vm_ops.h), reversibili. Reset a ogni run. */
+    int64_t *mn_pool;
+    long     mn_pool_len;   /* celle valide (zero-filled fino a qui) */
+    long     mn_pool_cap;   /* capacità allocata */
 } VM;
 
 struct ThreadArgs {

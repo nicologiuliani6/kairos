@@ -66,6 +66,8 @@ enum InvOpTag {
     INVOP_UNKNOWN = 0,
     INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP, INVOP_MNHALVE, INVOP_MNSPLIT32,
     INVOP_PUSH, INVOP_POP, INVOP_SSEND, INVOP_SRECV,
+    INVOP_POOLADD, INVOP_POOLSUB, INVOP_POOLGET, INVOP_POOLGETNEG,
+    INVOP_POOLPUSH, INVOP_POOLPOP,
     INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW, INVOP_DUMP,
     INVOP_CALL, INVOP_UNCALL,
     INVOP_PAR_START, INVOP_PAR_END,
@@ -84,6 +86,12 @@ static inline uint8_t classify_op(const char *fw)
             if (!strcmp(fw, "PARAM"))     return INVOP_PARAM;
             if (!strcmp(fw, "PAR_START")) return INVOP_PAR_START;
             if (!strcmp(fw, "PAR_END"))   return INVOP_PAR_END;
+            if (!strcmp(fw, "POOLADD"))     return INVOP_POOLADD;
+            if (!strcmp(fw, "POOLSUB"))     return INVOP_POOLSUB;
+            if (!strcmp(fw, "POOLGETNEG"))  return INVOP_POOLGETNEG;
+            if (!strcmp(fw, "POOLGET"))     return INVOP_POOLGET;
+            if (!strcmp(fw, "POOLPUSH"))    return INVOP_POOLPUSH;
+            if (!strcmp(fw, "POOLPOP"))     return INVOP_POOLPOP;
             break;
         case 'M':
             if (!strcmp(fw, "MINEQ")) return INVOP_MINEQ;
@@ -1459,6 +1467,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             case INVOP_POP:     op_push      (vm, cur_frame); break;
             case INVOP_SSEND:   op_srecv     (vm, cur_frame); break;
             case INVOP_SRECV:   op_ssend     (vm, cur_frame); break;
+            case INVOP_POOLADD:    op_poolsub    (vm, cur_frame); break;
+            case INVOP_POOLSUB:    op_pooladd    (vm, cur_frame); break;
+            case INVOP_POOLGET:    op_poolgetneg (vm, cur_frame); break;
+            case INVOP_POOLGETNEG: op_poolget    (vm, cur_frame); break;
+            case INVOP_POOLPUSH:   op_poolpop    (vm, cur_frame); break;
+            case INVOP_POOLPOP:    op_poolpush   (vm, cur_frame); break;
             case INVOP_LOCAL:   op_delocal   (vm, cur_frame); break;
             case INVOP_DELOCAL: op_local     (vm, cur_frame); break;
             case INVOP_SHOW:    /* no-op in inverse */ break;
@@ -1818,6 +1832,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
             else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
+            else if (!strcmp(fw, "POOLADD"))    op_poolsub   (vm, frame_name);
+            else if (!strcmp(fw, "POOLSUB"))    op_pooladd   (vm, frame_name);
+            else if (!strcmp(fw, "POOLGETNEG")) op_poolget   (vm, frame_name);
+            else if (!strcmp(fw, "POOLGET"))    op_poolgetneg(vm, frame_name);
+            else if (!strcmp(fw, "POOLPUSH"))   op_poolpop   (vm, frame_name);
+            else if (!strcmp(fw, "POOLPOP"))    op_poolpush  (vm, frame_name);
             else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
             else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
             else if (!strcmp(fw, "SHOW"))   { /* no-op */ }
@@ -1999,6 +2019,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
             else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
+            else if (!strcmp(fw, "POOLADD"))    op_poolsub   (vm, frame_name);
+            else if (!strcmp(fw, "POOLSUB"))    op_pooladd   (vm, frame_name);
+            else if (!strcmp(fw, "POOLGETNEG")) op_poolget   (vm, frame_name);
+            else if (!strcmp(fw, "POOLGET"))    op_poolgetneg(vm, frame_name);
+            else if (!strcmp(fw, "POOLPUSH"))   op_poolpop   (vm, frame_name);
+            else if (!strcmp(fw, "POOLPOP"))    op_poolpush  (vm, frame_name);
             else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
             else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
             else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
