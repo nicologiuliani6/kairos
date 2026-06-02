@@ -169,6 +169,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         int   saved_param_count, callee_findex;
         Stack saved_local_vars;
         int   is_recursive_clone;
+        int   base_findex;   /* frame-base della proc chiamata: per decremento `active` a END_PROC */
     } CallRecord;
     /* Call stack dinamico: cresce on-demand (raddoppia). Nessun hard cap. */
     uint cs_cap = VM_FRAMES_INIT_CAP;
@@ -223,6 +224,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             *nl = '\n';
             if (cs_top >= 0) {
                 int cfi = cs[cs_top].callee_findex;
+                if (vm->frames[cs[cs_top].base_findex]->active > 0)
+                    vm->frames[cs[cs_top].base_findex]->active--;
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
                     vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] = cs[cs_top].saved_params[k];
                 vm->frames[cfi]->LocalVariables = cs[cs_top].saved_local_vars;
@@ -295,15 +298,32 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 }
                 new_depth = cd + 1;
             }
-            uint cfi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
-                              : (current_thread_args ? clone_frame_for_thread(vm, pn)
-                                                     : char_id_map_get(&FrameIndexer, pn));
+            /* Re-entrancy MUTUA: callee != caller (no self-rec) ma la sua
+             * proc-base è già attiva sul call stack → clona come per la self-rec
+             * (depth = #attivazioni correnti), così i LOCAL int del frame base
+             * della call esterna non vengono liberati dal delocal di quella
+             * interna. Solo path non-thread (i worker PAR usano clone_for_thread). */
+            uint base_fi_pn = char_id_map_get(&FrameIndexer, pn);
+            int  reentrant  = !is_rec && !current_thread_args
+                              && vm->frames[base_fi_pn]->active > 0;
+            int  reent_depth = reentrant ? vm->frames[base_fi_pn]->active + 1 : 0;
+            uint cfi;
+            if (is_rec) {
+                cfi = clone_frame_for_depth(vm, pn, new_depth);
+            } else if (reentrant) {
+                cfi = clone_frame_for_depth(vm, pn, reent_depth);
+            } else {
+                cfi = current_thread_args ? clone_frame_for_thread(vm, pn)
+                                          : char_id_map_get(&FrameIndexer, pn);
+            }
             VM_CS_ENSURE((uint)(cs_top + 1));
             cs_top++;
             *nl = '\n';
             cs[cs_top].return_ptr         = nl + 1;
-            cs[cs_top].is_recursive_clone = is_rec;
+            cs[cs_top].is_recursive_clone = is_rec || reentrant;
             cs[cs_top].callee_findex      = cfi;
+            cs[cs_top].base_findex        = (int)base_fi_pn;
+            vm->frames[base_fi_pn]->active++;
             strncpy(cs[cs_top].caller_frame, fname, VAR_NAME_LENGTH - 1);
             cs[cs_top].caller_frame[VAR_NAME_LENGTH - 1] = '\0';
             int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
@@ -355,6 +375,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     make_frame_key_par_rec(pn, new_depth, nfname, sizeof(nfname));
                 else
                     make_frame_key(pn, new_depth, nfname, sizeof(nfname));
+            } else if (reentrant) {
+                /* clone mutuo: il body deve girare sul frame clonato (es. is_even@1),
+                 * non sul base. */
+                make_frame_key(pn, reent_depth, nfname, sizeof(nfname));
             } else {
                 if (current_thread_args)
                     make_thread_frame_key(pn, nfname, sizeof(nfname));
@@ -366,6 +390,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             strncpy(fname, nfname, VAR_NAME_LENGTH - 1);
             fname[VAR_NAME_LENGTH - 1] = '\0';
             if (pn && mn_native_arith_call_forward(vm, pn, cfi)) {
+                if (vm->frames[cs[cs_top].base_findex]->active > 0)
+                    vm->frames[cs[cs_top].base_findex]->active--;
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
                     vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] =
                         cs[cs_top].saved_params[k];

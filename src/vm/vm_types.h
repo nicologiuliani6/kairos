@@ -102,6 +102,13 @@ typedef struct {
     int       param_indices_cap;
     int       param_count;
     int       recursion_depth;
+    /* active: # di attivazioni correnti di questa proc-base sul call stack
+     * forward (CALL incrementa, END_PROC decrementa). >0 a una nuova CALL =
+     * re-entrancy: self-ricorsione (già gestita da is_rec) o ricorsione MUTUA
+     * (is_even→is_odd→is_even). Per la mutua serve clonare il frame come per la
+     * self-rec, altrimenti il delocal della call annidata libera i LOCAL int
+     * condivisi del frame base → `push(__mn_eN)` su Var* NULL. */
+    int       active;
     /* Fix P3 trace: per-clone-frame LIFO stack di trace_window_start.
      * Forward CALL push branch_trace_top corrente. Inverse INVOP_CALL/
      * UNCALL pop e setta come trace_window_start corrente (consumato
