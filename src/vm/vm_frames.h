@@ -73,9 +73,13 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     snprintf(clone->name, VAR_NAME_LENGTH, "%s", key);
     stack_init(&clone->LocalVariables);
 
+    /* memset ha azzerato clone->vars (NULL) e vars_cap (0): alloca il buffer
+     * heap del clone prima di scriverci (gli slot Var* restano NULL). */
+    frame_ensure_vars(clone, base->var_count);
+
     for (int k = 0; k < clone->param_count; k++) {
         int pidx = clone->param_indices[k];
-        if (pidx < 0 || pidx >= MAX_VARS) {
+        if (pidx < 0 || pidx >= clone->vars_cap) {
             fprintf(stderr, "[VM] init_clone_frame: pidx %d out of range (k=%d pc=%d frame=%s base_pc=%d)\n",
                 pidx, k, clone->param_count, key, base->param_count);
             exit(1);

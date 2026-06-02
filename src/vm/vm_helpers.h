@@ -10,6 +10,25 @@
  *  Helper generici
  * ====================================================================== */
 
+/* Cresce f->vars (heap) per indicizzare almeno `idx`. Init cap = MAX_VARS:
+ * per i programmi noti (var_count < MAX_VARS) il buffer è allocato una volta a
+ * MAX_VARS e mai riallocato → identico all'array statico precedente (stesso
+ * fast path). Oltre, raddoppia. Zero-fill della regione nuova (Var* = NULL). */
+static inline void frame_ensure_vars(Frame *f, int idx)
+{
+    if (idx < f->vars_cap) return;
+    int new_cap = f->vars_cap ? f->vars_cap : MAX_VARS;
+    while (idx >= new_cap) new_cap *= 2;
+    Var **nv = (Var **)realloc(f->vars, sizeof(Var *) * (size_t)new_cap);
+    if (!nv) {
+        fprintf(stderr, "[VM] frame_ensure_vars: realloc(%d) fallita\n", new_cap);
+        exit(1);
+    }
+    memset(nv + f->vars_cap, 0, sizeof(Var *) * (size_t)(new_cap - f->vars_cap));
+    f->vars = nv;
+    f->vars_cap = new_cap;
+}
+
 static inline void make_frame_key(const char *name, int depth, char *out, size_t sz)
 {
     if (depth == 0) snprintf(out, sz, "%s", name);

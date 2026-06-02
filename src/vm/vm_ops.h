@@ -946,6 +946,7 @@ static inline void op_local(VM *vm, const char *frame_name)
     uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
     pthread_mutex_unlock(&var_indexer_mtx);
 
+    frame_ensure_vars(vm->frames[fi], (int)vi);
     /* Se vm_exec ha già allocato questa variabile tramite DECL, la
        liberiamo: LOCAL è l'allocazione runtime autorevole. */
     if (vm->frames[fi]->vars[vi])

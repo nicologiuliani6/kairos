@@ -1597,7 +1597,11 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     if (from_line >= to_line) return;
 
     uint cfi = get_findex(frame_name);
-    Var *saved[MAX_VARS]; memcpy(saved, vm->frames[cfi]->vars, sizeof(Var *) * MAX_VARS);
+    /* snapshot vars dimensionato sulla capacità dinamica del frame (= MAX_VARS
+     * per i programmi noti → identico al vecchio buffer statico). */
+    int _vcap = vm->frames[cfi]->vars_cap > 0 ? vm->frames[cfi]->vars_cap : 1;
+    Var **saved = (Var **)malloc(sizeof(Var *) * (size_t)_vcap);
+    memcpy(saved, vm->frames[cfi]->vars, sizeof(Var *) * (size_t)_vcap);
     Stack saved_lv = vm->frames[cfi]->LocalVariables;
     stack_init(&vm->frames[cfi]->LocalVariables);
 
@@ -1610,7 +1614,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         }
     }
 
-    Var *tmp_alloc[MAX_VARS]; memset(tmp_alloc, 0, sizeof(tmp_alloc));
+    Var **tmp_alloc = (Var **)calloc((size_t)_vcap, sizeof(Var *));
     for (int v = 0; v < vm->frames[cfi]->var_count; v++) {
         if (!vm->frames[cfi]->vars[v]) {
             vm->frames[cfi]->vars[v]        = calloc(1, sizeof(Var));
@@ -2033,7 +2037,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         free(lines);
     }
 
-    for (int v = 0; v < vm->frames[cfi]->var_count; v++)
+    for (int v = 0; v < vm->frames[cfi]->var_count && v < _vcap; v++)
         if (tmp_alloc[v] && vm->frames[cfi]->vars[v] == tmp_alloc[v]) {
             free(tmp_alloc[v]->value); free(tmp_alloc[v]); vm->frames[cfi]->vars[v] = NULL;
         }
@@ -2050,9 +2054,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
      * messi a NULL; i tmp sono stati liberati sopra). */
     for (int p = 0; p < vm->frames[cfi]->param_count; p++) {
         int pidx = vm->frames[cfi]->param_indices[p];
-        vm->frames[cfi]->vars[pidx] = saved[pidx];
+        if (pidx < _vcap)
+            vm->frames[cfi]->vars[pidx] = saved[pidx];
     }
     vm->frames[cfi]->LocalVariables = saved_lv;
+    free(saved);
+    free(tmp_alloc);
 }
 
 #endif /* VM_INVERT_H */

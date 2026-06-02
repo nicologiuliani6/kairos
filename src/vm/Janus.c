@@ -597,6 +597,7 @@ void vm_exec(VM *vm, char *buffer)
             } else if (!strcmp(fw, "DECL")) {
                 char *type = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
                 int   vi   = char_id_map_get(&vm->frames[vm->frame_top]->VarIndexer, vn);
+                frame_ensure_vars(vm->frames[vm->frame_top], vi);
                 if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] Variabile già definita!\n");
                 vm->frames[vm->frame_top]->vars[vi] = malloc(sizeof(Var));
                 alloc_var(vm->frames[vm->frame_top]->vars[vi], type, vn);
@@ -607,6 +608,7 @@ void vm_exec(VM *vm, char *buffer)
             } else if (!strcmp(fw, "PARAM")) {
                 char *vtype = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
                 int   vi    = char_id_map_get(&vm->frames[vm->frame_top]->VarIndexer, vn);
+                frame_ensure_vars(vm->frames[vm->frame_top], vi);
                 if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] PARAM già definito!\n");
                 vm->frames[vm->frame_top]->vars[vi]          = calloc(1, sizeof(Var));
                 vm->frames[vm->frame_top]->vars[vi]->T        = TYPE_PARAM;
@@ -684,6 +686,7 @@ void vm_free(VM *vm)
     if (vm->frames) {
         for (uint i = 0; i < vm->frames_cap; i++) {
             if (vm->frames[i]) {
+                free(vm->frames[i]->vars);  /* buffer heap dinamico */
                 free(vm->frames[i]);
                 vm->frames[i] = NULL;
             }

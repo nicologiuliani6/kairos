@@ -84,7 +84,12 @@ typedef struct Var {
 typedef struct {
     CharIdMap VarIndexer;
     Stack     LocalVariables;
-    Var      *vars[MAX_VARS];
+    /* vars: heap, cresce on-demand via frame_ensure_vars (init cap = MAX_VARS,
+     * raddoppia oltre). MAX_VARS resta come capacità INIZIALE: per ogni
+     * programma noto var_count < MAX_VARS → buffer identico al vecchio array
+     * statico (stesso fast path), la crescita è solo valvola di sicurezza. */
+    Var     **vars;
+    int       vars_cap;
     int       var_count;
     CharIdMap LabelIndexer;
     uint      label[MAX_LABEL];
