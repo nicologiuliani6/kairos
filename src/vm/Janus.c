@@ -344,8 +344,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 char *pb_at2 = strchr(p_base, '@');
                 if (pb_at2) *pb_at2 = '\0';
                 if (!strcmp(p_base, vm->branch_trace_proc)) {
-                    if (vm->frames[cfi]->trace_window_top >= VM_TRACE_WIN_STACK_MAX)
-                        vm_debug_panic("[VM] trace_window_stack overflow\n");
+                    frame_ensure_trace(vm->frames[cfi], vm->frames[cfi]->trace_window_top);
                     vm->frames[cfi]->trace_window_stack[vm->frames[cfi]->trace_window_top++] =
                         vm->branch_trace_top;
                 }
@@ -617,11 +616,13 @@ void vm_exec(VM *vm, char *buffer)
                 (void)vtype;
                 if (vi >= vm->frames[vm->frame_top]->var_count)
                     vm->frames[vm->frame_top]->var_count = vi + 1;
+                frame_ensure_params(vm->frames[vm->frame_top], vm->frames[vm->frame_top]->param_count);
                 vm->frames[vm->frame_top]->param_indices[vm->frames[vm->frame_top]->param_count++] = vi;
 
             } else if (!strcmp(fw, "LABEL")) {
                 char *ln = strtok(NULL, " \t");
                 uint  li = char_id_map_get(&vm->frames[vm->frame_top]->LabelIndexer, ln);
+                frame_ensure_labels(vm->frames[vm->frame_top], (int)li);
                 vm->frames[vm->frame_top]->label[li] = line;
 
             } else if (!strcmp(fw, "HALT")) { /* nop */
@@ -686,7 +687,11 @@ void vm_free(VM *vm)
     if (vm->frames) {
         for (uint i = 0; i < vm->frames_cap; i++) {
             if (vm->frames[i]) {
-                free(vm->frames[i]->vars);  /* buffer heap dinamico */
+                /* buffer heap dinamici per-Frame */
+                free(vm->frames[i]->vars);
+                free(vm->frames[i]->label);
+                free(vm->frames[i]->param_indices);
+                free(vm->frames[i]->trace_window_stack);
                 free(vm->frames[i]);
                 vm->frames[i] = NULL;
             }

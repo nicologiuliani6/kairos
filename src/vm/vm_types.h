@@ -78,7 +78,6 @@ typedef struct Var {
  * field rimane TODO (richiede realloc per-Frame inline). */
 #define MAX_VARS         4096
 #define MAX_LABEL        16384
-#define MAX_NESTED       4096
 #define MAX_PROC_PARAMS  1024
 
 typedef struct {
@@ -92,14 +91,16 @@ typedef struct {
     int       vars_cap;
     int       var_count;
     CharIdMap LabelIndexer;
-    uint      label[MAX_LABEL];
+    /* label/param_indices/trace_window_stack: heap, init cap = vecchio MAX
+     * (label_cap=MAX_LABEL, ecc.). Fast path identico all'array statico per
+     * tutti i programmi noti; crescono via frame_ensure_* solo come valvola. */
+    uint     *label;
+    int       label_cap;
     char      name[VAR_NAME_LENGTH];
     uint      addr, end_addr;
-    int       param_indices[MAX_PROC_PARAMS];
+    int      *param_indices;
+    int       param_indices_cap;
     int       param_count;
-    int       loop_restart_i[MAX_NESTED];
-    int       loop_bottom_i[MAX_NESTED];
-    int       loop_counter;
     int       recursion_depth;
     /* Fix P3 trace: per-clone-frame LIFO stack di trace_window_start.
      * Forward CALL push branch_trace_top corrente. Inverse INVOP_CALL/
@@ -107,7 +108,8 @@ typedef struct {
      * da JMPF_ELSE handler via trace_window_cursor). Stack necessario
      * perché clones reused (es. fib(1) e fib(0) entrambi a fib@2). */
 #define VM_TRACE_WIN_STACK_MAX 4096
-    int       trace_window_stack[VM_TRACE_WIN_STACK_MAX];
+    int      *trace_window_stack;
+    int       trace_window_cap;
     int       trace_window_top;
     int       trace_window_start;
     int       trace_window_cursor;

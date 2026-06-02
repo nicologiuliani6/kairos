@@ -68,8 +68,18 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     clone->end_addr     = base->end_addr;
     clone->var_count    = base->var_count;
     clone->param_count  = base->param_count;
-    memcpy(clone->param_indices, base->param_indices, sizeof(base->param_indices));
-    memcpy(clone->label,         base->label,         sizeof(base->label));
+    /* param_indices/label ora heap dinamici: il memset ha azzerato puntatori e
+     * cap del clone. Alloca e copia per COUNT (non sizeof). param_indices fino a
+     * param_count; label fino al numero di label del base (LabelIndexer.count). */
+    if (base->param_count > 0) {
+        frame_ensure_params(clone, base->param_count);
+        memcpy(clone->param_indices, base->param_indices,
+               sizeof(int) * (size_t)base->param_count);
+    }
+    if (base->label_cap > 0) {
+        frame_ensure_labels(clone, base->label_cap - 1);
+        memcpy(clone->label, base->label, sizeof(uint) * (size_t)base->label_cap);
+    }
     snprintf(clone->name, VAR_NAME_LENGTH, "%s", key);
     stack_init(&clone->LocalVariables);
 

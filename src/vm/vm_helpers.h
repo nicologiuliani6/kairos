@@ -29,6 +29,42 @@ static inline void frame_ensure_vars(Frame *f, int idx)
     f->vars_cap = new_cap;
 }
 
+/* Stessa logica (init cap = vecchio MAX, doubling oltre) per gli altri array
+ * per-Frame: identici al bump statico per i programmi noti, crescono solo come
+ * valvola di sicurezza. */
+static inline void frame_ensure_labels(Frame *f, int idx)
+{
+    if (idx < f->label_cap) return;
+    int nc = f->label_cap ? f->label_cap : MAX_LABEL;
+    while (idx >= nc) nc *= 2;
+    uint *n = (uint *)realloc(f->label, sizeof(uint) * (size_t)nc);
+    if (!n) { fprintf(stderr, "[VM] frame_ensure_labels: realloc(%d) fallita\n", nc); exit(1); }
+    memset(n + f->label_cap, 0, sizeof(uint) * (size_t)(nc - f->label_cap));
+    f->label = n; f->label_cap = nc;
+}
+
+static inline void frame_ensure_params(Frame *f, int idx)
+{
+    if (idx < f->param_indices_cap) return;
+    int nc = f->param_indices_cap ? f->param_indices_cap : MAX_PROC_PARAMS;
+    while (idx >= nc) nc *= 2;
+    int *n = (int *)realloc(f->param_indices, sizeof(int) * (size_t)nc);
+    if (!n) { fprintf(stderr, "[VM] frame_ensure_params: realloc(%d) fallita\n", nc); exit(1); }
+    memset(n + f->param_indices_cap, 0, sizeof(int) * (size_t)(nc - f->param_indices_cap));
+    f->param_indices = n; f->param_indices_cap = nc;
+}
+
+static inline void frame_ensure_trace(Frame *f, int idx)
+{
+    if (idx < f->trace_window_cap) return;
+    int nc = f->trace_window_cap ? f->trace_window_cap : VM_TRACE_WIN_STACK_MAX;
+    while (idx >= nc) nc *= 2;
+    int *n = (int *)realloc(f->trace_window_stack, sizeof(int) * (size_t)nc);
+    if (!n) { fprintf(stderr, "[VM] frame_ensure_trace: realloc(%d) fallita\n", nc); exit(1); }
+    memset(n + f->trace_window_cap, 0, sizeof(int) * (size_t)(nc - f->trace_window_cap));
+    f->trace_window_stack = n; f->trace_window_cap = nc;
+}
+
 static inline void make_frame_key(const char *name, int depth, char *out, size_t sz)
 {
     if (depth == 0) snprintf(out, sz, "%s", name);
