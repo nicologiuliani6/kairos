@@ -449,6 +449,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
              * trace_window_start corrente. Cursor reset = 0. Copia anche
              * sul BASE frame perché invert_op_to_line riceve frame_name
              * base e get_findex(base) → base fi. */
+            int uncall_win_start = -1;
             if (vm->branch_trace_active > 0 && vm->frames[cfi]->trace_window_top > 0) {
                 int win = vm->frames[cfi]->trace_window_stack[--vm->frames[cfi]->trace_window_top];
                 vm->frames[cfi]->trace_window_start = win;
@@ -456,6 +457,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 uint base_fi_t = char_id_map_get(&FrameIndexer, pn);
                 vm->frames[base_fi_t]->trace_window_start = win;
                 vm->frames[base_fi_t]->trace_window_cursor = 0;
+                uncall_win_start = win;
             }
             /* Restore '\n' su orig prima del recursive scan: invert_op_to_line ->
                collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
@@ -467,11 +469,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             vm->invert_hist_guard_var = NULL;
             vm->invert_hist_floor_min   = 0;
             vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
-            /* Fix P3: chiudi modalità trace e azzera trace residua (sanity). */
+            /* Fix P3: chiudi modalità trace e azzera trace residua (sanity).
+             * Tronca branch_trace_top allo start della finestra consumata: il
+             * consume inverso legge LIFO (top-1-cursor), quindi dopo l'uncall di
+             * questa finestra il top deve scendere al suo start perché le
+             * finestre esterne (call ricorsivi dello stesso opt-proc) leggano
+             * il proprio range corretto. */
             if (matched_opt_uncall && vm->branch_trace_active > 0) {
                 vm->branch_trace_active--;
                 if (vm->branch_trace_active == 0) {
                     vm->branch_trace_top = 0;
+                } else if (uncall_win_start >= 0 &&
+                           uncall_win_start <= vm->branch_trace_top) {
+                    vm->branch_trace_top = uncall_win_start;
                 }
             }
             /* Rilascia frames generati durante il pattern opt-uncall (forward +

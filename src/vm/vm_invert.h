@@ -1174,8 +1174,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             if (trace_path_active) {
                 int win_start = vm->frames[fi]->trace_window_start;
                 int win_cursor = vm->frames[fi]->trace_window_cursor;
-                int trace_idx = win_start + win_cursor;
-                if (trace_idx < vm->branch_trace_top) {
+                /* Consume LIFO: gli IF si invertono in ordine inverso rispetto
+                 * alla registrazione forward, quindi leggi dal top della finestra
+                 * verso il basso (top-1-cursor), non win_start+cursor (FIFO, che
+                 * disallineava i branch misti negli IF top-level non-loop). */
+                int trace_idx = vm->branch_trace_top - 1 - win_cursor;
+                if (trace_idx >= win_start && trace_idx < vm->branch_trace_top) {
                     int branch_was_then = vm->branch_trace[trace_idx];
                     vm->frames[fi]->trace_window_cursor = win_cursor + 1;
                     uint branch_from = 0, branch_to = 0;
