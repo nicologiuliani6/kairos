@@ -606,10 +606,10 @@ static inline void mn_shl_into_native(VM *vm, uint cfi)
         vm_debug_panic("[VM] native __mn_shl_into: param\n");
     if (*n < 0)
         vm_debug_panic("[VM] native __mn_shl_into: n < 0\n");
-    if (*n > 62)
+    if (*n > 63)
         vm_debug_panic("[VM] native __mn_shl_into: n troppo grande\n");
     if (*n != 0)
-        *dst += (*x) << *n;
+        *dst += (int64_t)((uint64_t)(*x) << *n);
     mn_shl_into_hist_replay(mn_require_hist(vm, cfi), *n);
 }
 
@@ -622,7 +622,7 @@ static inline void mn_shl_into_native_inv(VM *vm, uint cfi)
         vm_debug_panic("[VM] native __mn_shl_into inv: param\n");
     mn_shl_into_hist_undo(mn_require_hist(vm, cfi), *n);
     if (*n != 0)
-        *dst -= (*x) << *n;
+        *dst -= (int64_t)((uint64_t)(*x) << *n);
 }
 
 static inline void mn_shr_into_native(VM *vm, uint cfi)
