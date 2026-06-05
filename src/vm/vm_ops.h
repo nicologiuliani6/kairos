@@ -887,7 +887,7 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
     return newptr;
 }
 
-static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
+static inline char *op_jmpf(VM *vm, const char *fname, char *buf, int cur_line)
 {
     char *lbl = strtok(NULL, " \t");
 
@@ -909,7 +909,17 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
             proc_base[VAR_NAME_LENGTH - 1] = '\0';
             char *pb_at = strchr(proc_base, '@');
             if (pb_at) *pb_at = '\0';
+            /* IF dentro un from-loop del callee: NON pushare (l'inverse li
+             * recomputa via line_inside_loop_body, non consuma il cursor della
+             * window → pusharli disallineerebbe la LIFO degli IF top-level). */
+            int inside_loop = 0;
             if (!strcmp(proc_base, vm->branch_trace_proc)) {
+                for (int _li = 0; _li < vm->bt_loop_n; _li++) {
+                    if ((uint)cur_line > vm->bt_loop_lo[_li] &&
+                        (uint)cur_line < vm->bt_loop_hi[_li]) { inside_loop = 1; break; }
+                }
+            }
+            if (!strcmp(proc_base, vm->branch_trace_proc) && !inside_loop) {
                 if ((uint)vm->branch_trace_top >= vm->branch_trace_cap) {
                     uint new_cap = vm->branch_trace_cap ? vm->branch_trace_cap * 2 : VM_BRANCH_TRACE_INIT_CAP;
                     int *nb = (int *)realloc(vm->branch_trace, sizeof(int) * new_cap);

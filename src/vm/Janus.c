@@ -263,6 +263,25 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 vm->branch_trace_active++;
                 strncpy(vm->branch_trace_proc, ent->opt_call_callee, VAR_NAME_LENGTH - 1);
                 vm->branch_trace_proc[VAR_NAME_LENGTH - 1] = '\0';
+                /* Cache line-range dei from-loop del callee: la forward op_jmpf
+                 * NON deve pushare su branch_trace gli IF dentro un loop (il loro
+                 * inverse usa recompute, non consuma il cursor → la window LIFO si
+                 * disallineerebbe e gli IF top-level leggerebbero entry sbagliate
+                 * → DELOCAL loop-counter / branch errati sotto opt-uncall). */
+                {
+                    LoopDescriptor _ld[VM_BT_LOOP_MAX];
+                    int _nlp = collect_loops(vm, vm->branch_trace_proc, orig,
+                                             _ld, VM_BT_LOOP_MAX);
+                    vm->bt_loop_n = 0;
+                    for (int _li = 0; _li < _nlp && vm->bt_loop_n < VM_BT_LOOP_MAX; _li++) {
+                        vm->bt_loop_lo[vm->bt_loop_n] = _ld[_li].from_start_line;
+                        vm->bt_loop_hi[vm->bt_loop_n] = _ld[_li].eval_exit_line;
+                        vm->bt_loop_n++;
+                    }
+                    strncpy(vm->bt_loops_cached_proc, vm->branch_trace_proc,
+                            VAR_NAME_LENGTH - 1);
+                    vm->bt_loops_cached_proc[VAR_NAME_LENGTH - 1] = '\0';
+                }
                 *nl = '\n'; ptr = nl + 1;
                 continue;
             }
@@ -541,8 +560,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
+            int jmpf_line = atoi(ptr);
             *nl = '\n';
-            char *np = op_jmpf(vm, fname, orig);
+            char *np = op_jmpf(vm, fname, orig, jmpf_line);
             ptr = np ? np : nl + 1; continue;
         }
         else if (!strcmp(fw, "JMP")) {

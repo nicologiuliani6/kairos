@@ -215,6 +215,17 @@ typedef struct {
      * trace. Settato da __mn_hist_floor_snap. op_jmpf push solo se
      * current proc base name matches. Procs diverse non interferiscono. */
     char   branch_trace_proc[VAR_NAME_LENGTH];
+    /* Cache delle line-range dei from-loop di `branch_trace_proc`. La forward
+     * op_jmpf NON deve pushare su branch_trace gli IF DENTRO un loop body: il
+     * loro inverse usa recompute (line_inside_loop_body), non consuma il cursor
+     * della window → se fossero pushati la window LIFO si disallinea e gli IF
+     * top-level leggono entry sbagliate. Cache lazy ricomputata quando
+     * branch_trace_proc cambia (gestisce window annidate). */
+#define VM_BT_LOOP_MAX 128
+    uint   bt_loop_lo[VM_BT_LOOP_MAX];
+    uint   bt_loop_hi[VM_BT_LOOP_MAX];
+    int    bt_loop_n;
+    char   bt_loops_cached_proc[VAR_NAME_LENGTH];
     /* Mnemo dynamic pointer pool: heap reversibile indicizzato a runtime.
      * Sostituisce le celle statiche __mn_mem* del pool puntatori — cresce
      * on-demand (zero-filled, doubling), così malloc-in-loop a bound runtime

@@ -244,8 +244,9 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
+            int jmpf_line = atoi(ptr);
             *nl = '\n';
-            char *np = op_jmpf(vm, fname, args->buffer);
+            char *np = op_jmpf(vm, fname, args->buffer, jmpf_line);
             ptr = np ? np : nl + 1;
             continue;
         }
