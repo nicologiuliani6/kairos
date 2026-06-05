@@ -127,19 +127,27 @@ static inline void mn_floor_div2_signed_hist_replay(Var *hist, int64_t t_in)
     }
 }
 
-static inline void mn_floor_div2_signed_hist_undo(Var *hist)
+/* `t_in` = il valore LIVE che il replay usò per decidere il ramo (NON il `ts`
+ * poppato dalla hist). Il replay (mn_floor_div2_signed_hist_replay) sceglie
+ * ramo >=0/<0 da `t_in`; l'undo DEVE usare lo stesso valore, altrimenti su
+ * operandi int64 negativi il `ts` poppato può divergere dal `t_in` originale
+ * (bug: 64-bit neg → ramo errato → push/pop count mismatch → hist underflow nel
+ * successivo __mn_shr_into). I valori poppati sono scartati: conta solo il
+ * NUMERO di pop per ramo (pos=3, neg=7), determinato da `t_in`. */
+static inline void mn_floor_div2_signed_hist_undo(Var *hist, int64_t t_in)
 {
-    int64_t r  = mn_hist_pop(hist);
-    int64_t ts = mn_hist_pop(hist);
-    (void)r;
-    if (ts >= 0) {
-        mn_divmod_nonneg_hist_undo(hist);
+    if (t_in >= 0) {
+        mn_hist_pop(hist);   /* t_in % 2 */
+        mn_hist_pop(hist);   /* ts       */
+        mn_divmod_nonneg_hist_undo(hist);   /* a_orig */
     } else {
-        mn_hist_pop(hist);
-        mn_hist_pop(hist);
-        mn_hist_pop(hist);
-        mn_hist_pop(hist);
-        mn_divmod_nonneg_hist_undo(hist);
+        mn_hist_pop(hist);   /* rv  */
+        mn_hist_pop(hist);   /* ts  */
+        mn_hist_pop(hist);   /* 0   */
+        mn_hist_pop(hist);   /* -qv */
+        mn_hist_pop(hist);   /* 0   */
+        mn_hist_pop(hist);   /* qv  */
+        mn_divmod_nonneg_hist_undo(hist);   /* u */
     }
 }
 
@@ -187,17 +195,20 @@ static inline void mn_bit_k_signed_hist_undo(Var *hist, int64_t a_in, int64_t kk
         if (i != 0) {
             mn_hist_pop(hist);
             int64_t tb = t;
-            mn_floor_div2_signed_hist_undo(hist);
+            mn_floor_div2_signed_hist_undo(hist, tb);
             t          = mn_floor_div2_q(tb);
         }
     }
+    /* `t` ora == il `ts` LIVE che il replay usò (line 169). Decidi il ramo
+     * neg col valore live, non col `ts` poppato (che su int64 neg diverge). */
+    int64_t ts_live = t;
     mn_hist_pop(hist);
     mn_hist_pop(hist);
     mn_hist_pop(hist);
     mn_hist_pop(hist);
     mn_hist_pop(hist);
-    int64_t ts = mn_hist_pop(hist);
-    if (ts < 0)
+    mn_hist_pop(hist);   /* ts (sentinel, scartato) */
+    if (ts_live < 0)
         mn_hist_pop(hist);
     mn_divmod_nonneg_hist_undo(hist);
 }
@@ -294,7 +305,7 @@ static inline void mn_shr_into_hist_undo(Var *hist, int64_t x, int64_t n)
     for (int64_t i = 0; i < n; i++) {
         mn_hist_pop(hist);
         int64_t tb = t;
-        mn_floor_div2_signed_hist_undo(hist);
+        mn_floor_div2_signed_hist_undo(hist, tb);
         t          = mn_floor_div2_q(tb);
     }
 }
@@ -565,7 +576,10 @@ static inline void mn_floor_div2_signed_native_inv(VM *vm, uint cfi)
     int64_t *q = mn_formal_int(vm, cfi, "q");
     if (!t || !q)
         vm_debug_panic("[VM] native __mn_floor_div2_signed inv: param\n");
-    mn_floor_div2_signed_hist_undo(mn_require_hist(vm, cfi));
+    /* Ramo dell'undo deciso dal segno LIVE di t_in (come il replay), non da
+     * valori poppati. q = floor_div2_q(t_in) ha lo stesso segno di t_in
+     * (q>=0 ⟺ t_in>=0), quindi *q è un proxy di segno valido. */
+    mn_floor_div2_signed_hist_undo(mn_require_hist(vm, cfi), *q);
     *t += (*q) * 2;
     *q = 0;
 }
