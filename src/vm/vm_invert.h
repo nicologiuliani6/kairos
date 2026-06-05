@@ -1284,6 +1284,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
              * "1×THEN poi base ELSE" che il recursion_depth-replay non gestisce)
              * → --check-invertibility funziona su programmi con printf. */
             if (pn && strncmp(pn, "__mn_put", 8) == 0) { i--; continue; }
+            /* Native inverse di pool_load: il forward era native (out=mem[slot] +
+             * 2 push hist); l'inverse è self-contained dall'hist (pop t, out-=t,
+             * pop out). Salta il replay del dispatch 917-IF. */
+            if (g_vm_native_arith && pn && !strcmp(pn, "__mn_pool_load")) {
+                mn_native_pool_load_inv(vm, get_findex(frame_name));
+                i--; continue;
+            }
             char base_cur[VAR_NAME_LENGTH];
             strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
             base_cur[VAR_NAME_LENGTH - 1] = '\0';

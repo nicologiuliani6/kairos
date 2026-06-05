@@ -154,6 +154,50 @@ static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_lin
 
 void vm_stats_sample(VM *vm);
 
+/* Native interception di `call __mn_pool_load(slot, __mn_mem0..N, out, __mn_hist,
+ * __mn_scratch)` (dispatch statico binary-search delle celle nominate per
+ * `tbl[i]` a indice runtime). Il bytecode lega 917 parametri e poi fa, sul leaf
+ * `slot==k`: `t=mem[k]; push(out,hist); out=t; push(t,hist)`. Qui lo eseguiamo
+ * in C sul frame CHIAMANTE — out = mem[slot] spingendo gli STESSI 2 valori su
+ * __mn_hist (push old-out, push mem[slot]) → l'inverse bytecode (uncall) resta
+ * coerente, niente interception inverse. Salta il binding dei 917 param (= il
+ * collo: ~4x di des). Ritorna 1 se gestito, 0 = fallback al bytecode (NB: in tal
+ * caso strtok è già consumato, quindi gestiamo o paniciamo — gli arg di
+ * pool_load sono sempre ben formati). Solo `g_vm_native_arith`. */
+static int mn_native_pool_load_fwd(VM *vm, uint cfi_cur)
+{
+    Frame *f = vm->frames[cfi_cur];
+    char *a; char first[VAR_NAME_LENGTH] = {0};
+    char w0[VAR_NAME_LENGTH] = {0}, w1[VAR_NAME_LENGTH] = {0}, w2[VAR_NAME_LENGTH] = {0};
+    int n = 0;
+    while ((a = strtok(NULL, " \t"))) {
+        if (n == 0) { strncpy(first, a, VAR_NAME_LENGTH - 1); first[VAR_NAME_LENGTH-1]='\0'; }
+        strncpy(w0, w1, VAR_NAME_LENGTH - 1); w0[VAR_NAME_LENGTH-1]='\0';
+        strncpy(w1, w2, VAR_NAME_LENGTH - 1); w1[VAR_NAME_LENGTH-1]='\0';
+        strncpy(w2, a,  VAR_NAME_LENGTH - 1); w2[VAR_NAME_LENGTH-1]='\0';
+        n++;
+    }
+    /* arg layout: slot=first, mem0..memK, out=w0, __mn_hist=w1, __mn_scratch=w2 */
+    if (n < 4) vm_debug_panic("[VM] native __mn_pool_load: troppi pochi arg (%d)\n", n);
+    int si = char_id_map_lookup(&f->VarIndexer, first);
+    if (si < 0 || !f->vars[si]) vm_debug_panic("[VM] native __mn_pool_load: slot '%s'\n", first);
+    int64_t slot = *(f->vars[si]->value);
+    char cell[40]; snprintf(cell, sizeof(cell), "__mn_mem%lld", (long long)slot);
+    int ci = char_id_map_lookup(&f->VarIndexer, cell);
+    int oi = char_id_map_lookup(&f->VarIndexer, w0);
+    int hi = char_id_map_lookup(&f->VarIndexer, w1);
+    if (ci < 0 || oi < 0 || hi < 0 || !f->vars[ci] || !f->vars[oi] || !f->vars[hi]
+        || f->vars[hi]->T != TYPE_STACK)
+        vm_debug_panic("[VM] native __mn_pool_load: cella/out/hist non risolti (slot=%lld)\n",
+                       (long long)slot);
+    int64_t cellval = *(f->vars[ci]->value);
+    int64_t *outp   = f->vars[oi]->value;
+    mn_hist_push(f->vars[hi], *outp);    /* push(out): vecchio out */
+    *outp = cellval;                     /* out := mem[slot] */
+    mn_hist_push(f->vars[hi], cellval);  /* push(t): t = mem[slot] */
+    return 1;
+}
+
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 {
     g_current_vm = vm;
@@ -286,6 +330,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 continue;
             }
             uint  cfi_cur = get_findex(fname);
+            /* Native pool_load: salta i 917 param-bind, esegue out=mem[slot] in C
+             * sul frame chiamante (hist coerente col bytecode → inverse OK). */
+            if (g_vm_native_arith && !strcmp(pn, "__mn_pool_load")) {
+                mn_native_pool_load_fwd(vm, cfi_cur);
+                *nl = '\n'; ptr = nl + 1; continue;
+            }
             char  base[VAR_NAME_LENGTH]; strncpy(base, fname, VAR_NAME_LENGTH - 1);
             char *at = strchr(base, '@'); if (at) *at = '\0';
             int   is_rec    = !strcmp(pn, base);

@@ -1103,4 +1103,33 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
 }
 
+/* Inverse del native pool_load (uncall, dentro invert_op_to_line). Il forward ha
+ * spinto [old_out, mem[slot]] su __mn_hist; l'inverse è self-contained: pop(t) →
+ * out -= t (out: mem[slot]→0) → pop(out)=old_out. Non rilegge mem[slot]. Definito
+ * qui (vm_ops.h, incluso prima di vm_invert.h) così il CALL-inverse può chiamarlo.
+ * `cfi_cur` = frame in cui vivono out/__mn_hist. */
+static inline void mn_native_pool_load_inv(VM *vm, uint cfi_cur)
+{
+    Frame *f = vm->frames[cfi_cur];
+    char *a; char w0[VAR_NAME_LENGTH] = {0}, w1[VAR_NAME_LENGTH] = {0}, w2[VAR_NAME_LENGTH] = {0};
+    int n = 0;
+    while ((a = strtok(NULL, " \t"))) {
+        strncpy(w0, w1, VAR_NAME_LENGTH - 1); w0[VAR_NAME_LENGTH-1]='\0';
+        strncpy(w1, w2, VAR_NAME_LENGTH - 1); w1[VAR_NAME_LENGTH-1]='\0';
+        strncpy(w2, a,  VAR_NAME_LENGTH - 1); w2[VAR_NAME_LENGTH-1]='\0';
+        n++;
+    }
+    if (n < 4) vm_debug_panic("[VM] native __mn_pool_load inv: pochi arg (%d)\n", n);
+    int oi = char_id_map_lookup(&f->VarIndexer, w0);   /* out */
+    int hi = char_id_map_lookup(&f->VarIndexer, w1);   /* __mn_hist */
+    if (oi < 0 || hi < 0 || !f->vars[oi] || !f->vars[hi] || f->vars[hi]->T != TYPE_STACK)
+        vm_debug_panic("[VM] native __mn_pool_load inv: out/hist non risolti\n");
+    Var *hv = f->vars[hi];
+    int64_t *outp = f->vars[oi]->value;
+    if (hv->stack_len < 2) vm_debug_panic("[VM] native __mn_pool_load inv: hist < 2\n");
+    int64_t t = hv->value[--hv->stack_len];   /* pop(t) = mem[slot] */
+    *outp -= t;                               /* out → 0 */
+    *outp = hv->value[--hv->stack_len];        /* pop(out) = old_out */
+}
+
 #endif /* VM_OPS_H */
