@@ -21,6 +21,8 @@ procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scrat
         push(pow, __mn_hist)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
+        push(s, __mn_hist)
+        delocal int s = 0
         push(bbit, __mn_hist)
         delocal int bbit = 0
         push(abit, __mn_hist)

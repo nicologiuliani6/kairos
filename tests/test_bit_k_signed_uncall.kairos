@@ -104,5 +104,5 @@ procedure main()
     call __mn_bit_k_signed(a, k, bit_out, __mn_hist, __mn_scratch)
     uncall __mn_bit_k_signed(a, k, bit_out, __mn_hist, __mn_scratch)
     delocal int bit_out = 0
-    delocal int k = 0
+    delocal int k = 1
     delocal int a = -5
