@@ -1,0 +1,17 @@
+# Da inserire in lib/linguist/languages.yml di github/linguist
+# (in ordine alfabetico, tra "Jsonnet"/"Julia" e "KakouneScript"/"KerboScript").
+#
+# NOTE:
+#  - language_id deve essere UNICO. Il valore sotto è un candidato; esegui
+#    `script/update-ids` nel repo linguist per assegnarlo/validarlo (la CI
+#    fallisce se collide).
+#  - color: esadecimale mostrato nella barra lingue del repo.
+#  - tm_scope DEVE combaciare con lo scopeName del grammar (source.kairos).
+Kairos:
+  type: programming
+  color: "#8A2BE2"
+  extensions:
+  - ".kairos"
+  tm_scope: source.kairos
+  ace_mode: text
+  language_id: 790447070
