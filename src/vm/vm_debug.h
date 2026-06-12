@@ -355,9 +355,14 @@ static inline int vm_debug_vars_json(VM *vm, const char *frame_name,
         } else if (v->T == TYPE_STACK || v->T == TYPE_CHANNEL) {
             JWRITE("\"type\":\"%s\",\"value\":[",
                    v->T == TYPE_STACK ? "stack" : "channel");
-            size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
+            /* NB: NON chiamare questa lunghezza `n` — `n` è il cursore di
+             * output usato da JWRITE, che la incrementa a ogni scrittura.
+             * Usarla come bound del for la trasformava in un loop runaway
+             * (k oltre stack_len → lettura OOB → segfault, e JSON corrotto
+             * → pannello variabili vuoto nel DAP). */
+            size_t slen = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
             int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
-            for (size_t k = 0; k < n; k++) {
+            for (size_t k = 0; k < slen; k++) {
                 if (k) JWRITE(",");
                 JWRITE("%lld", (long long)arr[k]);
             }
