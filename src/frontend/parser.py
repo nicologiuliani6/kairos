@@ -873,7 +873,9 @@ def _try_collect_vars(stmts, used, bound):
             _collect_ids_in_expr(s[3], used)
         elif tag in ('call', 'uncall', 'call_direct'):  # (_, name, args, ln)
             for a in s[2]:
-                if isinstance(a, str):
+                # `char` è il flag di formato di `show(x, char)`, non una
+                # variabile; `nil`/`empty` sono letterali stack/channel.
+                if isinstance(a, str) and a not in ('char', 'nil', 'empty'):
                     used.add(a)
         elif tag == 'if':            # ('if', ec, then, else, fc, ln)
             _collect_cond_var_ids(s[1], used)
