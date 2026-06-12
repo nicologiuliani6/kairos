@@ -1,0 +1,8 @@
+# Evidenziazione/conteggio dei sorgenti Kairos nella barra lingue di GitHub.
+# Linguist non conosce ancora "Kairos" (PR upstream in preparazione, vedi
+# linguist-contribution/): nel frattempo mappiamo i .kairos a Pascal — keyword
+# (procedure/if/then/else) e commenti // simili → highlight ragionevole, e
+# Pascal non e' altrimenti presente nel repo (slice distinto).
+# Rimuovere/aggiornare dopo il merge in github-linguist.
+*.kairos linguist-language=Pascal
+*.kairos linguist-detectable=true
