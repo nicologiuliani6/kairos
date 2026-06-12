@@ -87,6 +87,11 @@ def p_value(p):
              | ID'''
     p[0] = p[1]
 
+def p_value_negative(p):
+    '''value : MINUS NUMBER'''
+    # Literal intero negativo per local/delocal (es. `delocal int a = -5`).
+    p[0] = -p[2]
+
 # ── Operatori di confronto ──────────────────────────────────────────────────
 def p_condition(p):
     '''condition : expr EQEQ expr
@@ -208,6 +213,24 @@ def p_par(p):
     '''statement : PAR par_branch_list RAP'''
     p[0] = ('par', p[2], p.lineno(1))
     if VERBOSE: print(f"par: {p[2]}")
+
+# ── TRY / ROLLBACK / YRT ─────────────────────────────────────────────────────
+# Stile if-fi: condizione di commit dopo `try`, ripetuta dopo `yrt`.
+#     try <cond>           rollback opzionale:   try <cond>
+#         <body>                                     <body>
+#     rollback                                   yrt <cond>
+#         <rb_body>
+#     yrt <cond>
+def p_try(p):
+    '''statement : TRY condition opt_body YRT condition
+                 | TRY condition opt_body ROLLBACK opt_body YRT condition'''
+    if len(p) == 6:
+        # try <entry_cond> <body> yrt <exit_cond>   (nessun rollback)
+        p[0] = ('try', p[2], p[3], None, p[5], p.lineno(1))
+    else:
+        # try <entry_cond> <body> rollback <rb_body> yrt <exit_cond>
+        p[0] = ('try', p[2], p[3], p[5], p[7], p.lineno(1))
+    if VERBOSE: print(f"try: {p[2]}")
 
 # ── Errore ───────────────────────────────────────────────────────────────────
 def p_error(p):
@@ -798,6 +821,165 @@ def _run_static_checks_body(program_ast):
             _check_stmt_reversibility(
                 stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
             )
+
+
+# ── Desugaring di try/commit/rollback ────────────────────────────────────────
+# Il costrutto
+#     try <body> commit <cond> rollback <rb> yrt
+# viene riscritto, prima dei controlli statici e del bytecode, in costrutti
+# esistenti (call / uncall / if-fi). Il body diventa una procedura sintetica
+# `__try_body_N(freevars)`; il rollback (se presente) `__try_rb_N(freevars)`:
+#
+#     call __try_body_N(fv_body)
+#     if <cond> then
+#         // commit: il body resta applicato
+#     else
+#         uncall __try_body_N(fv_body)   // annulla il body (inversione)
+#         call  __try_rb_N(fv_rb)        // esegue il rollback
+#     fi <cond>
+#
+# I parametri sono le *free variable* del blocco (id usati ma non dichiarati
+# `local` al suo interno): CALL le linka per riferimento (aliasing), quindi la
+# procedura sintetica muta le celle del chiamante in-place. L'`else` contiene
+# call/uncall → la VM imposta has_call e salta il check di reversibilità del
+# `fi` (vm_ops.h:op_assert), così la condizione del `fi` resta solo sintattica.
+
+_FORBIDDEN_IN_TRY = ('par',)  # v1: niente par/canali dentro il body del try
+
+
+def _try_free_vars(stmts):
+    """Id usati ma non dichiarati `local`/`decl` dentro `stmts` (ricorsivo)."""
+    used, bound = set(), set()
+    _try_collect_vars(stmts, used, bound)
+    return used - bound
+
+
+def _try_collect_vars(stmts, used, bound):
+    for s in stmts:
+        if not isinstance(s, tuple) or not s:
+            continue
+        tag = s[0]
+        if tag == 'decl':            # ('decl', tipo, name, ln)
+            bound.add(s[2])
+        elif tag == 'local':         # ('local', tipo, name, val, ln)
+            bound.add(s[2])
+            _collect_ids_in_expr(s[3], used)
+        elif tag == 'delocal':       # ('delocal', tipo, name, val|None, ln)
+            bound.add(s[2])
+            if s[3] is not None:
+                _collect_ids_in_expr(s[3], used)
+        elif tag == 'assign':        # ('assign', var, op, expr, ln)
+            used.add(s[1])
+            _collect_ids_in_expr(s[3], used)
+        elif tag in ('call', 'uncall', 'call_direct'):  # (_, name, args, ln)
+            for a in s[2]:
+                if isinstance(a, str):
+                    used.add(a)
+        elif tag == 'if':            # ('if', ec, then, else, fc, ln)
+            _collect_cond_var_ids(s[1], used)
+            _collect_cond_var_ids(s[4], used)
+            _try_collect_vars(s[2], used, bound)
+            _try_collect_vars(s[3], used, bound)
+        elif tag == 'from':          # ('from', ec, body, uc, ...)
+            _collect_cond_var_ids(s[1], used)
+            _collect_cond_var_ids(s[3], used)
+            _try_collect_vars(s[2], used, bound)
+        elif tag == 'par':
+            for branch in s[1]:
+                _try_collect_vars(branch, used, bound)
+
+
+def _try_assert_no_forbidden(stmts, lineno):
+    for s in stmts:
+        if not isinstance(s, tuple) or not s:
+            continue
+        if s[0] in _FORBIDDEN_IN_TRY or s[0] == 'call_direct' and s[1] in ('ssend', 'srecv'):
+            raise KairosCompileError(
+                "PARSER",
+                f"riga {lineno}: '{s[0] if s[0]!='call_direct' else s[1]}' non ammesso "
+                "nel body di un blocco try (v1)",
+            )
+        if s[0] == 'if':
+            _try_assert_no_forbidden(s[2], lineno); _try_assert_no_forbidden(s[3], lineno)
+        elif s[0] == 'from':
+            _try_assert_no_forbidden(s[2], lineno)
+
+
+def _desugar_stmts(stmts, new_procs, counter):
+    out = []
+    for s in stmts:
+        out.extend(_desugar_one(s, new_procs, counter))
+    return out
+
+
+def _desugar_one(s, new_procs, counter):
+    if not isinstance(s, tuple) or not s:
+        return [s]
+    tag = s[0]
+    if tag == 'if':
+        _, ec, tb, eb, fc, ln = s
+        return [('if', ec, _desugar_stmts(tb, new_procs, counter),
+                 _desugar_stmts(eb, new_procs, counter), fc, ln)]
+    if tag == 'from':
+        body = _desugar_stmts(s[2], new_procs, counter)
+        return [('from', s[1], body, s[3], *s[4:])]
+    if tag == 'par':
+        _, branches, ln = s
+        return [('par', [_desugar_stmts(b, new_procs, counter) for b in branches], ln)]
+    if tag == 'try':
+        _, entry_cond, body, rb_body, exit_cond, ln = s
+        # innermost-first: i try annidati sono già riscritti qui sotto.
+        body = _desugar_stmts(body, new_procs, counter)
+        _try_assert_no_forbidden(body, ln)
+        uid = counter[0]; counter[0] += 1
+        try_name = f"__try_body_{uid}"
+        fv_body = sorted(_try_free_vars(body))
+        new_procs.append(('procedure', try_name,
+                          [('int', v) for v in fv_body], body, ln))
+        else_body = [('uncall', try_name, list(fv_body), ln)]
+        if rb_body is not None:
+            rb_body = _desugar_stmts(rb_body, new_procs, counter)
+            _try_assert_no_forbidden(rb_body, ln)
+            rb_name = f"__try_rb_{uid}"
+            fv_rb = sorted(_try_free_vars(rb_body))
+            new_procs.append(('procedure', rb_name,
+                              [('int', v) for v in fv_rb], rb_body, ln))
+            else_body.append(('call', rb_name, list(fv_rb), ln))
+        # entry_cond decide il commit (valutata dopo il body); exit_cond è il
+        # mirror del `fi` (soppresso da has_call perché l'else contiene call).
+        return [
+            ('call', try_name, list(fv_body), ln),
+            ('if', entry_cond, [], else_body, exit_cond, ln),
+        ]
+    return [s]
+
+
+def desugar_try(program_ast):
+    """Riscrive tutti i nodi `try` del programma in call/uncall/if-fi.
+
+    Ritorna un nuovo AST `('program', procedure_list)` con le procedure
+    sintetiche del body/rollback appese in coda. Idempotente sui programmi
+    senza `try`.
+    """
+    if not program_ast or program_ast[0] != 'program':
+        return program_ast
+    procedures = program_ast[1] if len(program_ast) > 1 else []
+    counter = [0]
+    out_procs = []
+    for proc in procedures:
+        if not isinstance(proc, tuple) or len(proc) < 5 or proc[0] != 'procedure':
+            out_procs.append(proc)
+            continue
+        _, name, params, body, ln = proc
+        # Le procedure sintetiche del try vanno emesse PRIMA della procedura che
+        # le usa: in Kairos `main` (o un'altra proc) viene eseguita appena lo
+        # scan del prepass incontra il suo PROC, quindi i callee devono essere
+        # già registrati (definiti più in alto nel file).
+        new_procs = []
+        new_body = _desugar_stmts(body, new_procs, counter)
+        out_procs.extend(new_procs)
+        out_procs.append(('procedure', name, params, new_body, ln))
+    return ('program', out_procs)
 
 
 _nulllog = logging.getLogger('ply.nulllog')

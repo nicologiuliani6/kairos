@@ -1,0 +1,20 @@
+// try con if-fi interno al body — ramo ROLLBACK.
+// Il body porta x a 4 e y a 10; la condizione di commit (x==99) è falsa,
+// quindi il body viene annullato (x->0, y->0) e parte il rollback (x+=7).
+procedure main()
+    local int x = 0
+    local int y = 0
+    try x == 99
+        x += 4
+        if x == 4 then
+            y += 10
+        else
+            y += 1
+        fi x == 4
+    rollback
+        x += 7
+    yrt x == 99
+    show(x)              // atteso: 7
+    show(y)              // atteso: 0 (body annullato → y torna a 0)
+    delocal int y = 0
+    delocal int x = 7

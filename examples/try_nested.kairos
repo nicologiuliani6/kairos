@@ -1,0 +1,17 @@
+// try annidato: il body del try esterno contiene un try interno.
+// Interno: x 1->11, commit x==11 vero → mantenuto.
+// Esterno: x==11 vero → commit, tutto mantenuto.
+procedure main()
+    local int x = 0
+    try x == 11
+        x += 1
+        try x == 11
+            x += 10
+        rollback
+            x += 100
+        yrt x == 11
+    rollback
+        x += 1000
+    yrt x == 11
+    show(x)              // atteso: 11
+    delocal int x = 11

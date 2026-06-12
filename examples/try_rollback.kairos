@@ -1,0 +1,10 @@
+// try/rollback (stile if-fi) — ramo ROLLBACK (condizione falsa → undo + rollback).
+procedure main()
+    local int x = 0
+    try x == 7
+        x += 5
+    rollback
+        x += 99
+    yrt x == 7
+    show(x)              // atteso: 99 (body annullato: x 5->0, poi rollback +99)
+    delocal int x = 99

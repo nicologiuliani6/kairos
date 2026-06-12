@@ -16,6 +16,7 @@ reserved = {
     'if'       : 'IF',    'then'    : 'THEN',  'else'  : 'ELSE', 'fi': 'FI',
     'from'     : 'FROM',  'loop'    : 'LOOP',  'until' : 'UNTIL',
     'par'      : 'PAR',   'and'     : 'AND',   'rap'   : 'RAP',
+    'try'      : 'TRY',   'rollback' : 'ROLLBACK', 'yrt' : 'YRT',
 }
 
 tokens = (
@@ -40,6 +41,7 @@ tokens = (
     'IF', 'THEN', 'ELSE', 'FI',
     'FROM', 'LOOP', 'UNTIL',
     'PAR', 'AND', 'RAP',
+    'TRY', 'ROLLBACK', 'YRT',
     'COMMA',
 )
 

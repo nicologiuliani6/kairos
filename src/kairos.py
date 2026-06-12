@@ -39,7 +39,7 @@ def _warn_if_libvm_stale(lib_path: str, project_root: str) -> None:
     except OSError:
         pass
 from src.frontend.lexer import lexer
-from src.frontend.parser import parser, run_static_checks
+from src.frontend.parser import parser, run_static_checks, desugar_try
 from src.frontend.errors import KairosCompileError
 
 _KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
@@ -84,6 +84,7 @@ if __name__ == '__main__':
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
             raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+        ast = desugar_try(ast)
         run_static_checks(ast, check_par_int_race=not skip_par_int_race)
         BT_Compiler = ByteCode_Compiler()
         BT_Compiler.process(ast)

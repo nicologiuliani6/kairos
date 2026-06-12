@@ -1,0 +1,9 @@
+// try senza clausola rollback: se la condizione di commit è falsa,
+// il body viene solo annullato (nessuna azione di rollback).
+procedure main()
+    local int x = 0
+    try x == 99
+        x += 5
+    yrt x == 99
+    show(x)              // atteso: 0 (body annullato, nessun rollback)
+    delocal int x = 0

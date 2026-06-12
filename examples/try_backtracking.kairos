@@ -1,0 +1,41 @@
+// Backtracking con try/rollback — knapsack "greedy".
+//
+// Budget = 10, oggetti di peso {6, 5, 4}. Per ogni oggetto si TENTA di
+// inserirlo nello zaino: il body aggiunge il peso e incrementa il contatore,
+// poi la condizione di commit `load <= budget` decide:
+//   - vera  → la mossa è valida, viene confermata (commit);
+//   - falsa → la mossa sfora il budget: il body viene ANNULLATO (rollback),
+//             come un backtrack che disfa la scelta e prova la successiva.
+//
+// Traccia: 0 +6=6 (ok) ; 6 +5=11 (>10 → backtrack) ; 6 +4=10 (ok).
+// Risultato: load=10, oggetti presi=2 (il 6 e il 4, scartato il 5).
+
+procedure main()
+    local int budget = 10
+    local int load = 0
+    local int taken = 0
+
+    // oggetto 1: peso 6
+    try load <= budget
+        load += 6
+        taken += 1
+    yrt load <= budget
+
+    // oggetto 2: peso 5  → 6+5 = 11 > 10 → mossa annullata
+    try load <= budget
+        load += 5
+        taken += 1
+    yrt load <= budget
+
+    // oggetto 3: peso 4  → 6+4 = 10 <= 10 → mossa confermata
+    try load <= budget
+        load += 4
+        taken += 1
+    yrt load <= budget
+
+    show(load)               // atteso: 10
+    show(taken)              // atteso: 2
+
+    delocal int taken = 2
+    delocal int load = 10
+    delocal int budget = 10

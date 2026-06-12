@@ -2,7 +2,7 @@ import sys
 from queue import Queue
 
 from src.frontend.errors import KairosCompileError
-from src.frontend.parser import lexer, parser, run_static_checks
+from src.frontend.parser import lexer, parser, run_static_checks, desugar_try
 
 _KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
 
@@ -187,6 +187,7 @@ if __name__ == '__main__':
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
             raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+        ast = desugar_try(ast)
         run_static_checks(ast, check_par_int_race=not skip_par_int_race)
         compiler = ByteCode_Compiler()
         compiler.process(ast)

@@ -1,0 +1,17 @@
+// try con ciclo from-loop e local interni al body — ramo COMMIT.
+// Il body somma 2 per 3 iterazioni (x=6); la condizione di commit è vera,
+// quindi il body resta applicato.
+procedure main()
+    local int x = 0
+    try x == 6
+        local int i = 0
+        from i == 0 loop
+            x += 2
+            i += 1
+        until i == 3
+        delocal int i = 3
+    rollback
+        x += 1
+    yrt x == 6
+    show(x)              // atteso: 6
+    delocal int x = 6

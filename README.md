@@ -25,6 +25,7 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
    - [call e uncall](#call-e-uncall)
    - [Blocco if-fi](#blocco-if-fi)
    - [Ciclo from-loop-until](#ciclo-from-loop-until)
+   - [Blocco try-rollback](#blocco-try-rollback)
    - [Stack — push e pop](#stack--push-e-pop)
    - [Canali — ssend e srecv](#canali--ssend-e-srecv)
    - [Parallelismo — par/and/rap](#parallelismo-par-and-rap)
@@ -421,6 +422,57 @@ delocal int i = n
 ```
 
 Il ciclo è reversibile: eseguito al contrario, la condizione `until` diventa la condizione di entrata e `from` quella di uscita, e il corpo viene eseguito all'indietro.
+
+---
+
+### Blocco try-rollback
+
+Stile `if-fi`: la **condizione di commit** si scrive dopo `try` e si ripete dopo `yrt`. Esegue un body in avanti, poi valuta la condizione: se è vera il body resta applicato; se è falsa il body viene **annullato** (inversione) e si esegue il body di `rollback`.
+
+```kairos
+try <condizione>
+    // body: eseguito in avanti
+rollback
+    // rollback: eseguito solo se la condizione è falsa
+yrt <condizione>
+```
+
+La clausola `rollback` è opzionale: con `try <cond> <body> yrt <cond>`, condizione falsa = solo annullamento del body.
+
+```kairos
+procedure main()
+    local int x = 0
+    try x == 7            // falsa dopo il body: 5 != 7
+        x += 5
+    rollback
+        x += 99
+    yrt x == 7
+    show(x)              // 99: body annullato (x: 5 -> 0), poi rollback (+99)
+    delocal int x = 99
+```
+
+La condizione dopo `try` decide il commit (valutata dopo il body); quella dopo `yrt` ne è il mirror, esattamente come la guardia ripetuta di `if … fi`.
+
+**Come funziona (desugaring).** Il costrutto è puro zucchero sintattico del frontend: il body diventa una procedura sintetica `__try_body_N(freevars)` e il rollback `__try_rb_N(freevars)`, dove le *free variable* (id usati ma non dichiarati `local` nel blocco) sono passate come parametri — `call` le linka per riferimento, quindi la procedura muta le celle del chiamante in-place. La riscrittura usa solo costrutti esistenti (`call`/`uncall`/`if-fi`):
+
+```kairos
+call __try_body_N(fv)
+if <condizione> then
+    // commit: il body resta
+else
+    uncall __try_body_N(fv)   // annulla il body
+    call  __try_rb_N(fv)      // esegue il rollback
+fi <condizione>
+```
+
+L'inversione del body sfrutta la reversibilità del linguaggio: `uncall` ricalcola il body all'indietro, senza bisogno di history aggiuntiva.
+
+**Vincoli (v1):**
+- niente `par` né canali (`ssend`/`srecv`) dentro il body o il rollback;
+- la `<condizione>` di commit deve usare variabili del frame esterno (i `local` dichiarati nel body sono già chiusi con `delocal` a fine body);
+- valgono i vincoli standard di `if-fi`/`from-loop` per i costrutti annidati nel body.
+
+Esempi completi: `examples/try_commit.kairos`, `examples/try_rollback.kairos`, `examples/try_loop.kairos`, `examples/try_if_rollback.kairos`, `examples/try_nested.kairos`, `examples/try_no_rollback.kairos`.
 
 ---
 
