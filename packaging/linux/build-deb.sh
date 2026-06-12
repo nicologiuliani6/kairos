@@ -35,14 +35,15 @@ PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
 STAGE_DIR="${BUILD_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
 DEBIAN_DIR="${STAGE_DIR}/DEBIAN"
 
-# make release: PyInstaller --onefile → build/dist/KairosApp (file eseguibile).
+# make release-app: PyInstaller --onefile → build/dist/KairosApp (file eseguibile).
 # Se passi a --onedir, l'eseguibile è build/dist/KairosApp/KairosApp.
 DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
 
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
-(cd "${PROJECT_ROOT}" && make release && make build-dap)
+# release-app dipende da release (libvm.so) e produce il bundle KairosApp.
+(cd "${PROJECT_ROOT}" && make release-app && make build-dap)
 
 APP_ONEFILE="${PROJECT_ROOT}/build/dist/KairosApp"
 APP_ONEDIR="${PROJECT_ROOT}/build/dist/KairosApp/KairosApp"
