@@ -1,0 +1,9 @@
+// Errore VM atteso (Local-Err): `local int x = 0` due volte sullo stesso nome
+// senza un DELOCAL nel mezzo. 'x' e' gia' nel dominio dello store: la VM deve
+// rifiutare l'allocazione invece di sovrascriverla silenziosamente (altrimenti
+// il DELOCAL che la richiude non potrebbe piu' distinguere le due istanze).
+procedure main()
+    local int x = 0
+    local int x = 0
+    delocal int x = 0
+    delocal int x = 0

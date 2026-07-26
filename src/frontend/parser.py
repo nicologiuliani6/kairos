@@ -12,6 +12,16 @@ class _ParStaticConfig:
     """Controlli statici su `par` (modificato da `run_static_checks`)."""
 
     check_int_race: bool = True
+    # Nomi di channel che, da qualche parte nel programma, vengono spediti come
+    # VALORE payload di un ssend/srecv (mobilità di canali, stile pi-calculus:
+    # es. `ssend(<x, s, aux>, transport)` manda 'aux' come dato, non è il canale
+    # su cui si sta comunicando). Per questi il vero secondo endpoint può vivere
+    # sotto un altro nome locale in un'altra procedura (es. 'reply' dentro il
+    # callee che riceve 'auth_resp'): non rilevabile da un'analisi lessicale.
+    # channel_thread_count==1 non li rigetta: si preferisce il falso negativo
+    # (non abbiamo modo di provare che siano orfani) al falso positivo (rompere
+    # pattern di channel-passing legittimi e già testati).
+    mobile_channel_names: frozenset = frozenset()
 
 
 # ── Precedenza operatori ────────────────────────────────────────────────────
@@ -654,6 +664,139 @@ def _collect_stack_args_from_call(stmt, proc_signatures, out):
             for nested in branch:
                 _collect_stack_args_from_call(nested, proc_signatures, out)
 
+def _collect_channel_args_from_call(stmt, proc_signatures, out):
+    """Come _collect_stack_args_from_call, ma per 'channel'. In più, a
+    differenza di call/uncall, ssend/srecv sono call_direct con il canale
+    come ultimo argomento (non risolvibile via proc_signatures)."""
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+
+    tag = stmt[0]
+    if tag in ('call', 'uncall'):
+        _, proc_name, args, _lineno = stmt
+        param_types = proc_signatures.get(proc_name, [])
+        for idx, actual in enumerate(args or []):
+            if idx < len(param_types) and param_types[idx] == 'channel' and isinstance(actual, str):
+                out.add(actual)
+        return
+
+    if tag == 'call_direct':
+        _, proc_name, args, _lineno = stmt
+        lname = proc_name.lower()
+        if lname in ('ssend', 'srecv'):
+            if args and isinstance(args[-1], str):
+                out.add(args[-1])
+            return
+        if lname in ('push', 'pop'):
+            return
+        param_types = proc_signatures.get(proc_name, [])
+        for idx, actual in enumerate(args or []):
+            if idx < len(param_types) and param_types[idx] == 'channel' and isinstance(actual, str):
+                out.add(actual)
+        return
+
+    if tag == 'if':
+        _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
+        for nested in then_body:
+            _collect_channel_args_from_call(nested, proc_signatures, out)
+        for nested in else_body:
+            _collect_channel_args_from_call(nested, proc_signatures, out)
+        return
+
+    if tag == 'from':
+        _, _entry_cond, body, _until_cond, *_rest = stmt
+        for nested in body:
+            _collect_channel_args_from_call(nested, proc_signatures, out)
+        return
+
+    # NOTA: a differenza di _collect_stack_args_from_call, qui NON si
+    # ricorsa dentro 'par' annidati: un par annidato introduce nuovi thread
+    # concorrenti (foglie separate), non ulteriori usi dello stesso thread.
+    # È _par_leaf_channel_touches sotto a gestirli come foglie a parte.
+
+
+def _collect_mobile_channel_names_stmt(stmt, out):
+    """Nomi di channel spediti come VALORE payload (non l'ultimo argomento,
+    che è il canale su cui si comunica) in un ssend/srecv ovunque nel corpo
+    di una procedura. Attraversa tutto (if/from/par, annidati compresi):
+    qui interessa solo *dove* compare il nome come dato, non la struttura
+    dei thread concorrenti."""
+    if not isinstance(stmt, tuple) or not stmt:
+        return
+
+    tag = stmt[0]
+    if tag == 'call_direct':
+        _, proc_name, args, _lineno = stmt
+        if proc_name.lower() in ('ssend', 'srecv') and args and len(args) > 1:
+            for actual in args[:-1]:
+                if isinstance(actual, str):
+                    out.add(actual)
+        return
+
+    if tag == 'if':
+        _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
+        for nested in then_body:
+            _collect_mobile_channel_names_stmt(nested, out)
+        for nested in else_body:
+            _collect_mobile_channel_names_stmt(nested, out)
+        return
+
+    if tag == 'from':
+        _, _entry_cond, body, _until_cond, *_rest = stmt
+        for nested in body:
+            _collect_mobile_channel_names_stmt(nested, out)
+        return
+
+    if tag == 'par':
+        _, branches, _lineno = stmt
+        for branch in branches:
+            for nested in branch:
+                _collect_mobile_channel_names_stmt(nested, out)
+        return
+
+
+def _collect_mobile_channel_names(program_ast):
+    """Insieme (globale al programma) dei nomi di channel usati almeno una
+    volta come payload di un ssend/srecv in una qualunque procedura. Usato
+    per esentare dal controllo count==1 i canali che partecipano a channel-
+    passing (il vero secondo endpoint può vivere sotto un altro nome, in
+    un'altra procedura, e non è ricostruibile con un'analisi lessicale)."""
+    out = set()
+    procedures = program_ast[1] if len(program_ast) > 1 else []
+    for proc in procedures:
+        if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
+            continue
+        body = proc[3] or []
+        for stmt in body:
+            _collect_mobile_channel_names_stmt(stmt, out)
+    return out
+
+
+def _par_leaf_channel_touches(branch_stmts, proc_signatures):
+    """Appiattisce un branch di PAR nei thread concorrenti 'foglia' che
+    realmente lo compongono, e per ciascuna foglia i nomi di channel che
+    tocca direttamente. Un `par` annidato non è un uso in più dello stesso
+    thread: ciascuno dei suoi rami è un thread concorrente a sé, quindi
+    contribuisce le proprie foglie (ricorsivamente) invece di essere
+    contato come un singolo uso del branch che lo contiene. Codice
+    sequenziale nello stesso branch (prima/dopo un par annidato) resta
+    invece un'unica foglia, perché è lo stesso thread fisico."""
+    own = set()
+    leaves = []
+    for nested in branch_stmts:
+        if not isinstance(nested, tuple) or not nested:
+            continue
+        if nested[0] == 'par':
+            _, sub_branches, _lineno = nested
+            for sub_branch in sub_branches:
+                leaves.extend(_par_leaf_channel_touches(sub_branch, proc_signatures))
+        else:
+            _collect_channel_args_from_call(nested, proc_signatures, own)
+    if own or not leaves:
+        leaves.append(own)
+    return leaves
+
+
 def _check_stmt_reversibility(
     stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
 ):
@@ -788,16 +931,46 @@ def _check_stmt_reversibility(
                             ),
                         )
 
+        channel_leaves = []
+        for branch in branches:
+            channel_leaves.extend(_par_leaf_channel_touches(branch, proc_signatures))
+        channel_thread_count = {}
+        for leaf in channel_leaves:
+            for ch_name in leaf:
+                channel_thread_count[ch_name] = channel_thread_count.get(ch_name, 0) + 1
+        for ch_name, count in channel_thread_count.items():
+            if count > 2:
+                raise KairosCompileError(
+                    "STATIC",
+                    (
+                        f"riga {lineno}: channel '{ch_name}' condiviso da {count} thread concorrenti "
+                        f"nel blocco PAR (deve essere una sessione binaria, esattamente 2 endpoint); "
+                        "usa canali distinti o separa i thread"
+                    ),
+                )
+            if count == 1 and ch_name not in _ParStaticConfig.mobile_channel_names:
+                raise KairosCompileError(
+                    "STATIC",
+                    (
+                        f"riga {lineno}: channel '{ch_name}' usato da un solo thread "
+                        f"nel blocco PAR (deve essere una sessione binaria, esattamente 2 endpoint); "
+                        "manca il thread partner con cui sincronizzarsi tramite ssend/srecv"
+                    ),
+                )
+
 def run_static_checks(program_ast, *, check_par_int_race: bool = True):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
         raise KairosCompileError("PARSER", "AST del programma non valido")
 
     prev_race = _ParStaticConfig.check_int_race
+    prev_mobile = _ParStaticConfig.mobile_channel_names
     _ParStaticConfig.check_int_race = check_par_int_race
+    _ParStaticConfig.mobile_channel_names = _collect_mobile_channel_names(program_ast)
     try:
         _run_static_checks_body(program_ast)
     finally:
         _ParStaticConfig.check_int_race = prev_race
+        _ParStaticConfig.mobile_channel_names = prev_mobile
 
 
 def _run_static_checks_body(program_ast):
@@ -847,6 +1020,50 @@ def _run_static_checks_body(program_ast):
 _FORBIDDEN_IN_TRY = ('par',)  # v1: niente par/canali dentro il body del try
 
 
+def _proc_contains_ssend_srecv(name, proc_bodies, cache, visiting):
+    """ssend/srecv raggiungibili dal corpo della procedura `name`, anche
+    attraverso call/uncall annidate (per il divieto try/rollback: vedi
+    _try_assert_no_forbidden). Memoizzato; `visiting` evita loop su
+    ricorsione/mutua ricorsione tra procedure."""
+    if name in cache:
+        return cache[name]
+    if name in visiting:
+        return False
+    body = proc_bodies.get(name)
+    if body is None:
+        return False
+    visiting.add(name)
+    found = _stmts_contain_ssend_srecv(body, proc_bodies, cache, visiting)
+    visiting.discard(name)
+    cache[name] = found
+    return found
+
+
+def _stmts_contain_ssend_srecv(stmts, proc_bodies, cache, visiting):
+    for s in stmts:
+        if not isinstance(s, tuple) or not s:
+            continue
+        tag = s[0]
+        if tag == 'call_direct' and s[1] in ('ssend', 'srecv'):
+            return True
+        if tag in ('call', 'uncall'):
+            if _proc_contains_ssend_srecv(s[1], proc_bodies, cache, visiting):
+                return True
+        elif tag == 'if':
+            if _stmts_contain_ssend_srecv(s[2], proc_bodies, cache, visiting):
+                return True
+            if _stmts_contain_ssend_srecv(s[3], proc_bodies, cache, visiting):
+                return True
+        elif tag == 'from':
+            if _stmts_contain_ssend_srecv(s[2], proc_bodies, cache, visiting):
+                return True
+        elif tag == 'par':
+            for branch in s[1]:
+                if _stmts_contain_ssend_srecv(branch, proc_bodies, cache, visiting):
+                    return True
+    return False
+
+
 def _try_free_vars(stmts):
     """Id usati ma non dichiarati `local`/`decl` dentro `stmts` (ricorsivo)."""
     used, bound = set(), set()
@@ -891,7 +1108,7 @@ def _try_collect_vars(stmts, used, bound):
                 _try_collect_vars(branch, used, bound)
 
 
-def _try_assert_no_forbidden(stmts, lineno):
+def _try_assert_no_forbidden(stmts, lineno, proc_bodies, ssend_srecv_cache):
     for s in stmts:
         if not isinstance(s, tuple) or not s:
             continue
@@ -901,38 +1118,49 @@ def _try_assert_no_forbidden(stmts, lineno):
                 f"riga {lineno}: '{s[0] if s[0]!='call_direct' else s[1]}' non ammesso "
                 "nel body di un blocco try (v1)",
             )
+        if s[0] in ('call', 'uncall') and _proc_contains_ssend_srecv(
+            s[1], proc_bodies, ssend_srecv_cache, set()
+        ):
+            raise KairosCompileError(
+                "PARSER",
+                f"riga {lineno}: '{s[0]} {s[1]}' non ammesso nel body di un blocco try (v1): "
+                f"'{s[1]}' contiene ssend/srecv, anche indirettamente — un try/rollback non può "
+                "disfare un rendez-vous già consumato dal partner senza la sua cooperazione",
+            )
         if s[0] == 'if':
-            _try_assert_no_forbidden(s[2], lineno); _try_assert_no_forbidden(s[3], lineno)
+            _try_assert_no_forbidden(s[2], lineno, proc_bodies, ssend_srecv_cache)
+            _try_assert_no_forbidden(s[3], lineno, proc_bodies, ssend_srecv_cache)
         elif s[0] == 'from':
-            _try_assert_no_forbidden(s[2], lineno)
+            _try_assert_no_forbidden(s[2], lineno, proc_bodies, ssend_srecv_cache)
 
 
-def _desugar_stmts(stmts, new_procs, counter):
+def _desugar_stmts(stmts, new_procs, counter, proc_bodies, ssend_srecv_cache):
     out = []
     for s in stmts:
-        out.extend(_desugar_one(s, new_procs, counter))
+        out.extend(_desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache))
     return out
 
 
-def _desugar_one(s, new_procs, counter):
+def _desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache):
     if not isinstance(s, tuple) or not s:
         return [s]
     tag = s[0]
     if tag == 'if':
         _, ec, tb, eb, fc, ln = s
-        return [('if', ec, _desugar_stmts(tb, new_procs, counter),
-                 _desugar_stmts(eb, new_procs, counter), fc, ln)]
+        return [('if', ec, _desugar_stmts(tb, new_procs, counter, proc_bodies, ssend_srecv_cache),
+                 _desugar_stmts(eb, new_procs, counter, proc_bodies, ssend_srecv_cache), fc, ln)]
     if tag == 'from':
-        body = _desugar_stmts(s[2], new_procs, counter)
+        body = _desugar_stmts(s[2], new_procs, counter, proc_bodies, ssend_srecv_cache)
         return [('from', s[1], body, s[3], *s[4:])]
     if tag == 'par':
         _, branches, ln = s
-        return [('par', [_desugar_stmts(b, new_procs, counter) for b in branches], ln)]
+        return [('par', [_desugar_stmts(b, new_procs, counter, proc_bodies, ssend_srecv_cache)
+                          for b in branches], ln)]
     if tag == 'try':
         _, entry_cond, body, rb_body, exit_cond, ln = s
         # innermost-first: i try annidati sono già riscritti qui sotto.
-        body = _desugar_stmts(body, new_procs, counter)
-        _try_assert_no_forbidden(body, ln)
+        body = _desugar_stmts(body, new_procs, counter, proc_bodies, ssend_srecv_cache)
+        _try_assert_no_forbidden(body, ln, proc_bodies, ssend_srecv_cache)
         uid = counter[0]; counter[0] += 1
         try_name = f"__try_body_{uid}"
         fv_body = sorted(_try_free_vars(body))
@@ -940,8 +1168,8 @@ def _desugar_one(s, new_procs, counter):
                           [('int', v) for v in fv_body], body, ln))
         else_body = [('uncall', try_name, list(fv_body), ln)]
         if rb_body is not None:
-            rb_body = _desugar_stmts(rb_body, new_procs, counter)
-            _try_assert_no_forbidden(rb_body, ln)
+            rb_body = _desugar_stmts(rb_body, new_procs, counter, proc_bodies, ssend_srecv_cache)
+            _try_assert_no_forbidden(rb_body, ln, proc_bodies, ssend_srecv_cache)
             rb_name = f"__try_rb_{uid}"
             fv_rb = sorted(_try_free_vars(rb_body))
             new_procs.append(('procedure', rb_name,
@@ -966,6 +1194,19 @@ def desugar_try(program_ast):
     if not program_ast or program_ast[0] != 'program':
         return program_ast
     procedures = program_ast[1] if len(program_ast) > 1 else []
+    # Mappa nome->corpo ORIGINALE (pre-desugar) di tutte le procedure del
+    # programma: serve a _try_assert_no_forbidden per seguire call/uncall
+    # transitivamente e vietare ssend/srecv raggiunti indirettamente dentro
+    # un try/rollback. Il desugar di `try` non introduce né rimuove
+    # ssend/srecv, quindi il corpo pre-desugar è equivalente ai fini di
+    # questo controllo, ed è disponibile per intero fin da subito (a
+    # differenza di out_procs, costruito incrementalmente sotto).
+    proc_bodies = {
+        proc[1]: proc[3]
+        for proc in procedures
+        if isinstance(proc, tuple) and len(proc) >= 5 and proc[0] == 'procedure'
+    }
+    ssend_srecv_cache = {}
     counter = [0]
     out_procs = []
     for proc in procedures:
@@ -978,7 +1219,7 @@ def desugar_try(program_ast):
         # scan del prepass incontra il suo PROC, quindi i callee devono essere
         # già registrati (definiti più in alto nel file).
         new_procs = []
-        new_body = _desugar_stmts(body, new_procs, counter)
+        new_body = _desugar_stmts(body, new_procs, counter, proc_bodies, ssend_srecv_cache)
         out_procs.extend(new_procs)
         out_procs.append(('procedure', name, params, new_body, ln))
     return ('program', out_procs)

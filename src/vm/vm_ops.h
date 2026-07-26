@@ -295,10 +295,23 @@ static inline void op_pop(VM *vm, const char *frame_name)
        l'INT sorgente; ripristinarlo è assegnazione, non +=. += fallisce se nel
        percorso d'inversione l'INT non è stato riportato esattamente a 0 prima
        del pop (IF/LOOP annidati, procedure Mnemo → stack residui dopo uncall). */
-    if (vm->inversion_depth > 0 && dest->T == TYPE_INT && sv->T == TYPE_STACK)
+    if (vm->inversion_depth > 0 && dest->T == TYPE_INT && sv->T == TYPE_STACK) {
         *(dest->value) = popped;
-    else
+    } else {
+        /* Pop-Err2 (convenzione zero-cleared): pop(v, s) richiede v == 0 prima
+           dell'operazione — è l'esatto invariante che push(v, s) garantisce
+           azzerando la sorgente al momento del push. Se v != 0 qui, += perderebbe
+           silenziosamente il vecchio valore di v: l'operazione smetterebbe di
+           essere invertibile (push, l'inverso di pop, non potrebbe più
+           ricostruirlo). Pop-Err (stack vuoto) resta il controllo sopra, invariato. */
+        if (dest->T == TYPE_INT && *(dest->value) != 0) {
+            var_par_mut_release(dest);
+            vm_debug_panic(
+                "[VM] POP: destinazione '%s' non è zero prima del pop (Pop-Err2, valore attuale=%lld) frame=%s\n",
+                C_dest, (long long)*(dest->value), frame_name);
+        }
         *(dest->value) += popped;
+    }
     var_par_mut_release(dest);
 
     if (sv->T == TYPE_CHANNEL && sender_to_wake)
@@ -500,6 +513,19 @@ mutex_mailbox_retry:
                     vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
                 }
                 var_par_mut_acquire(dest);
+                /* Srecv-Err (convenzione zero-cleared): srecv(<w...>, ch) richiede
+                   ogni w già a 0 prima della ricezione — è l'invariante che ssend
+                   garantisce azzerando la sorgente al momento dell'invio. Se w != 0
+                   qui, += perderebbe silenziosamente il vecchio valore: l'operazione
+                   smetterebbe di essere invertibile (ssend, l'inverso di srecv, non
+                   potrebbe più ricostruirlo). */
+                if (*(dest->value) != 0) {
+                    var_par_mut_release(dest);
+                    pthread_mutex_unlock(&chv->channel->mtx);
+                    vm_debug_panic(
+                        "[VM] SRECV: destinazione '%s' non è zero prima della ricezione (Srecv-Err, valore attuale=%lld)\n",
+                        tokv[i], (long long)*(dest->value));
+                }
                 *(dest->value) += popped;
                 var_par_mut_release(dest);
             } else if (marker == CHANNEL_REF_MARKER) {
@@ -621,6 +647,15 @@ mutex_mailbox_retry:
                 vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
             }
             var_par_mut_acquire(dest);
+            /* Srecv-Err (convenzione zero-cleared): vedi commento nel path mailbox
+               sopra — stesso invariante, stesso controllo, path rendezvous. */
+            if (*(dest->value) != 0) {
+                var_par_mut_release(dest);
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic(
+                    "[VM] SRECV: destinazione '%s' non è zero prima della ricezione (Srecv-Err, valore attuale=%lld)\n",
+                    tokv[i], (long long)*(dest->value));
+            }
             *(dest->value) += popped;
             var_par_mut_release(dest);
         } else if (marker == CHANNEL_REF_MARKER) {
@@ -957,10 +992,24 @@ static inline void op_local(VM *vm, const char *frame_name)
     pthread_mutex_unlock(&var_indexer_mtx);
 
     frame_ensure_vars(vm->frames[fi], (int)vi);
-    /* Se vm_exec ha già allocato questa variabile tramite DECL, la
-       liberiamo: LOCAL è l'allocazione runtime autorevole. */
-    if (vm->frames[fi]->vars[vi])
+    /* Local-Err: se lo slot esiste già ed è stato allocato da un LOCAL
+       precedente (is_local=1, mai chiuso da un DELOCAL/UNCALL corrispondente),
+       'v' è già nel dominio dello store: rialloc/overwrite silenzioso qui
+       romperebbe l'invertibilità (l'inverso DELOCAL non saprebbe più
+       ricostruire il valore perso). Deve fallire in modo esplicito, come gli
+       altri errori di programma locali al ramo (stesso stile di vm_debug_panic
+       usato da Pop-Err/DELOCAL sotto).
+       Gli slot con is_local=0 (placeholder DECL della prima passata, o slot
+       duplicati da init_clone_frame per la ricorsione) NON sono "v già
+       locale": restano l'allocazione runtime autorevole di LOCAL, quindi
+       vengono liberati e sovrascritti come sempre. */
+    if (vm->frames[fi]->vars[vi]) {
+        if (vm->frames[fi]->vars[vi]->is_local)
+            vm_debug_panic(
+                "[VM] LOCAL: variabile '%s' già allocata (Local-Err: manca un DELOCAL prima di questo LOCAL?) frame=%s\n",
+                Vname, frame_name);
         delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
+    }
 
     vm->frames[fi]->vars[vi] = malloc(sizeof(Var));
     if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: malloc fallita\n");

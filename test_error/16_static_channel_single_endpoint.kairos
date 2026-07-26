@@ -1,0 +1,14 @@
+// Errore STATIC atteso: channel 'c' usato da un solo thread nel blocco PAR
+// (ssend nel primo branch), senza nessun partner che faccia srecv su 'c' nel
+// secondo branch. La spec richiede una sessione binaria (esattamente 2
+// endpoint): un canale con un solo endpoint non ha con chi sincronizzarsi.
+procedure main()
+    local channel c = empty
+    local int v = 0
+    v += 1
+    local int x = 0
+    par
+        ssend(<v>, c)
+    and
+        x += 1
+    rap

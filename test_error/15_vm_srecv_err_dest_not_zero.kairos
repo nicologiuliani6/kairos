@@ -1,0 +1,25 @@
+// Errore VM atteso (Srecv-Err, stessa convenzione zero-cleared di Pop-Err2 ma
+// lato canali): srecv(<w>, c) con 'w' gia' diverso da zero prima della
+// ricezione. ssend azzera sempre la sorgente inviata; srecv deve trovare ogni
+// destinazione a 0, altrimenti += perderebbe il vecchio valore e ssend
+// (l'inverso di srecv) non potrebbe piu' ricostruirlo.
+procedure sender(channel c, int v)
+    ssend(<v>, c)
+
+procedure receiver(channel c, int w)
+    srecv(<w>, c)
+
+procedure main()
+    local channel c = empty
+    local int v = 0
+    v += 7
+    local int w = 0
+    w += 1
+    par
+        call sender(c, v)
+    and
+        call receiver(c, w)
+    rap
+    delocal int w = 8
+    delocal int v = 0
+    delocal channel c = empty

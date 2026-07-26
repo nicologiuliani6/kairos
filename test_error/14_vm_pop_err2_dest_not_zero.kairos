@@ -1,0 +1,16 @@
+// Errore VM atteso (Pop-Err2, convenzione zero-cleared): pop(w, buf) con 'w'
+// gia' diverso da zero prima del pop. push azzera sempre la sorgente, quindi
+// pop deve trovare la destinazione a 0; se non lo e', += perderebbe il
+// vecchio valore di 'w' e l'operazione non sarebbe piu' invertibile (push,
+// l'inverso di pop, non potrebbe ricostruirlo).
+procedure main()
+    local stack buf = nil
+    local int v = 0
+    v += 5
+    push(v, buf)
+    local int w = 0
+    w += 1
+    pop(w, buf)
+    delocal int w = 6
+    delocal int v = 0
+    delocal stack buf = nil
