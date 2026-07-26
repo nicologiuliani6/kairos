@@ -1,0 +1,54 @@
+// Concorrenza + message passing DAVVERO vantaggiosi: due metà di una somma
+// pesante calcolate in parallelo su due thread OS reali (rami disgiunti,
+// niente memoria condivisa — vincolo del linguaggio), combinate con UN SOLO
+// handoff su canale a fine calcolo. Il canale non è un dettaglio: è l'UNICO
+// modo legale per far arrivare il risultato di un ramo all'altro, perché
+// Kairos non ha variabili condivise tra rami di un par.
+//
+// Confronta col file gemello 07 (stessa somma, stesso range, ma sequenziale)
+// per vedere lo speedup reale a orologio.
+
+procedure sum_range(int from_v, int to_v, int acc)
+    local int i = 0
+    i += from_v
+    from i == from_v loop
+        acc += i
+        i += 1
+    until i == to_v
+    i -= to_v
+    delocal int i = 0
+
+procedure worker_a(channel ch, int from_v, int to_v, int total)
+    call sum_range(from_v, to_v, total)
+    local int partial_b = 0
+    srecv(<partial_b>, ch)
+    total += partial_b
+    stack scratch
+    push(partial_b, scratch)   // azzera partial_b (push sposta e azzera la sorgente)
+    delocal int partial_b = 0
+
+procedure worker_b(channel ch, int from_v, int to_v)
+    local int partial = 0
+    call sum_range(from_v, to_v, partial)
+    ssend(<partial>, ch)
+    delocal int partial = 0
+
+procedure main()
+    local channel ch = empty
+    local int n = 68000
+    local int half = 34000
+    local int zero = 0
+    local int total = 0
+    par
+        call worker_a(ch, zero, half, total)
+    and
+        call worker_b(ch, half, n)
+    rap
+    show(total)
+    stack scratch_main
+    push(total, scratch_main)   // azzera total prima del delocal
+    delocal int total = 0
+    delocal int zero = 0
+    delocal int half = 34000
+    delocal int n = 68000
+    delocal channel ch = empty

@@ -1,0 +1,36 @@
+// Stessa identica somma del file 06 (stesso n, stesso split), ma senza par:
+// le due metà si calcolano una dopo l'altra, non in overlap. Confronta il
+// tempo reale di esecuzione con 06 per vedere il vantaggio della concorrenza.
+
+procedure sum_range(int from_v, int to_v, int acc)
+    local int i = 0
+    i += from_v
+    from i == from_v loop
+        acc += i
+        i += 1
+    until i == to_v
+    i -= to_v
+    delocal int i = 0
+
+procedure main()
+    local int n = 68000
+    local int half = 34000
+    local int zero = 0
+    local int total_a = 0
+    local int total_b = 0
+    call sum_range(zero, half, total_a)
+    call sum_range(half, n, total_b)
+    local int total = 0
+    total += total_a
+    total += total_b
+    show(total)
+    stack scratch
+    push(total, scratch)
+    push(total_a, scratch)
+    push(total_b, scratch)
+    delocal int total = 0
+    delocal int total_b = 0
+    delocal int total_a = 0
+    delocal int zero = 0
+    delocal int half = 34000
+    delocal int n = 68000
