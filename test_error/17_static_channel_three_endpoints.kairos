@@ -1,0 +1,18 @@
+// Errore STATIC atteso: channel 'c' usato da TRE thread concorrenti nello
+// stesso blocco PAR (uno ssend + due srecv). La spec richiede una sessione
+// binaria (esattamente 2 endpoint, mai 1, mai 3 o più): con tre rami non è
+// più chiaro chi sia il partner di una data offerta ch!/ch?, quindi non è
+// verificato staticamente il vincolo di buona formazione.
+procedure main()
+    local channel c = empty
+    local int v = 0
+    v += 1
+    local int a = 0
+    local int b = 0
+    par
+        ssend(<v>, c)
+    and
+        srecv(<a>, c)
+    and
+        srecv(<b>, c)
+    rap
