@@ -10,10 +10,10 @@ procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack 
     local int saved_r = 0
     saved_r += r
     if saved_r >= b then
-        from q == 0 loop
+        from q == 0 do
             r -= b
             q += 1
-        until r < b
+        loop until r < b
     fi saved_r >= b
     push(saved_r, __mn_hist)
     delocal int saved_r = 0

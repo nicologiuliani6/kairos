@@ -1,0 +1,57 @@
+// Ciclo a due corpi annidato dentro un altro ciclo a due corpi.
+// Quello interno sta nel primo corpo (c1) dell'esterno; entrambi hanno c2 non vuoto.
+// Forward:  esterno c1 [c2 c1]*  con c1 = { interno c1 [c2 c1]* }.
+// Uncall: lo store deve tornare identico a prima della call.
+procedure griglia(int r, int tot, int celle)
+    from r == 0 do
+        local int c = 0
+        from c == 0 do
+            tot += r
+            tot += c
+            celle += 1
+        loop
+            c += 1
+        until c == 3
+        delocal int c = 3
+    loop
+        r += 1
+    until r == 2
+
+// Variante: il ciclo interno sta nel SECONDO corpo (c2) di quello esterno.
+procedure griglia_in_c2(int r, int tot, int celle)
+    from r == 0 do
+        tot += r
+    loop
+        r += 1
+        local int c = 0
+        from c == 0 do
+            celle += 1
+        loop
+            c += 1
+        until c == 2
+        delocal int c = 2
+    until r == 3
+
+procedure main()
+    local int r = 0
+    local int tot = 0
+    local int celle = 0
+    call griglia(r, tot, celle)
+    show(r)
+    show(tot)
+    show(celle)
+    uncall griglia(r, tot, celle)
+    show(r)
+    show(tot)
+    show(celle)
+    call griglia_in_c2(r, tot, celle)
+    show(r)
+    show(tot)
+    show(celle)
+    uncall griglia_in_c2(r, tot, celle)
+    show(r)
+    show(tot)
+    show(celle)
+    delocal int celle = 0
+    delocal int tot = 0
+    delocal int r = 0

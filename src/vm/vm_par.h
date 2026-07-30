@@ -5,7 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <errno.h>
+#include <time.h>
 #include "vm_types.h"
+#include "vm_session.h"
 #include "vm_helpers.h"
 #include "vm_frames.h"
 #include "vm_ops.h"
@@ -90,14 +93,46 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
 
     /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
        gli accessi condivisi dove serve. */
+    session_par_enter();                       /* vm_session.h */
     for (int t = 0; t < pb->count; t++)
         pthread_create(&args[t]->tid, NULL, thread_entry, args[t]);
 
     pthread_mutex_lock(&done_mtx);
     for (;;) {
-        int done = 0;
-        for (int t = 0; t < pb->count; t++) done += args[t]->finished;
+        int done = 0, blocked = 0;
+        for (int t = 0; t < pb->count; t++) {
+            if (args[t]->finished) done++;
+            else if (args[t]->blocked) blocked++;
+        }
         if (done == pb->count) break;
+
+        /* Diagnosi di stallo. Se ogni thread del blocco o ha finito o e' fermo
+           in attesa su un canale, nessuno potra' piu' sbloccare nessun altro:
+           il blocco e' definitivo. Sostituisce il vecchio controllo statico
+           "canale con un solo endpoint", che indovinava dal testo del programma
+           cio' che qui si osserva. Si conferma dopo un'attesa, perche' lo stato
+           "tutti fermi" e' anche transitorio durante un rendez-vous. */
+        if (done + blocked == pb->count) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += 200L * 1000L * 1000L;
+            if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+            if (pthread_cond_timedwait(&done_cond, &done_mtx, &ts) == ETIMEDOUT) {
+                int done2 = 0, blocked2 = 0;
+                for (int t = 0; t < pb->count; t++) {
+                    if (args[t]->finished) done2++;
+                    else if (args[t]->blocked) blocked2++;
+                }
+                if (done2 == done && done2 + blocked2 == pb->count && blocked2 > 0) {
+                    pthread_mutex_unlock(&done_mtx);
+                    vm_debug_panic(
+                        "[VM] SESSIONE: stallo, tutti i thread del par sono fermi in attesa "
+                        "su canale e nessun partner puo' piu' arrivare; manca il thread con "
+                        "cui sincronizzarsi, oppure i due lati offrono la stessa direzione\n");
+                }
+            }
+            continue;
+        }
         pthread_cond_wait(&done_cond, &done_mtx);
     }
     pthread_mutex_unlock(&done_mtx);
@@ -107,6 +142,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         if (dup_buffer) free(args[t]->buffer);
         free(args[t]);
     }
+    session_par_exit();                        /* vm_session.h */
 }
 
 /* ======================================================================

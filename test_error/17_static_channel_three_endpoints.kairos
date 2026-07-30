@@ -1,8 +1,10 @@
-// Errore STATIC atteso: channel 'c' usato da TRE thread concorrenti nello
-// stesso blocco PAR (uno ssend + due srecv). La spec richiede una sessione
-// binaria (esattamente 2 endpoint, mai 1, mai 3 o più): con tre rami non è
-// più chiaro chi sia il partner di una data offerta ch!/ch?, quindi non è
-// verificato staticamente il vincolo di buona formazione.
+// Errore VM atteso: terzo titolare. Il channel 'c' e' usato da TRE thread
+// concorrenti nello stesso blocco PAR (uno ssend e due srecv). La sessione e'
+// binaria: al piu' due titolari per canale in ogni istante, altrimenti non e'
+// determinato chi sia il partner di una data offerta ch!/ch?. Non e' piu' un
+// errore di compilazione: la titolarita' e' stato a RUNTIME e puo' cambiare
+// durante l'esecuzione (delega), quindi la si sorveglia dove la si osserva,
+// in src/vm/vm_session.h.
 procedure main()
     local channel c = empty
     local int v = 0

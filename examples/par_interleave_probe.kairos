@@ -5,20 +5,20 @@
 procedure loop0()
     local int side = 0
     local int k = 0
-    from k == 0 loop
+    from k == 0 do
         show(side)
         k += 1
-    until k == 120
+    loop until k == 120
     delocal int k = 120
     delocal int side = 0
 
 procedure loop1()
     local int side = 1
     local int k = 0
-    from k == 0 loop
+    from k == 0 do
         show(side)
         k += 1
-    until k == 120
+    loop until k == 120
     delocal int k = 120
     delocal int side = 1
 

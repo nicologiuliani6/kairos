@@ -20,7 +20,7 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
     xorig += x
     local int mod32 = 1
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int m2 = 0
         m2 += mod32
         m2 += mod32
@@ -29,7 +29,7 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
         push(m2, __mn_hist)
         delocal int m2 = 0
         i += 1
-    until i == 32
+    loop until i == 32
     local int neg = 0
     if xorig < 0 then
         neg += 1
@@ -91,10 +91,10 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
 procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int i = 0
     if b != 0 then
-        from i == 0 loop
+        from i == 0 do
             i += 1
             dst += a
-        until i == b
+        loop until i == b
     fi b != 0
     delocal int i = b
 
@@ -133,10 +133,10 @@ procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack 
     local int saved_r = 0
     saved_r += r
     if saved_r >= b then
-        from q == 0 loop
+        from q == 0 do
             r -= b
             q += 1
-        until r < b
+        loop until r < b
     fi saved_r >= b
     push(saved_r, __mn_hist)
     delocal int saved_r = 0
@@ -464,7 +464,7 @@ procedure __mn_divmod_nonneg_fast(int a, int b, int q, int r, stack __mn_hist, s
     push(w61, __mn_scratch)
     push(w62, __mn_scratch)
     local int j = 0
-    from j == 0 loop
+    from j == 0 do
         local int w = 0
         pop(w, __mn_scratch)
         local int fits = 0
@@ -499,7 +499,7 @@ procedure __mn_divmod_nonneg_fast(int a, int b, int q, int r, stack __mn_hist, s
         push(w, __mn_hist)
         delocal int w = 0
         j += 1
-    until j == 63
+    loop until j == 63
     push(j, __mn_hist)
     delocal int j = 0
     delocal int w62 = 0
@@ -722,7 +722,7 @@ procedure __mn_divmod_nonneg_div2(int a, int q, int r, stack __mn_hist, stack __
     push(w30, __mn_scratch)
     push(w31, __mn_scratch)
     local int j = 0
-    from j == 0 loop
+    from j == 0 do
         local int w = 0
         pop(w, __mn_scratch)
         local int fits = 0
@@ -757,7 +757,7 @@ procedure __mn_divmod_nonneg_div2(int a, int q, int r, stack __mn_hist, stack __
         push(w, __mn_hist)
         delocal int w = 0
         j += 1
-    until j == 32
+    loop until j == 32
     push(j, __mn_hist)
     delocal int j = 0
     delocal int w31 = 0
@@ -835,7 +835,7 @@ procedure __mn_bit_k_signed(int a, int kk, int bit_out, stack __mn_hist, stack _
     local int kp1 = 0
     kp1 += kk
     kp1 += 1
-    from i == 0 loop
+    from i == 0 do
         if i != 0 then
             local int q = 0
             call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
@@ -844,7 +844,7 @@ procedure __mn_bit_k_signed(int a, int kk, int bit_out, stack __mn_hist, stack _
             delocal int q = 0
         fi i != 0
         i += 1
-    until i == kp1
+    loop until i == kp1
     local int qf = 0
     local int rf = 0
     local int ts = 0
@@ -881,7 +881,7 @@ procedure __mn_bit_k_signed(int a, int kk, int bit_out, stack __mn_hist, stack _
 procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
-    from k == 0 loop
+    from k == 0 do
         local int abit = 0
         local int bbit = 0
         call __mn_bit_k_signed(a, k, abit, __mn_hist, __mn_scratch)
@@ -908,7 +908,7 @@ procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scrat
         delocal int bbit = 0
         push(abit, __mn_hist)
         delocal int abit = 0
-    until k == 31
+    loop until k == 31
     // Bit 31 (segno) in complemento a 2: contribuisce -2^31 (= -pow qui, pow==2^31).
     // Senza questo l'AND a 31 bit perdeva il bit segno (-1 & -1 → 2147483647).
     local int a31 = 0
@@ -939,7 +939,7 @@ procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scrat
 procedure __mn_or_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
-    from k == 0 loop
+    from k == 0 do
         local int abit = 0
         local int bbit = 0
         call __mn_bit_k_signed(a, k, abit, __mn_hist, __mn_scratch)
@@ -964,7 +964,7 @@ procedure __mn_or_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratc
         delocal int bbit = 0
         push(abit, __mn_hist)
         delocal int abit = 0
-    until k == 31
+    loop until k == 31
     // Bit 31 (segno) in complemento a 2: contribuisce -2^31 (= -pow, pow==2^31).
     // Senza questo l'OR a 31 bit perdeva il bit segno (-5 | 8 → 2147483643).
     local int a31 = 0
@@ -999,7 +999,7 @@ procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
     local int pow = 1
     local int i = 0
     if n != 0 then
-        from i == 0 loop
+        from i == 0 do
             i += 1
             local int np = 0
             np += pow
@@ -1008,7 +1008,7 @@ procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
             call __mn_move_int(pow, np, __mn_hist, __mn_scratch)
             push(np, __mn_hist)
             delocal int np = 0
-        until i == n
+        loop until i == n
     fi n != 0
     call __mn_mul_into(dst, x, pow, __mn_hist, __mn_scratch)
     push(i, __mn_hist)
@@ -1107,7 +1107,7 @@ procedure __mn_uhalve64(int x, int q, int r, stack __mn_hist, stack __mn_scratch
     min64 -= 1
     local int p62 = 1
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int m2 = 0
         m2 += min64
         m2 += min64
@@ -1123,7 +1123,7 @@ procedure __mn_uhalve64(int x, int q, int r, stack __mn_hist, stack __mn_scratch
         push(p2, __mn_hist)
         delocal int p2 = 0
         i += 1
-    until i == 62
+    loop until i == 62
     local int is_min = 0
     if x == min64 then
         is_min += 1
@@ -1158,7 +1158,7 @@ procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
     t += x
     local int i = 0
     if n != 0 then
-        from i == 0 loop
+        from i == 0 do
             i += 1
             local int qh = 0
             local int ph = 0
@@ -1168,7 +1168,7 @@ procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
             delocal int ph = 0
             push(qh, __mn_hist)
             delocal int qh = 0
-        until i == n
+        loop until i == n
     fi n != 0
     dst += t
     push(i, __mn_hist)
@@ -1319,14 +1319,14 @@ procedure __mn_emit_spaces(int count, stack __mn_hist, stack __mn_scratch)
     if count > z then
         local int rem = 0
         rem += count
-        from rem == count loop
+        from rem == count do
             local int sp = 0
             sp += 32
             show(sp, char)
             sp -= 32
             delocal int sp = 0
             rem -= 1
-        until rem == 0
+        loop until rem == 0
         delocal int rem = 0
     fi count > z
     delocal int z = 0
@@ -1337,14 +1337,14 @@ procedure __mn_emit_zeros(int count, stack __mn_hist, stack __mn_scratch)
     if count > z then
         local int rem = 0
         rem += count
-        from rem == count loop
+        from rem == count do
             local int zc = 0
             zc += 48
             show(zc, char)
             zc -= 48
             delocal int zc = 0
             rem -= 1
-        until rem == 0
+        loop until rem == 0
         delocal int rem = 0
     fi count > z
     delocal int z = 0
@@ -1711,7 +1711,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
     xorig += src
     local int mod32 = 1
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int m2 = 0
         m2 += mod32
         m2 += mod32
@@ -1720,11 +1720,11 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
         push(m2, __mn_hist)
         delocal int m2 = 0
         i += 1
-    until i == 32
+    loop until i == 32
     local int min64 = 0
     min64 -= 1
     local int j = 0
-    from j == 0 loop
+    from j == 0 do
         local int m2b = 0
         m2b += min64
         m2b += min64
@@ -1733,7 +1733,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
         push(m2b, __mn_hist)
         delocal int m2b = 0
         j += 1
-    until j == 63
+    loop until j == 63
     local int is_min = 0
     if xorig == min64 then
         is_min += 1
@@ -1742,7 +1742,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
         // src = INT64_MIN: x_u = 2^63 esatto. hi = 2^31, lo = 0.
         local int p31 = 1
         local int k = 0
-        from k == 0 loop
+        from k == 0 do
             local int p2 = 0
             p2 += p31
             p2 += p31
@@ -1751,7 +1751,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
             push(p2, __mn_hist)
             delocal int p2 = 0
             k += 1
-        until k == 31
+        loop until k == 31
         hi += p31
         push(k, __mn_hist)
         delocal int k = 0
@@ -6257,7 +6257,7 @@ procedure __mn_pool_store_dyn(int slot, int val, stack __mn_pool_heap, int __mn_
         local stack __mn_pool_tmp = nil
         if __mn_pool_heap_n > 0 then
             local int i = 0
-            from i == 0 loop
+            from i == 0 do
                 local int a_i = 0
                 local int v_i = 0
                 pop(v_i, __mn_pool_heap)
@@ -6278,9 +6278,9 @@ procedure __mn_pool_store_dyn(int slot, int val, stack __mn_pool_heap, int __mn_
                 delocal int v_i = 0
                 delocal int a_i = 0
                 i += 1
-            until i == __mn_pool_heap_n
+            loop until i == __mn_pool_heap_n
             local int j = 0
-            from j == 0 loop
+            from j == 0 do
                 local int a_j = 0
                 local int v_j = 0
                 pop(v_j, __mn_pool_tmp)
@@ -6290,7 +6290,7 @@ procedure __mn_pool_store_dyn(int slot, int val, stack __mn_pool_heap, int __mn_
                 delocal int v_j = 0
                 delocal int a_j = 0
                 j += 1
-            until j == __mn_pool_heap_n
+            loop until j == __mn_pool_heap_n
             push(j, __mn_hist)
             delocal int j = 0
             push(i, __mn_hist)
@@ -6321,7 +6321,7 @@ procedure __mn_pool_load_dyn(int slot, int out, stack __mn_pool_heap, int __mn_p
         local stack __mn_pool_tmp = nil
         if __mn_pool_heap_n > 0 then
             local int i = 0
-            from i == 0 loop
+            from i == 0 do
                 local int a_i = 0
                 local int v_i = 0
                 pop(v_i, __mn_pool_heap)
@@ -6341,9 +6341,9 @@ procedure __mn_pool_load_dyn(int slot, int out, stack __mn_pool_heap, int __mn_p
                 delocal int v_i = 0
                 delocal int a_i = 0
                 i += 1
-            until i == __mn_pool_heap_n
+            loop until i == __mn_pool_heap_n
             local int j = 0
-            from j == 0 loop
+            from j == 0 do
                 local int a_j = 0
                 local int v_j = 0
                 pop(v_j, __mn_pool_tmp)
@@ -6353,7 +6353,7 @@ procedure __mn_pool_load_dyn(int slot, int out, stack __mn_pool_heap, int __mn_p
                 delocal int v_j = 0
                 delocal int a_j = 0
                 j += 1
-            until j == __mn_pool_heap_n
+            loop until j == __mn_pool_heap_n
             push(j, __mn_hist)
             delocal int j = 0
             push(i, __mn_hist)
@@ -6634,7 +6634,7 @@ procedure draw(int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int _
             __mn_lc3 += __mn_e45
             if __mn_lc3 != 0 then
                 local int __mn_lc2 = 0
-                    from __mn_lc2 == 0 loop
+                    from __mn_lc2 == 0 do
                         push(__mn_mem203, __mn_hist)
                         __mn_mem203 += 0
                         if __mn_mem203 < 9 then
@@ -6648,7 +6648,7 @@ procedure draw(int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int _
                             __mn_lc1 += __mn_e48
                             if __mn_lc1 != 0 then
                                 local int __mn_lc0 = 0
-                                    from __mn_lc0 == 0 loop
+                                    from __mn_lc0 == 0 do
                                         __mn_e51 += 9
                                         call __mn_mul_into(__mn_e52, __mn_mem202, __mn_e51, __mn_hist, __mn_scratch)
                                         push(__mn_e51, __mn_scratch)
@@ -7043,7 +7043,7 @@ procedure draw(int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int _
                                             __mn_e48 += 0
                                         fi __mn_mem203 < 9
                                         __mn_lc0 += 1
-                                    until __mn_e48 == 0
+                                    loop until __mn_e48 == 0
                                     push(__mn_lc0, __mn_hist)
                                 delocal int __mn_lc0 = 0
                             fi __mn_lc1 != 0
@@ -7071,7 +7071,7 @@ procedure draw(int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int _
                             __mn_e45 += 0
                         fi __mn_mem202 < 7
                         __mn_lc2 += 1
-                    until __mn_e45 == 0
+                    loop until __mn_e45 == 0
                     push(__mn_lc2, __mn_hist)
                 delocal int __mn_lc2 = 0
             fi __mn_lc3 != 0
@@ -7770,7 +7770,7 @@ procedure main()
             __mn_lc3 += __mn_e0
             if __mn_lc3 != 0 then
                 local int __mn_lc2 = 0
-                    from __mn_lc2 == 0 loop
+                    from __mn_lc2 == 0 do
                         push(__mn_mem280, __mn_hist)
                         __mn_mem280 += 0
                         if __mn_mem280 < 9 then
@@ -7784,7 +7784,7 @@ procedure main()
                             __mn_lc1 += __mn_e3
                             if __mn_lc1 != 0 then
                                 local int __mn_lc0 = 0
-                                    from __mn_lc0 == 0 loop
+                                    from __mn_lc0 == 0 do
                                         __mn_e9 += 9
                                         call __mn_mul_into(__mn_e10, __mn_mem279, __mn_e9, __mn_hist, __mn_scratch)
                                         push(__mn_e9, __mn_scratch)
@@ -8168,7 +8168,7 @@ procedure main()
                                             __mn_e3 += 0
                                         fi __mn_mem280 < 9
                                         __mn_lc0 += 1
-                                    until __mn_e3 == 0
+                                    loop until __mn_e3 == 0
                                     push(__mn_lc0, __mn_hist)
                                 delocal int __mn_lc0 = 0
                             fi __mn_lc1 != 0
@@ -8192,7 +8192,7 @@ procedure main()
                             __mn_e0 += 0
                         fi __mn_mem279 < 7
                         __mn_lc2 += 1
-                    until __mn_e0 == 0
+                    loop until __mn_e0 == 0
                     push(__mn_lc2, __mn_hist)
                 delocal int __mn_lc2 = 0
             fi __mn_lc3 != 0
@@ -8233,7 +8233,7 @@ procedure main()
             __mn_lc7 += __mn_e15
             if __mn_lc7 != 0 then
                 local int __mn_lc6 = 0
-                    from __mn_lc6 == 0 loop
+                    from __mn_lc6 == 0 do
                         __mn_e18 += __mn_mem198
                         __mn_e18 -= 1
                         if __mn_e18 == 0 then
@@ -8913,7 +8913,7 @@ procedure main()
                                     __mn_lc5 += __mn_e22
                                     if __mn_lc5 != 0 then
                                         local int __mn_lc4 = 0
-                                            from __mn_lc4 == 0 loop
+                                            from __mn_lc4 == 0 do
                                                 if __mn_mem286 == 0 then
                                                     push(__mn_e25, __mn_hist)
                                                     __mn_e25 += __mn_mem64
@@ -10658,7 +10658,7 @@ procedure main()
                                                 else
                                                 fi __mn_mem286 < 4
                                                 __mn_lc4 += 1
-                                            until __mn_e22 == 0
+                                            loop until __mn_e22 == 0
                                             push(__mn_lc4, __mn_hist)
                                         delocal int __mn_lc4 = 0
                                     fi __mn_lc5 != 0
@@ -11020,7 +11020,7 @@ procedure main()
                                 __mn_lc5 += __mn_e22
                                 if __mn_lc5 != 0 then
                                     local int __mn_lc4 = 0
-                                        from __mn_lc4 == 0 loop
+                                        from __mn_lc4 == 0 do
                                             if __mn_mem286 == 0 then
                                                 push(__mn_e25, __mn_hist)
                                                 __mn_e25 += __mn_mem64
@@ -12765,7 +12765,7 @@ procedure main()
                                             else
                                             fi __mn_mem286 < 4
                                             __mn_lc4 += 1
-                                        until __mn_e22 == 0
+                                        loop until __mn_e22 == 0
                                         push(__mn_lc4, __mn_hist)
                                     delocal int __mn_lc4 = 0
                                 fi __mn_lc5 != 0
@@ -13129,7 +13129,7 @@ procedure main()
                         else
                         fi __mn_mem282 < 400
                         __mn_lc6 += 1
-                    until __mn_e15 == 0
+                    loop until __mn_e15 == 0
                     push(__mn_lc6, __mn_hist)
                 delocal int __mn_lc6 = 0
             fi __mn_lc7 != 0

@@ -34,6 +34,11 @@ typedef struct {
     char eval_exit_id[64], eval_exit_val[64];
     char eval_exit_op[8];
     uint jmpf_start_line;
+    /* Ciclo a DUE corpi (`from b1 do c1 loop c2 until b2`): valorizzati solo in
+     * quel layout, restano 0 per il ciclo a un corpo. from_back_line != 0 e' il
+     * discriminante fra i due layout a runtime. */
+    uint from_back_line;   /* LABEL FROM_BACK_<uid>  (testa di c2) */
+    uint jmp_start_line;   /* JMP  FROM_START_<uid>  (salta c2 al primo giro) */
 } LoopDescriptor;
 
 typedef struct {
@@ -50,7 +55,8 @@ typedef struct {
 typedef enum {
     LOOP_ZONE_NONE, LOOP_ZONE_EVAL_ENTRY, LOOP_ZONE_JMPF_ERR,
     LOOP_ZONE_START_LABEL, LOOP_ZONE_EVAL_EXIT, LOOP_ZONE_JMPF_START,
-    LOOP_ZONE_END_LABEL, LOOP_ZONE_ERR_LABEL
+    LOOP_ZONE_END_LABEL, LOOP_ZONE_ERR_LABEL,
+    LOOP_ZONE_BACK_LABEL, LOOP_ZONE_JMP_START   /* solo layout a due corpi */
 } LoopZone;
 
 typedef enum {
@@ -161,11 +167,22 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     uint fi = char_id_map_get(&FrameIndexer, base);
     char *ptr = go_to_line(buf, vm->frames[fi]->addr + 1);
     int n = 0;
-    /* Stack di loop aperti per UID. Layout Kairos:
-     *   LOCAL → EVAL → JMPF FROM_ERR_<UID> → LABEL FROM_START_<UID> → body
+    /* Stack di loop aperti per UID. Due layout Kairos.
+     *
+     * (a) UN corpo — `from b1 do c1 loop until b2`, c2 vuoto:
+     *   LOCAL → EVAL → JMPF FROM_ERR_<UID> → LABEL FROM_START_<UID> → c1
      *   → EVAL → JMPF FROM_START_<UID> → LABEL FROM_END_<UID> → LABEL FROM_ERR_<UID>
-     * UID coerente tra JMPF FROM_ERR / LABEL FROM_START / JMPF FROM_START / LABEL FROM_END
-     * / LABEL FROM_ERR. Slot aperto da prima reference, chiuso da LABEL FROM_ERR_<UID>.
+     *
+     * (b) DUE corpi — `from b1 do c1 loop c2 until b2`, traccia c1 [c2 c1]*:
+     *   LOCAL → EVAL → JMPF FROM_ERR_<UID> → JMP FROM_START_<UID>
+     *   → LABEL FROM_BACK_<UID> → c2 → LABEL FROM_START_<UID> → c1
+     *   → EVAL → JMPF FROM_BACK_<UID> → LABEL FROM_END_<UID> → LABEL FROM_ERR_<UID>
+     *   Il JMP iniziale salta c2 al primo giro; il back-edge (JMPF FROM_BACK) ci rientra.
+     *   from_back_line/jmp_start_line sono valorizzati SOLO qui: 0 nel layout (a).
+     *
+     * UID coerente tra JMPF FROM_ERR / JMP FROM_START / LABEL FROM_BACK / LABEL FROM_START
+     * / JMPF FROM_START|FROM_BACK / LABEL FROM_END / LABEL FROM_ERR. Slot aperto da prima
+     * reference, chiuso da LABEL FROM_ERR_<UID>.
      */
     int stack_slot[32];
     char stack_uid[32][32];
@@ -214,6 +231,9 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             if ((uid = _loop_label_uid(ln, "FROM_START", 10)) != NULL) {
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) out[slot].from_start_line = cur;
+            } else if ((uid = _loop_label_uid(ln, "FROM_BACK", 9)) != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) out[slot].from_back_line = cur;
             } else if ((uid = _loop_label_uid(ln, "FROM_END", 8)) != NULL) {
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) out[slot].from_end_line = cur;
@@ -245,7 +265,9 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                     _copy_compare_op(out[slot].eval_entry_op, pop);
                     out[slot].jmpf_err_line = cur;
                 }
-            } else if ((uid = _loop_label_uid(ln, "FROM_START", 10)) != NULL) {
+            } else if ((uid = _loop_label_uid(ln, "FROM_START", 10)) != NULL ||
+                       (uid = _loop_label_uid(ln, "FROM_BACK",   9)) != NULL) {
+                /* Test d'uscita: JMPF FROM_START (un corpo) o JMPF FROM_BACK (due corpi). */
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_exit_line = peval;
@@ -254,6 +276,15 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                     _copy_compare_op(out[slot].eval_exit_op, pop);
                     out[slot].jmpf_start_line = cur;
                 }
+            }
+        } else if (!strcmp(fw, "JMP")) {
+            /* Solo il layout a due corpi ha un JMP FROM_START_<uid> (salta c2 al primo giro). */
+            char *ln = strtok(NULL, " \t");
+            if (!ln) { ptr = nl + 1; continue; }
+            const char *uid = _loop_label_uid(ln, "FROM_START", 10);
+            if (uid != NULL) {
+                int slot; LOOP_FIND_OR_OPEN(uid, slot);
+                if (slot >= 0) out[slot].jmp_start_line = cur;
             }
         } else if (!strcmp(fw, "END_PROC")) { break; }
         ptr = nl + 1;
@@ -454,11 +485,22 @@ static inline LoopZone line_loop_zone_for_instr(uint line, const char *fw, const
                 if (!strncmp(arg1, "FROM_ERR", 8) && line == L[i].jmpf_err_line) {
                     *idx = i; return LOOP_ZONE_JMPF_ERR;
                 }
-                if (!strncmp(arg1, "FROM_START", 10) && line == L[i].jmpf_start_line) {
+                if ((!strncmp(arg1, "FROM_START", 10) || !strncmp(arg1, "FROM_BACK", 9)) &&
+                    line == L[i].jmpf_start_line) {
                     *idx = i; return LOOP_ZONE_JMPF_START;
                 }
             }
+            /* Layout a due corpi: JMP FROM_START_<uid> è il salto d'ingresso che
+             * scavalca c2 al primo giro. All'indietro è solo un no-op. */
+            if (!strcmp(fw, "JMP") && !strncmp(arg1, "FROM_START", 10) &&
+                L[i].jmp_start_line && line == L[i].jmp_start_line) {
+                *idx = i; return LOOP_ZONE_JMP_START;
+            }
             if (!strcmp(fw, "LABEL")) {
+                if (!strncmp(arg1, "FROM_BACK", 9) &&
+                    L[i].from_back_line && line == L[i].from_back_line) {
+                    *idx = i; return LOOP_ZONE_BACK_LABEL;
+                }
                 if (!strncmp(arg1, "FROM_START", 10) && line == L[i].from_start_line) {
                     *idx = i; return LOOP_ZONE_START_LABEL;
                 }
@@ -521,7 +563,27 @@ static inline int lp_row_first_jmpf_from_start(uint line, char **lp, uint *ln, i
         scan[sizeof(scan) - 1] = '\0';
         char *ff = strtok(scan, " \t");
         char *a1 = strtok(NULL, " \t");
-        if (ff && !strcmp(ff, "JMPF") && a1 && !strncmp(a1, "FROM_START", 10)) return j;
+        /* FROM_BACK: stesso ruolo (test d'uscita) nel layout a due corpi. */
+        if (ff && !strcmp(ff, "JMPF") && a1 &&
+            (!strncmp(a1, "FROM_START", 10) || !strncmp(a1, "FROM_BACK", 9))) return j;
+    }
+    return -1;
+}
+
+/* Riga del `JMPF FROM_ERR_<uid>`: chiusura del loop in inversa (layout a due corpi). */
+static inline int lp_row_first_jmpf_from_err(uint line, char **lp, uint *ln, int nl)
+{
+    for (int j = 0; j < nl; j++) {
+        if (ln[j] != line) continue;
+        char buf[16384];
+        strncpy(buf, lp[j], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char scan[16384];
+        strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
+        scan[sizeof(scan) - 1] = '\0';
+        char *ff = strtok(scan, " \t");
+        char *a1 = strtok(NULL, " \t");
+        if (ff && !strcmp(ff, "JMPF") && a1 && !strncmp(a1, "FROM_ERR", 8)) return j;
     }
     return -1;
 }
@@ -627,7 +689,10 @@ static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
 static inline int line_inside_loop_body(uint line, const LoopDescriptor *L, int n)
 {
     for (int i = 0; i < n; i++) {
-        if (line > L[i].from_start_line && line < L[i].eval_exit_line) return 1;
+        /* Due corpi: la finestra parte da FROM_BACK, così copre anche c2. */
+        uint lo = L[i].from_start_line;
+        if (L[i].from_back_line && L[i].from_back_line < lo) lo = L[i].from_back_line;
+        if (line > lo && line < L[i].eval_exit_line) return 1;
     }
     return 0;
 }
@@ -1058,6 +1123,33 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         } else {
             lz = line_loop_zone(cur, loops, nloops, &li);
         }
+        /* ---- Layout a DUE corpi (from_back_line != 0) --------------------------
+         * All'indietro il cammino decrescente attraversa c1, poi LABEL FROM_START,
+         * poi c2, poi LABEL FROM_BACK. Serve una decisione dopo ogni I(c1) — la
+         * guardia d'ingresso b1 è vera solo nello stato pre-loop — così da
+         * produrre I(c1) [I(c2) I(c1)]*, speculare a c1 [c2 c1]* forward. */
+        if (lz == LOOP_ZONE_START_LABEL && li >= 0 && loops[li].from_back_line) {
+            do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_op,
+                    loops[li].eval_entry_val);
+            if (thread_val_IF) {
+                /* Stato pre-loop raggiunto: niente altro c2 da invertire. Chiude
+                 * sul JMPF FROM_ERR, esattamente come il layout a un corpo. */
+                int tt = lp_row_first_jmpf_from_err(loops[li].jmpf_err_line, lp, ln, nl);
+                i = (tt >= 0) ? tt : i - 1;
+            } else {
+                i--;   /* scende dentro c2 */
+            }
+            continue;
+        }
+        if (lz == LOOP_ZONE_BACK_LABEL) {
+            /* c2 invertito: risali all'EVAL d'uscita per un altro I(c1). */
+            int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
+            if (t < 0) { vm_debug_panic("[UNCALL] loop_eval_exit (two-body)\n"); }
+            i = t - 1;
+            continue;
+        }
+        if (lz == LOOP_ZONE_JMP_START) { i--; continue; }  /* salto forward: no-op inverso */
+
         if (lz == LOOP_ZONE_EVAL_ENTRY || lz == LOOP_ZONE_EVAL_EXIT  ||
             lz == LOOP_ZONE_START_LABEL|| lz == LOOP_ZONE_END_LABEL  ||
             lz == LOOP_ZONE_ERR_LABEL)  { i--; continue; }

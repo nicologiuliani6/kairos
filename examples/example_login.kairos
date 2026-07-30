@@ -52,7 +52,7 @@ procedure login_pipeline(channel auth_req, int auth_code, int login_ok, stack ga
 procedure bruteforce(int auth_code, stack garbage)
     local channel auth_ch = empty
     local int login_ok = 0
-    from auth_code == 0 loop
+    from auth_code == 0 do
         show(auth_code)
         local int expected_ok = 0
         local int expected_code = 0
@@ -63,7 +63,7 @@ procedure bruteforce(int auth_code, stack garbage)
         fi login_ok == 0
         delocal int expected_code = 0
         delocal int expected_ok = 0
-    until login_ok == 1
+    loop until login_ok == 1
     delocal int login_ok = 1
     delocal channel auth_ch = empty
 

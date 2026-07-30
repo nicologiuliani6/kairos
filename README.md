@@ -24,7 +24,7 @@ Kairos è un linguaggio di programmazione **reversibile e concorrente**, ispirat
    - [Procedure e parametri](#procedure-e-parametri)
    - [call e uncall](#call-e-uncall)
    - [Blocco if-fi](#blocco-if-fi)
-   - [Ciclo from-loop-until](#ciclo-from-loop-until)
+   - [Ciclo from-do-loop-until](#ciclo-from-do-loop-until)
    - [Blocco try-rollback](#blocco-try-rollback)
    - [Stack — push e pop](#stack--push-e-pop)
    - [Canali — ssend e srecv](#canali--ssend-e-srecv)
@@ -401,27 +401,46 @@ procedure check_boolean(int flag)
 
 ---
 
-### Ciclo from-loop-until
+### Ciclo from-do-loop-until
+
+Il ciclo ha **due corpi**: `c1` fra `do` e `loop`, `c2` fra `loop` e `until`.
 
 ```kairos
-from <condizione_entrata> loop
-    // corpo
+from <condizione_entrata> do
+    // corpo c1
+loop
+    // corpo c2
 until <condizione_uscita>
 ```
 
 - `from`: la condizione deve essere vera all'ingresso del ciclo (prima iterazione) e falsa per tutte le iterazioni successive.
 - `until`: la condizione deve essere falsa durante il ciclo e vera quando il ciclo termina.
+- La traccia di esecuzione è `c1 [c2 c1]*`: **`c1` gira sempre almeno una volta, `c2` solo fra due esecuzioni consecutive di `c1`** (mai al primo giro, mai dopo l'ultimo). La condizione `until` è valutata dopo ogni `c1`.
+
+Il secondo corpo può essere vuoto: `from b1 do c loop until b2` è il ciclo classico a un corpo, con traccia `c [c]*`. Sia `do` sia `loop` sono obbligatori.
 
 ```kairos
-// Esempio: somma da 1 a n
+// Esempio: somma da 1 a n — un solo corpo (c2 vuoto)
 local int i = 0
-from i == 0 loop
+from i == 0 do
     i += 1
-until i == n
+loop until i == n
 delocal int i = n
 ```
 
-Il ciclo è reversibile: eseguito al contrario, la condizione `until` diventa la condizione di entrata e `from` quella di uscita, e il corpo viene eseguito all'indietro.
+```kairos
+// Esempio a due corpi: c1 accumula, c2 avanza il contatore.
+// Traccia: c1(i=0) c2 c1(i=1) c2 … c1(i=4)  →  5 esecuzioni di c1, 4 di c2.
+local int i = 0
+local int sum = 0
+from i == 0 do
+    sum += i
+loop
+    i += 1
+until i == 4
+```
+
+Il ciclo è reversibile: eseguito al contrario, la condizione `until` diventa la condizione di entrata e `from` quella di uscita, e la traccia inversa è `I(c1) [I(c2) I(c1)]*`.
 
 ---
 
@@ -470,7 +489,7 @@ L'inversione del body sfrutta la reversibilità del linguaggio: `uncall` ricalco
 **Vincoli (v1):**
 - niente `par` né canali (`ssend`/`srecv`) dentro il body o il rollback;
 - la `<condizione>` di commit deve usare variabili del frame esterno (i `local` dichiarati nel body sono già chiusi con `delocal` a fine body);
-- valgono i vincoli standard di `if-fi`/`from-loop` per i costrutti annidati nel body.
+- valgono i vincoli standard di `if-fi`/`from-do-loop-until` per i costrutti annidati nel body.
 
 Esempi completi: `examples/try_commit.kairos`, `examples/try_rollback.kairos`, `examples/try_loop.kairos`, `examples/try_if_rollback.kairos`, `examples/try_nested.kairos`, `examples/try_no_rollback.kairos`.
 
@@ -651,7 +670,13 @@ Esempio in `test_error/12_shared_stack_par_calls.kairos`.
 Per ogni branch si calcolano:
 
 - **Accessi** (`int`): tutti gli identificatori usati nel branch (assegnamenti, espressioni, argomenti di chiamate, condizioni, `show`, `push`/`pop`, `local`/`delocal`, ecc.), ristretti ai nomi dichiarati `int` nel frame corrente.
-- **Scritture** (`int`): oltre alle scritture **dirette** (`+=`/`-=`/`^=` su un `int`, `x <=> y` con tipi `int`, `local`/`delocal` su `int`), anche gli **`int` passati come argomenti** a procedure che **mutano** quel parametro (analisi per punto fisso sul grafo delle chiamate: assegnamento al parametro nel corpo della procedura, propagazione attraverso `call` / `uncall` / chiamata diretta, con eccezione documentata per `swap`).
+- **Scritture** (`int`): oltre alle scritture **dirette** (`+=`/`-=`/`^=` su un `int`, `x <=> y` con tipi `int`, `local`/`delocal` su `int`), anche:
+  - gli `int` passati a una **builtin che scrive quell'argomento**: `pop(v, s)` e `srecv(<w1 … wk>, c)` scrivono le destinazioni, `push(v, s)` e `ssend(<v1 … vk>, c)` azzerano le sorgenti, `mnhalve`/`mnsplit32` scrivono tutti e tre gli argomenti, `poolget`/`poolgetneg` il secondo. `show` e `dump` sono in sola lettura; `swap` ha la sua eccezione documentata;
+  - gli **`int` passati come argomenti** a procedure che **mutano** quel parametro (analisi per punto fisso sul grafo delle chiamate: assegnamento al parametro o builtin che lo scrive nel corpo della procedura, propagazione attraverso `call` / `uncall` / chiamata diretta).
+
+  Così una `call` che scrive il proprio parametro `int` solo tramite `pop`/`srecv` conta come scrittura tanto quanto un `+=`. Esempi: `test_error/19_shared_int_par_pop.kairos`, `test_error/20_shared_int_par_srecv.kairos`.
+
+Dentro un `par`, una `call` / `uncall` / chiamata diretta a un nome che **non** è né una procedura dichiarata né una builtin viene rifiutata: senza il corpo della callee non si può sapere quali `int` scrive, e la race passerebbe inosservata. Messaggio: *chiamata a '…' non risolvibile in blocco PAR*.
 
 Per ogni coppia di branch distinti \(i, j\), se esiste un nome `int` che è **scritto** in un branch e **acceduto** nell’altro (in entrambe le direzioni: \(W_i \cap A_j\) o \(W_j \cap A_i\)), la compilazione fallisce. Messaggio: *race su int nel PAR (scrittura vs accesso, anche tramite call)*.
 

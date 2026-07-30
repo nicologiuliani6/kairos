@@ -3,9 +3,9 @@ procedure main()
     local int y = 3
     int x1
     x1+=1
-    from x1 == 1 loop
+    from x1 == 1 do
         x1+=1
-    until x1 == 10
+    loop until x1 == 10
     show(x1)
     delocal int y = 3
     show(x1)

@@ -1,0 +1,17 @@
+// Errore STATIC atteso: dentro il PAR si chiama 'incrementa' (refuso per
+// 'incrementa_x'), che non e' ne' una procedura dichiarata ne' una builtin.
+// Senza il corpo della callee non si sa quali int scrive: prima il controllo
+// race la scartava in silenzio e il programma compilava pulito.
+procedure incrementa_x(int v)
+    v += 1
+
+procedure main()
+    local int x = 0
+    local int y = 0
+    par
+        call incrementa(x)
+    and
+        call incrementa_x(y)
+    rap
+    delocal int y = 1
+    delocal int x = 0

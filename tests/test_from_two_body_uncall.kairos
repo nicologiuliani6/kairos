@@ -1,0 +1,30 @@
+// Ciclo a due corpi invertito: uncall deve ripristinare lo store iniziale.
+// Traccia forward  c1 [c2 c1]*  → traccia inversa  I(c1) [I(c2) I(c1)]*.
+// Dopo call+uncall tutti i parametri tornano a 0: i delocal finali lo verificano.
+procedure accumula(int i, int sum, int n1, int n2)
+    from i == 0 do
+        sum += i
+        n1 += 1
+    loop
+        i += 1
+        n2 += 1
+    until i == 5
+
+procedure main()
+    local int i = 0
+    local int sum = 0
+    local int n1 = 0
+    local int n2 = 0
+    call accumula(i, sum, n1, n2)
+    show(sum)
+    show(n1)
+    show(n2)
+    uncall accumula(i, sum, n1, n2)
+    show(sum)
+    show(n1)
+    show(n2)
+    show(i)
+    delocal int n2 = 0
+    delocal int n1 = 0
+    delocal int sum = 0
+    delocal int i = 0

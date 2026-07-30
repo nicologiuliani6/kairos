@@ -1,0 +1,14 @@
+// Errore atteso: [STATIC] protocolli non duali sul channel 'c', ampiezze diverse.
+// Un lato manda un valore, l'altro ne aspetta due: le direzioni sono giuste,
+// ma l'arita' del payload no. Anche questo passa il vincolo di sessione binaria.
+procedure main()
+    channel c
+    int a
+    int x
+    int y
+    a += 7
+    par
+        ssend(<a>, c)
+    and
+        srecv(<x, y>, c)
+    rap

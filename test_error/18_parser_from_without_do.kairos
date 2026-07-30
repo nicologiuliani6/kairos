@@ -1,0 +1,8 @@
+// Sintassi vecchia a un corpo (`from b1 loop c until b2`): non deve piu' parsare.
+// La forma valida e' `from b1 do c loop until b2`.
+procedure main()
+    local int x = 0
+    from x == 0 loop
+        x += 1
+    until x == 3
+    delocal int x = 3

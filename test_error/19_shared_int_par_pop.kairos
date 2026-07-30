@@ -1,0 +1,26 @@
+// Errore STATIC atteso: stessa int 'x' passata a due call in rami PAR diversi,
+// scritta in entrambe le callee da pop(x, s). pop e' una builtin (call_direct),
+// non una procedura: la scrittura sul primo argomento va riconosciuta lo stesso.
+procedure preleva(int v, stack s)
+    pop(v, s)
+
+procedure main()
+    local stack s1 = nil
+    local stack s2 = nil
+    local int a = 0
+    a += 7
+    push(a, s1)
+    local int b = 0
+    b += 9
+    push(b, s2)
+    local int x = 0
+    par
+        call preleva(x, s1)
+    and
+        call preleva(x, s2)
+    rap
+    delocal int x = 0
+    delocal int b = 0
+    delocal int a = 0
+    delocal stack s2 = nil
+    delocal stack s1 = nil

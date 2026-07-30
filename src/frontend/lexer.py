@@ -14,7 +14,7 @@ reserved = {
     'local'    : 'LOCAL', 'delocal' : 'DELOCAL',
     'call'     : 'CALL',  'uncall'  : 'UNCALL',
     'if'       : 'IF',    'then'    : 'THEN',  'else'  : 'ELSE', 'fi': 'FI',
-    'from'     : 'FROM',  'loop'    : 'LOOP',  'until' : 'UNTIL',
+    'from'     : 'FROM',  'do'      : 'DO',    'loop'  : 'LOOP',  'until' : 'UNTIL',
     'par'      : 'PAR',   'and'     : 'AND',   'rap'   : 'RAP',
     'try'      : 'TRY',   'rollback' : 'ROLLBACK', 'yrt' : 'YRT',
 }
@@ -39,7 +39,7 @@ tokens = (
     'LOCAL', 'DELOCAL',
     'CALL', 'UNCALL',
     'IF', 'THEN', 'ELSE', 'FI',
-    'FROM', 'LOOP', 'UNTIL',
+    'FROM', 'DO', 'LOOP', 'UNTIL',
     'PAR', 'AND', 'RAP',
     'TRY', 'ROLLBACK', 'YRT',
     'COMMA',

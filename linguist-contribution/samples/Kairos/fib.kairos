@@ -7,11 +7,11 @@ procedure fib_iter(int x1, int x2, int n)
 
     i += n
 
-    from i == n loop
+    from i == n do
         x1 += x2
         x1 <=> x2
         i -= 1
-    until i == 0
+    loop until i == 0
 
     delocal int tmp = 0
     delocal int i = 0

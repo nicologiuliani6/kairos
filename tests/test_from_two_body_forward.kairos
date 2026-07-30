@@ -1,0 +1,26 @@
+// Ciclo a due corpi (Janus): from b1 do c1 loop c2 until b2
+// Traccia forward attesa:  c1 [c2 c1]*  — c2 NON gira al primo giro.
+//
+// c1 mostra i e accumula, c2 incrementa i.  Con i = 0..4 la traccia e':
+//   c1(i=0) c2 c1(i=1) c2 c1(i=2) c2 c1(i=3) c2 c1(i=4)
+// quindi 5 esecuzioni di c1 e 4 di c2, e sum = 0+1+2+3+4 = 10.
+procedure main()
+    local int i = 0
+    local int sum = 0
+    local int passi_c1 = 0
+    local int passi_c2 = 0
+    from i == 0 do
+        sum += i
+        passi_c1 += 1
+    loop
+        i += 1
+        passi_c2 += 1
+    until i == 4
+    show(sum)
+    show(passi_c1)
+    show(passi_c2)
+    show(i)
+    delocal int passi_c2 = 4
+    delocal int passi_c1 = 5
+    delocal int sum = 10
+    delocal int i = 4

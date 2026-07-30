@@ -1,0 +1,29 @@
+// Errore STATIC atteso: stessa int 'x' passata a due call in rami PAR diversi,
+// scritta in entrambe le callee da srecv(<x>, c). srecv e' una builtin
+// (call_direct): la scrittura su ogni destinazione del payload va riconosciuta.
+procedure ricevi(channel c, int w)
+    srecv(<w>, c)
+
+procedure invia(channel c, int v)
+    ssend(<v>, c)
+
+procedure main()
+    local channel c1 = empty
+    local channel c2 = empty
+    local int a = 0
+    a += 7
+    local int b = 0
+    b += 9
+    local int x = 0
+    par
+        call ricevi(c1, x)
+        call invia(c2, a)
+    and
+        call ricevi(c2, x)
+        call invia(c1, b)
+    rap
+    delocal int x = 0
+    delocal int b = 0
+    delocal int a = 0
+    delocal channel c2 = empty
+    delocal channel c1 = empty

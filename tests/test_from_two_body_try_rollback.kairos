@@ -1,0 +1,21 @@
+// try/rollback con un ciclo a due corpi nel body.
+// Copre il desugar (il nodo 'from' viene ricostruito e deve conservare c2)
+// e l'inversione del ciclo a due corpi lungo il ramo di rollback.
+// c1 fa x += 2 e gira 4 volte (i = 0..3), c2 incrementa i e gira 3 volte → x = 8.
+// La condizione di commit x == 6 e' falsa: il body viene annullato (x torna a 0)
+// e si esegue il rollback → x = 1.
+procedure main()
+    local int x = 0
+    try x == 6
+        local int i = 0
+        from i == 0 do
+            x += 2
+        loop
+            i += 1
+        until i == 3
+        delocal int i = 3
+    rollback
+        x += 1
+    yrt x == 6
+    show(x)              // atteso: 1
+    delocal int x = 1

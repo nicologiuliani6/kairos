@@ -2,7 +2,10 @@ import sys
 from queue import Queue
 
 from src.frontend.errors import KairosCompileError
-from src.frontend.parser import lexer, parser, run_static_checks, desugar_try
+from src.frontend.parser import (
+    lexer, parser, run_static_checks, desugar_try, from_second_body,
+    _BUILTIN_CALL_OPCODES,
+)
 
 _KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
 
@@ -21,9 +24,9 @@ _ASSIGN_OPS = {
     '<=>': 'SWAP'
 }
 
-# Chiamate tipo foo(x) senza `call`: opcode VM diretto, non CALL nome_proc.
-_BUILTIN_CALL_OPCODES = frozenset({'show', 'push', 'pop', 'ssend', 'srecv', 'mnhalve', 'mnsplit32', 'dump',
-                                   'pooladd', 'poolsub', 'poolget', 'poolgetneg', 'poolpush', 'poolpop'})
+# _BUILTIN_CALL_OPCODES vive in parser.py, accanto alla tabella degli argomenti
+# scritti da ciascuna builtin (_BUILTIN_WRITTEN_ARGS): le due liste devono
+# restare allineate, e parser.py non può importare da qui (dipendenza circolare).
 
 class ByteCode_Compiler:
     def __init__(self):
@@ -137,8 +140,11 @@ class ByteCode_Compiler:
                 self.emit(f"ASSERT {lhs_e} {op_e} {rhs_e}", lineno)
 
             case 'from':
+                # ('from', b1, c1, b2, from_ln, until_ln[, c2])
+                second_body = from_second_body(ast)
                 if len(ast) >= 6:
-                    _, entry_cond, body, until_cond, from_lineno, until_lineno = ast
+                    entry_cond, body, until_cond = ast[1], ast[2], ast[3]
+                    from_lineno, until_lineno = ast[4], ast[5]
                 else:
                     # Compatibilita' con AST vecchi: una sola linea per tutto il loop.
                     _, entry_cond, body, until_cond, from_lineno = ast
@@ -146,16 +152,32 @@ class ByteCode_Compiler:
                 uid         = self.addr
                 start_label = f"FROM_START_{uid}"
                 err_label   = f"FROM_ERR_{uid}"
+                back_label  = f"FROM_BACK_{uid}"
 
                 lhs, op, rhs = self.cond_to_str(entry_cond)
                 self.emit(f"EVAL {lhs} {op} {rhs}", from_lineno)
                 self.emit(f"JMPF {err_label}", from_lineno)
-                self.emit(f"LABEL {start_label}", from_lineno)
-                for stmt in body:
-                    self.process(stmt)
-                lhs_u, op_u, rhs_u = self.cond_to_str(until_cond)
-                self.emit(f"EVAL {lhs_u} {op_u} {rhs_u}", until_lineno)
-                self.emit(f"JMPF {start_label}", until_lineno)
+                if not second_body:
+                    # Ciclo a un corpo (c2 vuoto): layout storico, invariato byte per byte.
+                    self.emit(f"LABEL {start_label}", from_lineno)
+                    for stmt in body:
+                        self.process(stmt)
+                    lhs_u, op_u, rhs_u = self.cond_to_str(until_cond)
+                    self.emit(f"EVAL {lhs_u} {op_u} {rhs_u}", until_lineno)
+                    self.emit(f"JMPF {start_label}", until_lineno)
+                else:
+                    # Ciclo a due corpi (Janus): traccia  c1 [c2 c1]*.
+                    # Il JMP iniziale salta c2 al primo giro; il back-edge ci rientra.
+                    self.emit(f"JMP {start_label}", from_lineno)
+                    self.emit(f"LABEL {back_label}", from_lineno)
+                    for stmt in second_body:
+                        self.process(stmt)
+                    self.emit(f"LABEL {start_label}", from_lineno)
+                    for stmt in body:
+                        self.process(stmt)
+                    lhs_u, op_u, rhs_u = self.cond_to_str(until_cond)
+                    self.emit(f"EVAL {lhs_u} {op_u} {rhs_u}", until_lineno)
+                    self.emit(f"JMPF {back_label}", until_lineno)
                 self.emit(f"LABEL FROM_END_{uid}", until_lineno)
                 self.emit(f"LABEL {err_label}", until_lineno)
 

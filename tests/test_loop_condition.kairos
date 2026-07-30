@@ -2,7 +2,7 @@
 procedure main()
     int x
     int y
-    from x == 0 loop
+    from x == 0 do
         if x == 0 then
             x+=1
         else 
@@ -10,5 +10,5 @@ procedure main()
         fi x == 1
         show(x)
         show(y)
-    until x == 1
+    loop until x == 1
     int z

@@ -1,0 +1,17 @@
+// Errore atteso: [STATIC] protocolli non duali sul channel 'c'.
+// Le prime due comunicazioni si accoppiano, poi un lato ha finito mentre
+// l'altro attende ancora una ricezione: !1.!1.end contro ?1.end. Il thread
+// che resta in attesa non ha piu' un partner possibile.
+procedure main()
+    channel c
+    int a
+    int b
+    int x
+    a += 1
+    b += 2
+    par
+        ssend(<a>, c)
+        ssend(<b>, c)
+    and
+        srecv(<x>, c)
+    rap

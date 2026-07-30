@@ -58,7 +58,7 @@ procedure _cbc_encrypt(stack p0, stack p1, stack p2, stack p3,
     local int b2 = 0   local int b3 = 0
 
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
 
         pop(b0, p0)   pop(b1, p1)
         pop(b2, p2)   pop(b3, p3)
@@ -101,7 +101,7 @@ procedure _cbc_encrypt(stack p0, stack p1, stack p2, stack p3,
         delocal int z1 = 0   delocal int z0 = 0
 
         i += 1
-    until i == n
+    loop until i == n
 
     delocal int i = n
     delocal int b3 = 0   delocal int b2 = 0
@@ -140,7 +140,7 @@ procedure _interleave(stack msgs,
                       stack p0, stack p1, stack p2, stack p3,
                       int n)
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int w0 = 0   local int w1 = 0
         local int w2 = 0   local int w3 = 0
             pop(w0, msgs)
@@ -154,7 +154,7 @@ procedure _interleave(stack msgs,
         delocal int w3 = 0   delocal int w2 = 0
         delocal int w1 = 0   delocal int w0 = 0
         i += 1
-    until i == n
+    loop until i == n
     delocal int i = n
 
 
@@ -167,7 +167,7 @@ procedure _deinterleave(stack msgs,
                         stack p0, stack p1, stack p2, stack p3,
                         int n)
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int w0 = 0   local int w1 = 0
         local int w2 = 0   local int w3 = 0
             pop(w0, p0)
@@ -181,7 +181,7 @@ procedure _deinterleave(stack msgs,
         delocal int w3 = 0   delocal int w2 = 0
         delocal int w1 = 0   delocal int w0 = 0
         i += 1
-    until i == n
+    loop until i == n
     delocal int i = n
 // ================================================================
 //  API PUBBLICA
@@ -231,10 +231,10 @@ procedure crypto_encrypt_simple(stack msgs, stack cipher,
     // Usiamo un contatore che incrementa di 4 fino a n
     local int nblocks = 0
     local int counter = 0
-    from counter == 0 loop
+    from counter == 0 do
         counter += 4
         nblocks += 1
-    until counter == n
+    loop until counter == n
     delocal int counter = n
 
     // Separa msgs in 4 stack per parola
@@ -254,10 +254,10 @@ procedure crypto_encrypt_simple(stack msgs, stack cipher,
 
     // Azzera nblocks per delocal (stesso loop al contrario)
     local int counter2 = 0
-    from counter2 == 0 loop
+    from counter2 == 0 do
         counter2 += 4
         nblocks -= 1
-    until counter2 == n
+    loop until counter2 == n
     delocal int counter2 = n
 
     delocal int nblocks = 0

@@ -11,13 +11,13 @@
 
 procedure free_pool(channel ch, int n)
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         i += 1
         local int index = 0
             index += i
             ssend(<index>, ch)
         delocal int index = 0
-    until i == n
+    loop until i == n
     delocal int i = n
 
 // --- API PUBBLICA ---
@@ -45,13 +45,13 @@ procedure mem_free(channel ch, stack cell)
 
 procedure mem_collect(channel ch, stack idx_stack, int n)
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         i += 1
         local int index = 0
             srecv(<index>, ch)
             push(index, idx_stack)
         delocal int index = 0
-    until i == n
+    loop until i == n
     delocal int i = n
 
 procedure mem_write(stack cell, int value, stack garbage)

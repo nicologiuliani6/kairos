@@ -20,13 +20,13 @@ procedure main()
     local int i = 0
     local int N = 6
 
-    from i == 0 loop
+    from i == 0 do
         i += 1
         try load <= budget
             call add_weight(load, i)
             taken += 1
         yrt load <= budget
-    until i == N
+    loop until i == N
 
     show(load)               // atteso: 10
     show(taken)              // atteso: 4

@@ -1,0 +1,38 @@
+// Ciclo a due corpi con un IF dentro il SECONDO corpo (c2).
+// Caso che stressa la finestra branch-trace: le righe di c2 devono cadere
+// dentro l'intervallo del loop, altrimenti l'inversione dell'IF sbaglia ramo.
+// L'IF si biforca su i < 3, quindi entrambi i rami vengono presi durante il ciclo.
+procedure scandisci(int i, int bassi, int alti, int tot)
+    from i == 0 do
+        tot += i
+    loop
+        i += 1
+        local int passo = 0
+        passo += i
+        if i < 3 then
+            bassi += passo
+        else
+            alti += passo
+        fi i < 3
+        passo -= i
+        delocal int passo = 0
+    until i == 6
+
+procedure main()
+    local int i = 0
+    local int bassi = 0
+    local int alti = 0
+    local int tot = 0
+    call scandisci(i, bassi, alti, tot)
+    show(tot)
+    show(bassi)
+    show(alti)
+    uncall scandisci(i, bassi, alti, tot)
+    show(i)
+    show(tot)
+    show(bassi)
+    show(alti)
+    delocal int tot = 0
+    delocal int alti = 0
+    delocal int bassi = 0
+    delocal int i = 0

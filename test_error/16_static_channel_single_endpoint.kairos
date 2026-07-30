@@ -1,7 +1,9 @@
-// Errore STATIC atteso: channel 'c' usato da un solo thread nel blocco PAR
-// (ssend nel primo branch), senza nessun partner che faccia srecv su 'c' nel
-// secondo branch. La spec richiede una sessione binaria (esattamente 2
-// endpoint): un canale con un solo endpoint non ha con chi sincronizzarsi.
+// Errore VM atteso: stallo. Il channel 'c' e' usato da un solo thread (ssend
+// nel primo branch), e nessun partner fa srecv su 'c'. La sessione e' binaria:
+// un canale con un solo endpoint non ha con chi sincronizzarsi, quindi il ramo
+// resta fermo per sempre. Non e' piu' un errore di compilazione: la disciplina
+// di sessione e' DINAMICA (src/vm/vm_session.h), e lo stallo lo diagnostica il
+// blocco par quando vede tutti i suoi thread fermi in attesa su canale.
 procedure main()
     local channel c = empty
     local int v = 0

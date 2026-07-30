@@ -5,7 +5,7 @@
 procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
-    from k == 0 loop
+    from k == 0 do
         local int abit = 0
         local int bbit = 0
         local int s = 0
@@ -27,7 +27,7 @@ procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scrat
         delocal int bbit = 0
         push(abit, __mn_hist)
         delocal int abit = 0
-    until k == 31
+    loop until k == 31
     push(pow, __mn_hist)
     delocal int pow = 0
     push(k, __mn_hist)

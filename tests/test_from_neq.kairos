@@ -1,8 +1,8 @@
 // FROM con condizione !=
 procedure main()
     local int x = 0
-    from x != 3 loop
+    from x != 3 do
         x += 1
-    until x == 3
+    loop until x == 3
     show(x)
     delocal int x = 3

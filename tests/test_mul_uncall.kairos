@@ -2,10 +2,10 @@
 procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int i = 0
     if b != 0 then
-        from i == 0 loop
+        from i == 0 do
             i += 1
             dst += a
-        until i == b
+        loop until i == b
     fi b != 0
     delocal int i = b
 

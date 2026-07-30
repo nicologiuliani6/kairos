@@ -32,6 +32,18 @@ typedef struct Waiter {
     ThreadArgs     *thread_args;
 } Waiter;
 
+/* Titolarita' di un canale. La logica sta tutta in vm_session.h: qui c'e'
+   solo la forma del dato, perche' vive dentro Channel. */
+typedef struct {
+    pthread_t t;
+    unsigned  epoch;
+} SessionOwner;
+
+typedef struct {
+    SessionOwner owner[2];      /* titolari correnti: due, sessione binaria */
+    int          owner_n;
+} SessionState;
+
 typedef struct {
     pthread_mutex_t mtx;
     Waiter *send_q_head, *send_q_tail;
@@ -40,6 +52,7 @@ typedef struct {
     int64_t *buf;
     size_t buf_len;
     int refcount;
+    SessionState session;       /* vm_session.h — azzerato dalla calloc */
 } Channel;
 
 #define VAR_NAME_LENGTH      100

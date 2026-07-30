@@ -318,7 +318,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                                              _ld, VM_BT_LOOP_MAX);
                     vm->bt_loop_n = 0;
                     for (int _li = 0; _li < _nlp && vm->bt_loop_n < VM_BT_LOOP_MAX; _li++) {
-                        vm->bt_loop_lo[vm->bt_loop_n] = _ld[_li].from_start_line;
+                        /* Due corpi: la finestra parte da FROM_BACK, altrimenti un IF
+                         * dentro c2 finirebbe nel branch trace e l'inversione sbaglierebbe. */
+                        uint _lo = _ld[_li].from_start_line;
+                        if (_ld[_li].from_back_line && _ld[_li].from_back_line < _lo)
+                            _lo = _ld[_li].from_back_line;
+                        vm->bt_loop_lo[vm->bt_loop_n] = _lo;
                         vm->bt_loop_hi[vm->bt_loop_n] = _ld[_li].eval_exit_line;
                         vm->bt_loop_n++;
                     }

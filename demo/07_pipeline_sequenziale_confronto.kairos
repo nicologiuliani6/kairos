@@ -5,10 +5,10 @@
 procedure sum_range(int from_v, int to_v, int acc)
     local int i = 0
     i += from_v
-    from i == from_v loop
+    from i == from_v do
         acc += i
         i += 1
-    until i == to_v
+    loop until i == to_v
     i -= to_v
     delocal int i = 0
 

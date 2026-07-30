@@ -5,10 +5,10 @@ procedure main()
     local int x = 0
     try x == 6
         local int i = 0
-        from i == 0 loop
+        from i == 0 do
             x += 2
             i += 1
-        until i == 3
+        loop until i == 3
         delocal int i = 3
     rollback
         x += 1

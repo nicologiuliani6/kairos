@@ -12,7 +12,7 @@ procedure __mn_k_loop(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3
             push(__mn_e0, __mn_hist)
             __mn_e0 += 0
         fi __mn_mem0 < 10
-        from __mn_e0 != 0 loop
+        from __mn_e0 != 0 do
             push(__mn_e1, __mn_hist)
             __mn_e1 += __mn_mem0
             __mn_e2 += __mn_e1
@@ -30,7 +30,7 @@ procedure __mn_k_loop(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3
                 push(__mn_e0, __mn_hist)
                 __mn_e0 += 0
             fi __mn_mem0 < 10
-        until __mn_e0 == 0
+        loop until __mn_e0 == 0
     push(__mn_e2, __mn_hist)
     delocal int __mn_e2 = 0
     push(__mn_e1, __mn_hist)

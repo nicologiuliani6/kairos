@@ -13,7 +13,7 @@ procedure p(int __mn_mem0, stack __mn_hist, stack __mn_scratch)
         push(__mn_e0, __mn_hist)
         __mn_e0 += 0
     fi __mn_mem0 < 10
-    from __mn_e0 != 0 loop
+    from __mn_e0 != 0 do
         push(__mn_e1, __mn_hist)
         __mn_e1 += __mn_mem0
         __mn_e2 += __mn_e1
@@ -31,7 +31,7 @@ procedure p(int __mn_mem0, stack __mn_hist, stack __mn_scratch)
             push(__mn_e0, __mn_hist)
             __mn_e0 += 0
         fi __mn_mem0 < 10
-    until __mn_e0 == 0
+    loop until __mn_e0 == 0
     push(__mn_e2, __mn_hist)
     delocal int __mn_e2 = 0
     push(__mn_e1, __mn_hist)

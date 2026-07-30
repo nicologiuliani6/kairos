@@ -9,6 +9,7 @@
 #include "vm_helpers.h"
 #include "vm_channel.h"
 #include "vm_ref_lock.h"
+#include "vm_session.h"
 
 #ifdef DAP_MODE
 #include <unistd.h>
@@ -339,6 +340,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
     Var *chv = vm->frames[fi]->vars[chi];
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SSEND: destinazione non è channel!\n");
+    session_acquire(chv->channel, ch_name);
 
     int encoded_len = 0;
     int encoded_cap = 16;
@@ -380,6 +382,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
                     ENC_PUSH(src->value[k]);
                 src->stack_len = 0;
             } else if (src->T == TYPE_CHANNEL) {
+                session_delegate_release(src->channel, src_tok);
                 uintptr_t p = (uintptr_t)src->channel;
                 ENC_PUSH(CHANNEL_REF_MARKER);
                 ENC_PUSH((int)(uint32_t)(p & 0xffffffffu));
@@ -487,6 +490,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     Var *chv = vm->frames[fi]->vars[chi];
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
+    session_acquire(chv->channel, ch_name);
 
 mutex_mailbox_retry:
     pthread_mutex_lock(&chv->channel->mtx);
@@ -541,6 +545,7 @@ mutex_mailbox_retry:
                     pthread_mutex_unlock(&chv->channel->mtx);
                     vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
                 }
+                session_delegate_acquire(shared, tokv[i]);
                 if (dest->channel != shared) {
                     Channel *old = dest->channel;
                     lock_channel_pair(old, shared);
@@ -671,6 +676,7 @@ mutex_mailbox_retry:
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
             }
+            session_delegate_acquire(shared, tokv[i]);
             if (dest->channel != shared) {
                 Channel *old = dest->channel;
                 lock_channel_pair(old, shared);

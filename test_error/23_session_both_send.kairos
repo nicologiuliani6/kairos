@@ -1,0 +1,17 @@
+// Errore atteso: [STATIC] protocolli non duali sul channel 'c'.
+// I due thread fanno entrambi ssend: nessuno riceve, la sincronizzazione non
+// puo' avvenire e il par resta bloccato per sempre. Il vincolo di sessione
+// binaria da solo non lo vede (gli endpoint sono esattamente due): serve
+// confrontare i tipi di sessione, che qui sono !1.end contro !1.end invece
+// che !1.end contro ?1.end.
+procedure main()
+    channel c
+    int a
+    int b
+    a += 1
+    b += 2
+    par
+        ssend(<a>, c)
+    and
+        ssend(<b>, c)
+    rap

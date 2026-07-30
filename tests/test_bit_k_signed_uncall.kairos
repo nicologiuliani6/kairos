@@ -9,10 +9,10 @@ procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack 
     local int saved_r = 0
     saved_r += r
     if saved_r >= b then
-        from q == 0 loop
+        from q == 0 do
             r -= b
             q += 1
-        until r < b
+        loop until r < b
     fi saved_r >= b
     push(saved_r, __mn_hist)
     delocal int saved_r = 0
@@ -58,14 +58,14 @@ procedure __mn_bit_k_signed(int a, int k, int bit_out, stack __mn_hist, stack __
     t += a
     local int i = 0
     if k != 0 then
-        from i == 0 loop
+        from i == 0 do
             i += 1
             local int q = 0
             call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
             t += q
             push(q, __mn_hist)
             delocal int q = 0
-        until i == k
+        loop until i == k
     fi k != 0
     local int qf = 0
     local int rf = 0

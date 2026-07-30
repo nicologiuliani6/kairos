@@ -1,0 +1,32 @@
+// Controllo NEGATIVO: NON deve produrre errore. Lo stesso int 'limite' e'
+// condiviso in sola lettura dai due rami del PAR (scenario produttore/consumatore
+// con limite condiviso, README sezione "Blocco par: race su int tra branch").
+// Nessuna delle due callee scrive il parametro 'limite': la condivisione in
+// sola lettura resta lecita.
+procedure produttore(channel c, int limite)
+    local int v = 0
+    v += limite
+    ssend(<v>, c)
+    delocal int v = 0
+
+procedure consumatore(channel c, int limite)
+    local int w = 0
+    srecv(<w>, c)
+    show(w)
+    local int z = 0
+    z += limite
+    show(z)
+    delocal int z = 5
+    delocal int w = 5
+
+procedure main()
+    local channel c = empty
+    local int limite = 0
+    limite += 5
+    par
+        call produttore(c, limite)
+    and
+        call consumatore(c, limite)
+    rap
+    delocal int limite = 5
+    delocal channel c = empty

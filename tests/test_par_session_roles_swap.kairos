@@ -1,0 +1,30 @@
+// Tipi di sessione: i due rami si scambiano i ruoli sullo stesso canale.
+// Il primo invia e poi riceve (!1.?1.end), il secondo riceve e poi invia
+// (?1.!1.end): sono duali, quindi il par e' ben tipato. Un controllo che
+// pretendesse un ruolo fisso mittente/ricevente rifiuterebbe questo programma,
+// che invece e' corretto e termina.
+procedure main()
+    local channel c = empty
+    local int a = 0
+    local int b = 0
+    local int x = 0
+    local int y = 0
+    a += 5
+
+    par
+        ssend(<a>, c)
+        srecv(<y>, c)
+    and
+        srecv(<x>, c)
+        b += 7
+        ssend(<b>, c)
+    rap
+
+    show(x)
+    show(y)
+
+    delocal int y = 7
+    delocal int x = 5
+    delocal int b = 0
+    delocal int a = 0
+    delocal channel c = empty
