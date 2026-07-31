@@ -173,13 +173,23 @@ static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 
 static inline uint clone_frame_for_thread(VM *vm, const char *proc)
 {
-    pthread_mutex_lock(&var_indexer_mtx);
     char key[VAR_NAME_LENGTH];
     make_thread_frame_key(proc, key, sizeof(key));
-    if (char_id_map_exists(&FrameIndexer, key)) {
-        uint r = (uint)char_id_map_get(&FrameIndexer, key);
+
+    /* Cammino veloce senza esclusione. L'indice dei frame e' append-only e
+       pubblica ogni voce solo quando e' completa, quindi trovarne una gia'
+       presente e' sicuro anche senza lock. E' il caso normale: il clone si crea
+       una volta per procedura e per thread, poi ogni chiamata successiva lo
+       ritrova. Prendere qui un mutex unico per tutto il processo, come si faceva,
+       serializzava OGNI chiamata di procedura di OGNI ramo. */
+    int gia = char_id_map_lookup(&FrameIndexer, key);
+    if (gia >= 0) return (uint)gia;
+
+    pthread_mutex_lock(&var_indexer_mtx);
+    gia = char_id_map_lookup(&FrameIndexer, key);   /* ricontrollo sotto lock */
+    if (gia >= 0) {
         pthread_mutex_unlock(&var_indexer_mtx);
-        return r;
+        return (uint)gia;
     }
     uint base_fi  = (uint)char_id_map_get(&FrameIndexer, proc);
     uint clone_fi = (uint)char_id_map_get(&FrameIndexer, key);

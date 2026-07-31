@@ -11,6 +11,22 @@
 
 #define uint     unsigned int
 
+/* ----------------------------------------------------------------------
+ *  strtok e i thread
+ *
+ *  strtok di glibc tiene il punto a cui e' arrivato in una variabile statica
+ *  condivisa da tutto il processo: due thread che tokenizzano insieme si
+ *  sovrascrivono a vicenda lo stato. Non e' il buffer del programma a essere
+ *  in gara, e' il segnaposto dentro strtok, quindi dare a ogni thread una
+ *  copia del bytecode non protegge da questo.
+ *
+ *  strtok_r prende il segnaposto dal chiamante. Dichiarandolo __thread e
+ *  ridefinendo strtok, tutti i punti d'uso passano alla versione rientrante
+ *  senza toccarne nessuno.
+ * ---------------------------------------------------------------------- */
+static __thread char *vm_tok_save;
+#define strtok(_s, _d) strtok_r((_s), (_d), &vm_tok_save)
+
 /* Mnemo --opt-uncall-user-calls: vedere MnemoHistFloorSnapEntry sotto VAR_NAME_LENGTH.
  * Capacità iniziale di vm->mn_hist_floor_snaps (heap, cresce raddoppiando
  * via vm_ensure_hist_floor_snap_cap). Nessun hard cap. */

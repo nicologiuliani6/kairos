@@ -31,7 +31,8 @@ static inline void char_id_map_init(CharIdMap *m) {
 static inline int char_id_map_get(CharIdMap *m, const char *name) {
     /* Hot path: prefisso check rapido sul primo char prima di strcmp completo. */
     char c0 = name[0];
-    for (int i = 0; i < m->count; i++) {
+    int n = __atomic_load_n(&m->count, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++) {
         if (m->names[i][0] == c0 && strcmp(m->names[i], name) == 0)
             return i;
     }
@@ -39,9 +40,12 @@ static inline int char_id_map_get(CharIdMap *m, const char *name) {
         fprintf(stderr, "[VM] CHAR_ID_MAP overflow (%d) on '%s'\n", CHAR_ID_MAP_SIZE, name);
         exit(1);
     }
-    int id = m->count++;
+    /* Si scrive il nome PRIMA di pubblicare il conteggio: un lettore che non
+       tiene il lock vede o una voce completa o nessuna voce, mai una a meta'. */
+    int id = m->count;
     strncpy(m->names[id], name, CHAR_ID_MAP_NAME_LEN - 1);
     m->names[id][CHAR_ID_MAP_NAME_LEN - 1] = '\0';
+    __atomic_store_n(&m->count, id + 1, __ATOMIC_RELEASE);
     return id;
 }
 
@@ -51,7 +55,8 @@ static inline int char_id_map_get(CharIdMap *m, const char *name) {
  */
 static inline int char_id_map_lookup(CharIdMap *m, const char *name) {
     char c0 = name[0];
-    for (int i = 0; i < m->count; i++) {
+    int n = __atomic_load_n(&m->count, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n; i++) {
         if (m->names[i][0] == c0 && strcmp(m->names[i], name) == 0)
             return i;
     }
