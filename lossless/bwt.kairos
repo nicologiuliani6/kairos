@@ -1,0 +1,335 @@
+// ---------------------------------------------------------------------------
+//  Burrows-Wheeler reversibile, seguendo
+//    Lyngby, Nylandsted, Gluck, Yokoyama,
+//    "Towards Clean Reversible Lossless Compression", RC 2024.
+//
+//  Loro lavorano su array; qui gli array non ci sono, e l'accesso per indice e'
+//  costruito sopra gli stack. Il resto della struttura e' la loro: una procedura
+//  che produce l'uscita piu' i dati ausiliari, e i dati ausiliari azzerati
+//  disfacendo una seconda procedura che li ricalcola dall'uscita.
+//
+//  Alfabeto ridotto: a=1, b=2, n=3.
+//  Vettore di prova: "banana" -> ultima colonna "nnbaaa", indice 3.
+// ---------------------------------------------------------------------------
+
+// --- accesso per indice sopra gli stack ------------------------------------
+
+procedure sposta(stack a, stack b, int m)
+    if m > 0 then
+        local int k = 0
+        from k == 0 do
+            local int v = 0
+                pop(v, a)
+                push(v, b)
+            delocal int v = 0
+            k += 1
+        loop until k == m
+        delocal int k = m
+    fi m > 0
+
+procedure leggi(stack s, stack aux, int i, int r)
+    call sposta(s, aux, i)
+    local int v = 0
+        pop(v, s)
+        r += v
+        push(v, s)
+    delocal int v = 0
+    uncall sposta(s, aux, i)
+
+procedure aggiungi(stack s, stack aux, int i, int v)
+    call sposta(s, aux, i)
+    local int t = 0
+        pop(t, s)
+        t += v
+        push(t, s)
+    delocal int t = 0
+    uncall sposta(s, aux, i)
+
+// --- carattere k-esimo della rotazione che parte da off --------------------
+
+procedure car(stack blocco, stack aux, int n, int off, int k, int c)
+    local int j = 0
+        j += off
+        j += k
+        if j >= n then
+            j -= n
+        fi j < off
+        call leggi(blocco, aux, j, c)
+        if j < off then
+            j += n
+        fi j >= n
+        j -= k
+        j -= off
+    delocal int j = 0
+
+// --- confronto lessicografico di due rotazioni -----------------------------
+//
+//  gt vale 1 se la rotazione da o1 e' maggiore di quella da o2; pref conta le
+//  posizioni iniziali in cui coincidono.
+//
+//  Non si esce in anticipo al primo carattere diverso: la guardia d'uscita di un
+//  if non distinguerebbe "sono entrato e non ho trovato" da "non sono entrato".
+//  pref fa da testimone: finche' le due rotazioni coincidono vale esattamente k,
+//  quindi `pref == k` dice "siamo ancora nel prefisso comune". Dopo il corpo pref
+//  vale k oppure k+1, in entrambi i casi >= k, mentre se non si e' entrati e'
+//  rimasto sotto k: `pref >= k` e' quindi una guardia d'uscita valida.
+procedure maggiore(stack blocco, stack aux, int n, int o1, int o2, int gt, int pref)
+    local int k = 0
+    from k == 0 do
+        local int c1 = 0
+        local int c2 = 0
+            call car(blocco, aux, n, o1, k, c1)
+            call car(blocco, aux, n, o2, k, c2)
+            if pref == k then
+                if c1 > c2 then
+                    gt += 1
+                fi gt == 1
+            fi pref >= k
+            if pref == k then
+                if c1 == c2 then
+                    pref += 1
+                fi pref > k
+            fi pref >= k
+            uncall car(blocco, aux, n, o2, k, c2)
+            uncall car(blocco, aux, n, o1, k, c1)
+        delocal int c2 = 0
+        delocal int c1 = 0
+        k += 1
+    loop until k == n
+    delocal int k = n
+
+// --- ordinamento a bolle delle rotazioni -----------------------------------
+//
+//  Un passo confronta le rotazioni in posizione j e j+1 e le scambia se sono
+//  in ordine sbagliato. Gli offset letti finiscono su `scarto` invece di essere
+//  disfatti: dopo lo scambio non si saprebbe piu' quale indice porta quale
+//  valore, e la guardia dovrebbe dipendere da gt, che a quel punto e' gia'
+//  stato azzerato. `scarto` e' un dato ausiliario nel senso del paper, e lo
+//  ripulisce chi disfa l'ordinamento.
+procedure passo(stack offs, stack blocco, stack aux, stack scarto, int n, int j)
+    local int j1 = 0
+        j1 += j
+        j1 += 1
+        local int o1 = 0
+        local int o2 = 0
+            call leggi(offs, aux, j, o1)
+            call leggi(offs, aux, j1, o2)
+
+            local int gt = 0
+            local int pref = 0
+                call maggiore(blocco, aux, n, o1, o2, gt, pref)
+                if gt == 1 then
+                    local int d = 0
+                        d += o2
+                        d -= o1
+                        call   aggiungi(offs, aux, j,  d)
+                        uncall aggiungi(offs, aux, j1, d)
+                        d += o1
+                        d -= o2
+                    delocal int d = 0
+                fi gt == 1
+                uncall maggiore(blocco, aux, n, o1, o2, gt, pref)
+            delocal int pref = 0
+            delocal int gt = 0
+
+            push(o1, scarto)
+            push(o2, scarto)
+        delocal int o2 = 0
+        delocal int o1 = 0
+        j1 -= 1
+        j1 -= j
+    delocal int j1 = 0
+
+procedure ordina(stack offs, stack blocco, stack aux, stack scarto, int n)
+    local int m = 0
+        m += n
+        m -= 1
+        local int i = 0
+        from i == 0 do
+            local int j = 0
+            from j == 0 do
+                call passo(offs, blocco, aux, scarto, n, j)
+                j += 1
+            loop until j == m
+            delocal int j = m
+            i += 1
+        loop until i == m
+        delocal int i = m
+        m += 1
+        m -= n
+    delocal int m = 0
+
+// --- estrazione: ultima colonna e indice della rotazione originale ---------
+//
+//  out[i] e' l'ultimo carattere della rotazione i-esima nell'ordine, cioe' il
+//  carattere in posizione n-1 di quella rotazione. idx e' la posizione, nel
+//  nuovo ordine, della rotazione che parte da 0: e' l'informazione senza la
+//  quale la trasformata non si inverte.
+procedure estrai(stack offs, stack blocco, stack aux, stack scarto, stack out, int n, int idx)
+    local int i = 0
+    from i == 0 do
+        local int ii = 0
+            ii += n
+            ii -= 1
+            ii -= i                    // da n-1 a 0: cosi' la cima di out e' out[0]
+        local int o = 0
+            call leggi(offs, aux, ii, o)
+            local int k = 0
+                k += n
+                k -= 1
+                local int c = 0
+                    call car(blocco, aux, n, o, k, c)
+                    push(c, out)
+                delocal int c = 0
+                k += 1
+                k -= n
+            delocal int k = 0
+            if o == 0 then
+                idx += ii
+            fi o == 0
+            push(o, scarto)
+        delocal int o = 0
+            ii += i
+            ii += 1
+            ii -= n
+        delocal int ii = 0
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+
+// --- trasformata inversa: da (out, idx) si ricostruisce il blocco -----------
+//
+//  Metodo classico di Burrows e Wheeler. Si costruisce il vettore T che, per
+//  ogni riga della matrice ordinata, dice quale riga la precede; percorrendolo
+//  da idx si legge il blocco originale a ritroso.
+//
+//      T[i] = #{ j : out[j] < out[i] } + #{ j < i : out[j] == out[i] }
+//
+//  cioe' la posizione che out[i] occupa nella prima colonna, che e' out
+//  ordinata. I due conteggi si fanno con due scansioni, senza congiunzioni:
+//  la `if` di Kairos confronta due espressioni e basta.
+
+procedure conta_minori(stack out, stack aux, int n, int c, int r)
+    local int j = 0
+    from j == 0 do
+        local int d = 0
+            call leggi(out, aux, j, d)
+            if d < c then
+                r += 1
+            fi d < c
+            uncall leggi(out, aux, j, d)
+        delocal int d = 0
+        j += 1
+    loop until j == n
+    delocal int j = n
+
+procedure conta_uguali_prima(stack out, stack aux, int i, int c, int r)
+    if i > 0 then
+        local int j = 0
+        from j == 0 do
+            local int d = 0
+                call leggi(out, aux, j, d)
+                if d == c then
+                    r += 1
+                fi d == c
+                uncall leggi(out, aux, j, d)
+            delocal int d = 0
+            j += 1
+        loop until j == i
+        delocal int j = i
+    fi i > 0
+
+// T viene costruito con la cima in posizione 0.
+procedure costruisci_T(stack out, stack aux, stack tv, int n)
+    local int i = 0
+    from i == 0 do
+        local int ii = 0
+            ii += n
+            ii -= 1
+            ii -= i                      // scorre da n-1 a 0, cosi' la cima e' T[0]
+            local int c = 0
+                call leggi(out, aux, ii, c)
+                local int t = 0
+                    call conta_minori(out, aux, n, c, t)
+                    call conta_uguali_prima(out, aux, ii, c, t)
+                    push(t, tv)
+                delocal int t = 0
+                uncall leggi(out, aux, ii, c)
+            delocal int c = 0
+            ii += i
+            ii += 1
+            ii -= n
+        delocal int ii = 0
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+// Percorre T da idx e ricostruisce il blocco. Le posizioni visitate finiscono
+// su `cammino`: sono il dato ausiliario di questo passo.
+procedure cammina(stack out, stack tv, stack aux, stack blocco, stack cammino, int idx, int n)
+    local int p = 0
+        p += idx
+        local int k = 0
+        from k == 0 do
+            local int c = 0
+                call leggi(out, aux, p, c)
+                push(c, blocco)
+            delocal int c = 0
+            local int q = 0
+                call leggi(tv, aux, p, q)
+                p <=> q
+                push(q, cammino)         // q e' la posizione vecchia
+            delocal int q = 0
+            k += 1
+        loop until k == n
+        delocal int k = n
+        p -= idx
+    delocal int p = 0
+
+procedure main()
+    stack blocco
+    stack offs
+    stack aux
+    stack scarto
+    stack out
+    stack tv
+    stack ricostruito
+    stack cammino
+    local int n = 6
+
+    // "banana": b a n a n a, la cima e' il primo carattere
+    local int t = 0
+    t += 1   push(t, blocco)
+    t += 3   push(t, blocco)
+    t += 1   push(t, blocco)
+    t += 3   push(t, blocco)
+    t += 1   push(t, blocco)
+    t += 2   push(t, blocco)
+    // offsets 0..5, la cima e' 0
+    t += 5   push(t, offs)
+    t += 4   push(t, offs)
+    t += 3   push(t, offs)
+    t += 2   push(t, offs)
+    t += 1   push(t, offs)
+    push(t, offs)          // offset 0: t vale gia' 0
+    delocal int t = 0
+
+    show(blocco)
+    show(offs)
+    call ordina(offs, blocco, aux, scarto, n)
+    show(offs)
+
+    local int idx = 0
+        call estrai(offs, blocco, aux, scarto, out, n, idx)
+        show(out)
+        show(idx)
+
+        // ricostruzione da (out, idx) soltanto
+        call costruisci_T(out, aux, tv, n)
+        show(tv)
+        call cammina(out, tv, aux, ricostruito, cammino, idx, n)
+        show(ricostruito)
+    delocal int idx = 3
+
+    delocal int n = 6

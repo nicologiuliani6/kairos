@@ -1,0 +1,107 @@
+// ---------------------------------------------------------------------------
+//  Accesso per indice sopra gli stack, senza uscire dal linguaggio.
+//
+//  Kairos ha int, stack e channel, e uno stack si tocca solo in cima. Gli
+//  algoritmi di compressione lavorano invece per indice. Il ponte e' questo:
+//  per arrivare all'elemento di profondita' i si spostano i elementi su uno
+//  stack d'appoggio, si legge o si aggiorna la cima, e si rimettono a posto.
+//
+//  Lo spostamento e' reversibile per costruzione, perche' push e pop sono una
+//  coppia inversa esatta: `pop(v,a) push(v,b)` sposta un elemento e lascia v a
+//  zero, e disfarlo lo riporta indietro. Rimettere a posto non e' quindi codice
+//  nuovo da scrivere: e' `uncall` dello spostamento.
+//
+//  Costo: O(i) per accesso, quindi O(n) nel caso peggiore. E' il fattore che si
+//  paga per restare dentro la semantica invece di usare memoria indicizzata.
+// ---------------------------------------------------------------------------
+
+// Sposta m elementi dalla cima di a alla cima di b, invertendone l'ordine.
+//
+// Il ciclo di Janus esegue il corpo almeno una volta, quindi m = 0 non da' zero
+// giri: serve un condizionale intorno. La guardia d'uscita puo' ripetere quella
+// d'ingresso perche' il corpo non tocca m.
+procedure sposta(stack a, stack b, int m)
+    if m > 0 then
+        local int k = 0
+        from k == 0 do
+            local int v = 0
+                pop(v, a)
+                push(v, b)
+            delocal int v = 0
+            k += 1
+        loop until k == m
+        delocal int k = m
+    fi m > 0
+
+// r += s[i], dove s[0] e' la cima. Lo stack resta com'era.
+procedure leggi(stack s, stack aux, int i, int r)
+    call sposta(s, aux, i)
+    local int v = 0
+        pop(v, s)
+        r += v
+        push(v, s)
+    delocal int v = 0
+    uncall sposta(s, aux, i)
+
+// s[i] += v. Lo stack resta lungo uguale.
+procedure aggiungi(stack s, stack aux, int i, int v)
+    call sposta(s, aux, i)
+    local int t = 0
+        pop(t, s)
+        t += v
+        push(t, s)
+    delocal int t = 0
+    uncall sposta(s, aux, i)
+
+procedure main()
+    stack s
+    stack aux
+    local int t = 0
+
+    // s dall'alto: 10 20 30 40 50
+    t += 50   push(t, s)
+    t += 40   push(t, s)
+    t += 30   push(t, s)
+    t += 20   push(t, s)
+    t += 10   push(t, s)
+    delocal int t = 0
+
+    show(s)
+
+    // lettura per indice
+    local int r0 = 0
+    local int r2 = 0
+    local int r4 = 0
+    local int i0 = 0
+    local int i2 = 2
+    local int i4 = 4
+        call leggi(s, aux, i0, r0)
+        call leggi(s, aux, i2, r2)
+        call leggi(s, aux, i4, r4)
+        show(r0)
+        show(r2)
+        show(r4)
+        show(s)
+
+        // scrittura per indice: s[2] += 5
+        local int cinque = 0
+        cinque += 5
+            call aggiungi(s, aux, i2, cinque)
+            show(s)
+            uncall aggiungi(s, aux, i2, cinque)
+            show(s)
+        cinque -= 5
+        delocal int cinque = 0
+
+        uncall leggi(s, aux, i4, r4)
+        uncall leggi(s, aux, i2, r2)
+        uncall leggi(s, aux, i0, r0)
+    delocal int i4 = 4
+    delocal int i2 = 2
+    delocal int i0 = 0
+    delocal int r4 = 0
+    delocal int r2 = 0
+    delocal int r0 = 0
+
+    show(s)
+    show(aux)

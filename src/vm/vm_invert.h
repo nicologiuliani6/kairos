@@ -670,6 +670,24 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
     thread_val_IF = eval_cond(lval, op, rval);
 }
 
+/* Quale ramo aveva preso un IF, deciso all'indietro.
+ *
+ * Andando all'indietro lo store e' nello stato DOPO l'if, quindi la guardia
+ * d'ingresso non vale piu': rivalutarla da' la risposta giusta solo quando il
+ * corpo non tocca cio' che essa testa. E' invece l'asserzione d'uscita a dire,
+ * per costruzione, quale ramo e' stato preso: e' la ragione per cui il
+ * condizionale reversibile ne ha due. Si usa quella, e si ricade sull'ingresso
+ * solo se l'asserzione non e' stata raccolta.
+ *
+ * Dopo la chiamata thread_val_IF vale 1 se il ramo preso era il THEN. */
+static inline void do_eval_if_branch(VM *vm, uint fi, const IfDescriptor *d)
+{
+    if (d->eval_exit_id[0] != '\0')
+        do_eval_if_entry(vm, fi, d->eval_exit_id, d->eval_exit_op, d->eval_exit_val);
+    else
+        do_eval_if_entry(vm, fi, d->eval_entry_id, d->eval_entry_op, d->eval_entry_val);
+}
+
 /* `from id == 0`: la guardia d'ingresso vale solo alla prima iterata forward.
    In inversa: ripetere il corpo finché id>0; uscire a JMPF_ERR e JMPF_START quando id<=0. */
 static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
@@ -1316,8 +1334,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     vm->frames[fi]->LocalVariables = sv;
                 }
             } else {
-                do_eval_if_entry(vm, fi, ifs[ii].eval_entry_id, ifs[ii].eval_entry_op,
-                                 ifs[ii].eval_entry_val);
+                do_eval_if_branch(vm, fi, &ifs[ii]);
                 uint branch_from = 0, branch_to = 0;
                 if (thread_val_IF) {
                     /* Forward IF condition true: invert only THEN branch. */
@@ -1814,8 +1831,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 if (matched < 0) { idx--; continue; }
             }
             if (matched >= 0) {
-                do_eval_if_entry(vm, cfi, ifs[matched].eval_entry_id,
-                                 ifs[matched].eval_entry_op, ifs[matched].eval_entry_val);
+                do_eval_if_branch(vm, cfi, &ifs[matched]);
                 uint bf = 0, bt = 0;
                 if (thread_val_IF) {
                     bf = ifs[matched].jmpf_else_line + 1;

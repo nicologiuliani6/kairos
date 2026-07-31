@@ -1,0 +1,107 @@
+// ---------------------------------------------------------------------------
+//  Trasformata reversibile a blocchi, eseguita in parallelo.
+//
+//  UN SOLO programma fa le due direzioni: `call` trasforma, `uncall` ritrasforma.
+//  I blocchi sono indipendenti, quindi sono rami di un `par` che operano su
+//  porzioni disgiunte dello store; il riassemblaggio passa per i canali.
+//
+//  La trasformata per blocco e' la delta: d_i = x_i - x_{i-1}. E' il passo che
+//  rende comprimibile un flusso di valori vicini fra loro, ed e' reversibile
+//  senza salvare nulla:
+//        v -= prev      v vale ora il delta
+//        prev += v      prev torna a valere x_i, perche' prev + (x_i - prev)
+//  L'ultimo valore di prev viene spedito sul canale: cosi' il worker finisce
+//  con lo store pulito e la ricostruzione ha tutto cio' che le serve.
+// ---------------------------------------------------------------------------
+
+procedure worker(stack blk, channel out, int n)
+    local int prev = 0
+    local int i = 0
+    from i == 0 do
+        local int v = 0
+            pop(v, blk)
+            v -= prev
+            prev += v
+            ssend(<v>, out)
+        delocal int v = 0
+        i += 1
+    loop until i == n
+    delocal int i = n
+    ssend(<prev>, out)
+    delocal int prev = 0
+
+procedure collector(channel a, channel b, stack outa, stack outb, int n)
+    local int i = 0
+    from i == 0 do
+        local int v = 0
+            srecv(<v>, a)
+            push(v, outa)
+        delocal int v = 0
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+    local int lasta = 0
+        srecv(<lasta>, a)
+        push(lasta, outa)
+    delocal int lasta = 0
+
+    local int j = 0
+    from j == 0 do
+        local int w = 0
+            srecv(<w>, b)
+            push(w, outb)
+        delocal int w = 0
+        j += 1
+    loop until j == n
+    delocal int j = n
+
+    local int lastb = 0
+        srecv(<lastb>, b)
+        push(lastb, outb)
+    delocal int lastb = 0
+
+procedure comprimi(stack blk1, stack blk2, stack out1, stack out2, int n)
+    local channel c1 = empty
+    local channel c2 = empty
+    par
+        call worker(blk1, c1, n)
+    and
+        call worker(blk2, c2, n)
+    and
+        call collector(c1, c2, out1, out2, n)
+    rap
+    delocal channel c2 = empty
+    delocal channel c1 = empty
+
+procedure main()
+    stack blk1
+    stack blk2
+    stack out1
+    stack out2
+    local int n = 4
+
+    // blocco 1: valori vicini fra loro, il caso in cui la delta paga
+    local int t = 0
+    t += 104   push(t, blk1)
+    t += 103   push(t, blk1)
+    t += 101   push(t, blk1)
+    t += 100   push(t, blk1)
+    // blocco 2
+    t += 207   push(t, blk2)
+    t += 205   push(t, blk2)
+    t += 202   push(t, blk2)
+    t += 200   push(t, blk2)
+    delocal int t = 0
+
+    call comprimi(blk1, blk2, out1, out2, n)
+
+    show(out1)
+    show(out2)
+
+    uncall comprimi(blk1, blk2, out1, out2, n)
+
+    show(blk1)
+    show(blk2)
+
+    delocal int n = 4

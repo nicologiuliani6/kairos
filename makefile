@@ -113,7 +113,7 @@ endif
 
 # tests/*.kairos + examples/; esclusi: tests/fixtures/; esempi noti non validi in suite.
 KAIROS_EXCLUDE :=
-KAIROS_FILES := $(filter-out $(KAIROS_EXCLUDE),$(sort $(wildcard tests/*.kairos examples/*.kairos)))
+KAIROS_FILES := $(filter-out $(KAIROS_EXCLUDE),$(sort $(wildcard tests/*.kairos examples/*.kairos lossless/*.kairos)))
 
 test: build-release
 	@echo "$(CYAN)=== Test suite (.kairos in tests/ + examples/) ===$(RESET)"

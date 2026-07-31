@@ -1,0 +1,64 @@
+# Compressione lossless reversibile
+
+Studio su un caso d'uso in cui reversibilità e concorrenza servono entrambe:
+comprimere e decomprimere sono per costruzione l'una l'inversa dell'altra,
+quindi un unico programma reversibile le realizza entrambe, e i blocchi in cui
+si divide l'ingresso sono indipendenti, quindi si trasformano in parallelo.
+
+Riferimento: Lyngby, Nylandsted, Glück, Yokoyama, *Towards Clean Reversible
+Lossless Compression: A Reversible Programming Experiment with Zip*, RC 2024,
+LNCS 14680, pp. 94–102. Da lì vengono la struttura e il vettore di prova; quel
+lavoro è però interamente sequenziale.
+
+## File
+
+| file | contenuto |
+|---|---|
+| `indice_su_stack.kairos` | accesso per indice reversibile sopra gli stack, che Kairos non ha nativamente |
+| `bwt.kairos` | trasformata di Burrows–Wheeler su un blocco, e la sua inversa |
+| `bwt_parallelo.kairos` | i blocchi come rami di un `par`, colonne e indici consegnati per canale |
+| `compress_par.kairos` | trasformata delta a blocchi: lo scheletro concorrente, più semplice da leggere |
+| `genera_bwt.py` | genera i casi di misura, in variante sequenziale e concorrente |
+
+Tutti i `.kairos` fanno parte di `make test`.
+
+## Riprodurre le misure
+
+```
+python3 lossless/genera_bwt.py <n> <blocchi> <seq|par> > /tmp/caso.kairos
+./venv/bin/python -m src.kairos /tmp/caso.kairos
+```
+
+Le due varianti hanno corpo identico: il confronto dei tempi misura solo
+l'effetto della concorrenza.
+
+## Risultati
+
+Correttezza, sul vettore di prova del lavoro di riferimento (`banana`, con
+alfabeto ridotto a=1, b=2, n=3):
+
+```
+blocco                   [2, 1, 3, 1, 3, 1]     banana
+rotazioni ordinate       [5, 3, 1, 0, 4, 2]
+ultima colonna           [3, 3, 2, 1, 1, 1]     nnbaaa
+indice                   3
+ricostruzione da (colonna, indice)              banana
+```
+
+Costo: l'esponente misurato passa da 3,29 a 3,57 fra n=6 e n=12, in
+avvicinamento a n^4. Il lavoro di riferimento dichiara n^3 per la BWT ingenua
+con gli array; il fattore in più è l'accesso per indice emulato sugli stack.
+
+Concorrenza, su 24 nuclei:
+
+```
+blocchi   sequenziale   concorrente   guadagno
+   2         4,53 s        3,77 s      1,20x
+   4         9,01 s        6,86 s      1,31x
+   6        13,60 s        7,68 s      1,77x
+   8        18,21 s       10,68 s      1,71x
+```
+
+Il guadagno si ferma attorno a 1,75x pur con nuclei liberi: il raccoglitore è un
+ramo solo che riceve dai canali uno per volta, e l'ingresso in un `par` costa una
+copia dell'intero bytecode per ramo.
