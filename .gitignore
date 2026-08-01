@@ -24,3 +24,7 @@ node_modules/
 out/
 test_debug
 tests/test_dap_autonomous
+# artefatti generati dai driver di lossless/
+lossless/generato_*.kairos
+lossless/ricostruito_*
+lossless/*.rle1

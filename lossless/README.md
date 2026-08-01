@@ -19,8 +19,43 @@ lavoro è però interamente sequenziale.
 | `bwt_parallelo.kairos` | i blocchi come rami di un `par`, colonne e indici consegnati per canale |
 | `compress_par.kairos` | trasformata delta a blocchi: lo scheletro concorrente, più semplice da leggere |
 | `genera_bwt.py` | genera i casi di misura, in variante sequenziale e concorrente |
+| `converti.kairos` | conversione fra due formati lossless: una procedura sola, `call` in un verso e `uncall` nell'altro |
+| `converti.py` | driver del convertitore: file in ingresso, formato riconosciuto, file in uscita |
+| `esperimenti.py` | costo dell'inverso, validazione, caso peggiore |
+| `analisi_converti.md` | risultati e misure del convertitore |
+| `casi/guardia_inversa.kairos` | caso minimo: la guardia d'ingresso non verificata invertendo |
+| `cerchio.pgm` | immagine di prova, 16x16 in scala di grigi |
 
 Tutti i `.kairos` fanno parte di `make test`.
+
+## Conversione fra formati
+
+Un file grezzo e la sua codifica a corse sono due rappresentazioni lossless
+dello stesso contenuto. Il decodificatore non è scritto: è il codificatore
+invertito, e il programma sceglie la direzione dal tipo del file.
+
+```bash
+python3 lossless/converti.py lossless/cerchio.pgm --giro   # A -> B -> A, confronto byte a byte
+python3 lossless/converti.py lossless/cerchio.pgm          # scrive cerchio.pgm.rle1
+python3 lossless/converti.py cerchio.pgm.rle1              # torna al grezzo, con uncall
+```
+
+Giro completo verificato fino a 256x256, cioè 65.551 byte, ricostruiti
+identici. L'esecuzione è lineare, circa 2 s per 65 KB; il costo che cresce è il
+parse del sorgente generato, perché la VM non legge file e i byte finiscono nel
+programma. L'inverso costa fra 1,7 e 2,2 volte il diretto, e il rapporto non
+cresce con la taglia.
+
+```bash
+python3 lossless/esperimenti.py tutti   # costo, validazione, caso peggiore
+```
+
+Questo studio ha portato a una correzione della VM: invertendo un `if`, la
+guardia d'ingresso non veniva riletta, quindi l'inverso accettava in silenzio
+stati che nessuna esecuzione diretta produce e le asserzioni scritte
+nell'idioma di Janus non avevano effetto all'indietro. Il caso minimo è
+[`casi/guardia_inversa.kairos`](casi/guardia_inversa.kairos). Dettagli e misure
+in [`analisi_converti.md`](analisi_converti.md).
 
 ## Riprodurre le misure
 

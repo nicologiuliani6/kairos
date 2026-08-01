@@ -1,0 +1,101 @@
+// ---------------------------------------------------------------------------
+//  Conversione fra due formati lossless, scritta una volta sola.
+//
+//  Il formato A e' la sequenza grezza dei byte. Il formato B e' la stessa
+//  informazione codificata a corse: coppie (valore, lunghezza). Sono due
+//  rappresentazioni lossless dello stesso contenuto, e passare dall'una
+//  all'altra e' una biiezione.
+//
+//  Il codificatore da A a B e' scritto. Il decodificatore da B ad A non e'
+//  scritto: si ottiene invertendo il primo. Il programma legge il tipo del file
+//  in ingresso e sceglie la direzione: `call` se arriva A, `uncall` se arriva B.
+//  Nei due casi l'uscita e' il file nell'altro formato.
+//
+//  La procedura `rle` e' pulita nel senso di Lyngby, Nylandsted, Gluck e
+//  Yokoyama: consuma interamente l'ingresso e lascia solo l'uscita. Senza
+//  questa proprieta' l'inverso non sarebbe una decodifica, perche' dovrebbe
+//  ricevere anche la spazzatura prodotta lungo la strada.
+//
+//  In fondo allo stack dei byte sta una sentinella -1. Nessun byte vale -1,
+//  quindi la scansione di una corsa non ha bisogno di chiedere se lo stack e'
+//  vuoto: la sentinella interrompe sempre il confronto. Serve perche' le
+//  guardie di Kairos sono confronti semplici, e "lo stack non e' vuoto oppure
+//  ho appena consumato" non e' esprimibile senza disgiunzione.
+// ---------------------------------------------------------------------------
+
+// Estende `run` finche' la cima di `src` vale `v`, consumando gli elementi
+// uguali. All'uscita la cima di src e' diversa da v.
+//
+// `cont` e' il testimone del ramo: 1 se l'ultimo elemento letto era uguale, 0
+// se la corsa e' finita. Serve perche' ogni `if` di Kairos deve dire in uscita
+// quale ramo ha preso, e "la cima era uguale" non e' piu' verificabile dopo
+// aver consumato la cima.
+procedure corsa(stack src, int v, int run)
+    local int cont = 1
+    from run == 1 do
+        cont -= 1
+        local int w = 0
+            pop(w, src)
+            if w == v then
+                cont += 1
+                w -= v
+                run += 1
+            else
+                push(w, src)
+            fi cont == 1
+        delocal int w = 0
+    loop until cont == 0
+    delocal int cont = 0
+
+// Da A a B.
+// Pre:  src = [sentinella, byte_n-1, ..., byte_0], nsrc = n, dst vuoto, npair = 0.
+// Post: src = [sentinella], nsrc = 0, dst = npair coppie (valore, lunghezza).
+procedure rle(stack src, stack dst, int nsrc, int npair)
+    if nsrc > 0 then
+        from npair == 0 do
+            local int v = 0
+                pop(v, src)
+                nsrc -= 1
+                local int run = 1
+                    call corsa(src, v, run)
+                    nsrc -= run
+                    nsrc += 1
+                    // `run > 0` e' invariante del diretto e non ha bisogno di
+                    // essere controllato qui. Serve all'indietro, dove `run`
+                    // arriva dal file e non da `corsa`: scritto cosi', l'idioma
+                    // e' un'asserzione in entrambi i versi, perche' invertendo
+                    // l'if la guardia d'ingresso torna a essere verificata.
+                    local int positiva = 0
+                        if run > 0 then
+                            positiva += 1
+                        fi positiva == 1
+                    delocal int positiva = 1
+                    push(v, dst)
+                    push(run, dst)
+                delocal int run = 0
+            delocal int v = 0
+            npair += 1
+        loop until nsrc == 0
+    // Entrati: almeno una coppia emessa. Non entrati: nsrc == 0 e npair == 0.
+    fi npair > 0
+
+procedure main()
+    stack a
+    stack b
+    int na
+    int np
+    int tipo
+
+    // --- dati e tipo, scritti dal generatore ---
+    // DATI
+
+    if tipo == 0 then
+        call rle(a, b, na, np)
+    else
+        uncall rle(a, b, na, np)
+    fi tipo == 0
+
+    show(a)
+    show(b)
+    show(na)
+    show(np)
