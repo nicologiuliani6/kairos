@@ -1,0 +1,21 @@
+// Caso minimo che ha fatto trovare il controllo mancante: invertendo un `if`,
+// la guardia d'ingresso non veniva riletta. Prima della correzione questo
+// programma terminava con successo pur partendo da uno stato che nessuna
+// esecuzione diretta di `p` produce. Ora la VM lo rifiuta, ed e' per questo che
+// il file sta fuori da `lossless/`, dove `make test` pretende uscita zero.
+// L'inverso di `if c then s1 else s2 fi a` sceglie il ramo da `a`.
+// Janus vuole che poi asserisca che `c` sia coerente col ramo scelto.
+// Qui a e' vera (y == 1) ma c e' falsa (x == -5): stato fuori dall'immagine.
+procedure p(int x, int y)
+    if x > 0 then
+        y += 1
+    fi y == 1
+
+procedure main()
+    int x
+    int y
+    x -= 5
+    y += 1
+    uncall p(x, y)
+    show(x)
+    show(y)

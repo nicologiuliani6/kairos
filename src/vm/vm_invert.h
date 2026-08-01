@@ -688,6 +688,44 @@ static inline void do_eval_if_branch(VM *vm, uint fi, const IfDescriptor *d)
         do_eval_if_entry(vm, fi, d->eval_entry_id, d->eval_entry_op, d->eval_entry_val);
 }
 
+/* Il condizionale reversibile ha due guardie e la semantica ne chiede due
+ * controlli, uno per verso. In avanti si controlla l'asserzione d'uscita
+ * (op_assert, "IF/FI non reversibile"). All'indietro l'asserzione d'uscita
+ * sceglie il ramo, e resta da verificare che la guardia d'ingresso sia coerente
+ * con la scelta.
+ *
+ * Senza questa verifica l'inverso e' definito su piu' stati di quanti il
+ * diretto ne produca: dato uno stato fuori dall'immagine risponde in silenzio
+ * invece di rifiutarlo. Ne segue che l'idioma con cui si scrive un'asserzione
+ * (`local ok = 0 / if C then ok += 1 fi ok == 1 / delocal ok = 1`) vale solo in
+ * avanti, e all'indietro non controlla nulla: e' la ragione per cui il
+ * controllo c'e' e non e' opzionale.
+ *
+ * Va chiamata dopo aver invertito il ramo, quando lo store e' tornato allo
+ * stato che precedeva l'if e la guardia d'ingresso torna quindi valutabile. */
+static inline void check_if_entry_inverse(VM *vm, uint fi,
+                                          const IfDescriptor *d, int took_then)
+{
+    /* Senza asserzione d'uscita il ramo e' stato dedotto dalla guardia stessa:
+     * riverificarla sarebbe una tautologia. */
+    if (d->eval_exit_id[0] == '\0' || d->eval_entry_id[0] == '\0') return;
+    /* Nei rami di par altri thread possono mutare gli int condivisi fra la
+     * valutazione e il controllo, come gia' fa op_assert in avanti. */
+    if (current_thread_args != NULL) return;
+
+    int64_t lval = resolve_value(vm, fi, d->eval_entry_id);
+    int64_t rval = resolve_value(vm, fi, d->eval_entry_val);
+    int guardia = eval_cond(lval, d->eval_entry_op, rval) ? 1 : 0;
+    if (guardia != took_then) {
+        vm_debug_panic(
+            "[VM] IF inverso: l'asserzione d'uscita indica il ramo %s, ma la "
+            "guardia d'ingresso (%s %s %s) vale %d: stato fuori dall'immagine "
+            "del diretto\n",
+            took_then ? "then" : "else",
+            d->eval_entry_id, d->eval_entry_op, d->eval_entry_val, guardia);
+    }
+}
+
 /* `from id == 0`: la guardia d'ingresso vale solo alla prima iterata forward.
    In inversa: ripetere il corpo finché id>0; uscire a JMPF_ERR e JMPF_START quando id<=0. */
 static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
@@ -1335,6 +1373,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 }
             } else {
                 do_eval_if_branch(vm, fi, &ifs[ii]);
+                /* exec_branch_inverse puo' rivalutare thread_val_IF (if annidati). */
+                int took_then_inv = thread_val_IF ? 1 : 0;
                 uint branch_from = 0, branch_to = 0;
                 if (thread_val_IF) {
                     /* Forward IF condition true: invert only THEN branch. */
@@ -1346,6 +1386,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     branch_to = ifs[ii].fi_label_line;
                 }
                 if (branch_from >= branch_to) {
+                    check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
                     int t = -1;
                     for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
                     i = (t >= 0) ? t - 1 : i - 1;
@@ -1355,6 +1396,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 stack_init(&vm->frames[fi]->LocalVariables);
                 exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
                 vm->frames[fi]->LocalVariables = sv;
+                check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
             }
             int t = -1;
             for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
