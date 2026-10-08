@@ -36,7 +36,7 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 RESET  := \033[0m
 
-.PHONY: all build build-release build-dap test-dap run test mnemo-test mnemo-run release release-app install-deps check-deps clean help
+.PHONY: all build build-release build-dap test-dap run test mnemo-test mnemo-run release release-app install-deps check-system check-deps check-pyinstaller clean help
 
 # Default: release (massima ottimizzazione).
 all: release
@@ -167,7 +167,7 @@ endif
 	@$(MAKE) -C $(MNEMO_DIR) run FILE=$(FILE) KAIROS_ROOT=$(abspath $(CURDIR))
 
 # PyInstaller standalone app (rinominato da `release` per non confondersi con la build libvm).
-release-app: release
+release-app: release check-pyinstaller
 	@echo "$(CYAN)Build KairosApp standalone (PyInstaller)...$(RESET)"
 	@mkdir -p $(DIST_DIR)
 	$(PYINSTALLER) --onefile \
@@ -180,17 +180,41 @@ release-app: release
 		$(SRC_DIR)/kairos.py
 	@echo "$(GREEN)KairosApp OK: $(DIST_DIR)$(RESET)"
 
-install-deps:
+# Requisiti di SISTEMA, da avere prima di tutto il resto (si installano con il
+# gestore pacchetti; es. Debian/Ubuntu: sudo apt install build-essential python3 python3-venv).
+check-system:
+	@missing=0; \
+	for tool in make $(CC) python3; do \
+		command -v $$tool >/dev/null 2>&1 || { echo "$(RED)Manca '$$tool'$(RESET)"; missing=1; }; \
+	done; \
+	python3 -c "import venv, ensurepip" 2>/dev/null || { echo "$(RED)Manca il modulo venv/ensurepip di Python (Debian/Ubuntu: sudo apt install python3-venv)$(RESET)"; missing=1; }; \
+	if [ $$missing -ne 0 ]; then \
+		echo ""; \
+		echo "$(YELLOW)Requisiti di sistema: make, gcc, python3 (con venv).$(RESET)"; \
+		echo "$(YELLOW)Debian/Ubuntu: sudo apt install build-essential python3 python3-venv$(RESET)"; \
+		echo "$(YELLOW)Fedora: sudo dnf install gcc make python3$(RESET)   Arch: sudo pacman -S base-devel python$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)Requisiti di sistema OK$(RESET)"
+
+install-deps: check-system
 	@echo "$(CYAN)Creazione venv e installazione dipendenze...$(RESET)"
 	python3 -m venv venv
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install ply pyinstaller
 	@echo "$(GREEN)Dipendenze installate$(RESET)"
 
+# Requisiti per compilare la VM e far girare i programmi.
 check-deps:
+	@command -v $(CC) >/dev/null 2>&1 || (echo "$(RED)Compilatore '$(CC)' non trovato. Esegui: make check-system$(RESET)" && exit 1)
 	@test -f $(PYTHON) || (echo "$(RED)venv non trovato. Esegui: make install-deps$(RESET)" && exit 1)
 	@$(PYTHON) -c "import ply" 2>/dev/null || \
-		(echo "$(RED)ply non trovato. Esegui: make install-deps$(RESET)" && exit 1)
+		(echo "$(RED)ply non trovato nel venv. Esegui: make install-deps$(RESET)" && exit 1)
+
+# Requisito in piu' per costruire l'app e i pacchetti.
+check-pyinstaller: check-deps
+	@test -x $(PYINSTALLER) || \
+		(echo "$(RED)pyinstaller non trovato in ./venv/bin. Esegui: make install-deps$(RESET)" && exit 1)
 
 clean:
 	@echo "$(YELLOW)Pulizia...$(RESET)"
@@ -216,7 +240,8 @@ help:
 	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + Mnemo (se $(MNEMO_PY) esiste)"
 	@echo "  $(GREEN)make mnemo-test$(RESET)               Solo Mnemo (MNEMO_DIR=$(MNEMO_DIR))"
 	@echo "  $(GREEN)make release-app$(RESET)              Build KairosApp standalone con PyInstaller"
-	@echo "  $(GREEN)make install-deps$(RESET)             Crea venv e installa dipendenze"
+	@echo "  $(GREEN)make check-system$(RESET)             Controlla i requisiti di sistema (gcc, make, python3-venv)"
+	@echo "  $(GREEN)make install-deps$(RESET)             Controlla i requisiti, crea il venv e installa le dipendenze"
 	@echo "  $(GREEN)make clean$(RESET)                    Rimuove artefatti generati"
 	@echo ""
 	@echo "  $(YELLOW)release: -O3 -march=native -flto (libvm ottimizzata per la CPU di build, non redistribuibile).$(RESET)"

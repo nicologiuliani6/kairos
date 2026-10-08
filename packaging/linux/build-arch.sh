@@ -8,6 +8,24 @@ DESCRIPTION="${DESCRIPTION:-KairosApp with dap shared library}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
+
+# Requisiti, controllati PRIMA di avviare la build.
+require() {
+  command -v "$1" >/dev/null 2>&1 || { echo "Manca '$1'. $2"; MISSING=1; }
+}
+MISSING=0
+require make "Installa i tool di build (Debian/Ubuntu: sudo apt install build-essential)."
+require gcc "Installa un compilatore C (Debian/Ubuntu: sudo apt install build-essential)."
+require python3 "Installa Python 3."
+if [[ ! -x "${PROJECT_ROOT}/venv/bin/python" ]]; then
+  echo "Manca il virtualenv in ${PROJECT_ROOT}/venv. Esegui: (cd ${PROJECT_ROOT} && make install-deps)"; MISSING=1
+elif [[ ! -x "${PROJECT_ROOT}/venv/bin/pyinstaller" ]]; then
+  echo "Manca pyinstaller nel virtualenv. Esegui: (cd ${PROJECT_ROOT} && make install-deps)"; MISSING=1
+fi
+require makepkg "Serve un sistema Arch Linux (makepkg)."
+if [[ "${MISSING}" -ne 0 ]]; then
+  echo "Requisiti mancanti: la build non parte."; exit 1
+fi
 BUILD_DIR="${ROOT_DIR}/.build"
 VERSION_FILE="${ROOT_DIR}/VERSION"
 ARCH_BUILD_DIR="${BUILD_DIR}/archpkg"

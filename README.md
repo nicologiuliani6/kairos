@@ -92,6 +92,8 @@ Per l'installazione automatica guardare: [Pacchetti Linux](#pacchetti-linux)
 | PLY       | 3.11           |
 | PyInstaller (opzionale) | 5.0 |
 
+`make install-deps` controlla prima i requisiti di sistema (`make`, `gcc`, `python3` con il modulo `venv`) e dice cosa installare se manca qualcosa; su Debian/Ubuntu: `sudo apt install build-essential python3 python3-venv`. Si può lanciare da solo con `make check-system`. Costruire l'app o i pacchetti Linux richiede in più PyInstaller, che `make install-deps` installa nel venv; gli script in `packaging/linux/` controllano i requisiti prima di partire.
+
 ### Setup da zero
 
 ```bash
@@ -242,11 +244,12 @@ Il frontend Python compila il sorgente in una stringa bytecode che viene passata
 
 ### Tipi
 
-Kairos ha tre tipi primitivi:
+Kairos ha quattro tipi:
 
 | Tipo | Descrizione |
 |------|-------------|
-| `int` | Intero con segno a 32 bit, inizializzato a `0` |
+| `int` | Intero con segno a 64 bit, inizializzato a `0` |
+| `int a[n]` | Array di `n` interi (`n` fissato alla dichiarazione), vedi sotto |
 | `stack` | Lista LIFO di interi, inizialmente vuota (`nil`) |
 | `channel` | Canale sincrono per comunicazione tra thread, inizialmente vuoto (`empty`) |
 
@@ -318,15 +321,50 @@ x <=> y       // scambia x e y
 
 ### Espressioni
 
-Le espressioni supportano addizione, sottrazione e parentesi:
+Le espressioni supportano `+`, `-`, `*`, `/` (divisione intera), `%` (resto), i confronti (`==`, `!=`, `<`, `>`, `<=`, `>=`, che valgono 1 o 0), i connettivi `&&` e `||`, le parentesi e le celle di array:
 
 ```kairos
 x += (y + 1)
-x -= (a + b)
-x += ((a + b) - c)
+x += ((a * b) % c)
+x += v[(i + 1)]
+if (a == 0) && (b > 1) then
+    r += 1
+fi r == 1
 ```
 
-I letterali numerici sono interi. Non sono supportate moltiplicazione o divisione come operatori di espressione.
+`*`, `/` e `%` compaiono solo nelle espressioni, mai come operatori di assegnamento. Il divisore nullo è un errore (`Div-Err`). Una guardia è un'espressione, vera se diversa da zero.
+
+---
+
+### Array
+
+```kairos
+procedure riempi(int a[], int n)
+    local int i = 0
+    from i == 0 do
+        a[i] += (i * 2)
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+procedure main()
+    local int v[4] = 0        // quattro celle, tutte a 0
+    local int n = 4
+    call riempi(v, n)
+    v[0] <=> v[3]             // scambio di due celle
+    show(v)
+    v[0] <=> v[3]
+    uncall riempi(v, n)
+    delocal int n = 4
+    delocal int v[4] = 0      // chiudere verifica che TUTTE le celle valgano 0
+```
+
+- `local int a[n] = m` apre un array di `n` celle tutte a `m`; `delocal int a[n] = m` verifica che lo siano ancora, altrimenti errore.
+- Una cella è un luogo come una variabile: `a[i] += e`, `-=`, `^=`, `<=>`. L'indice è un'espressione.
+- Un indice fuori dai limiti è un errore (`Idx-Err`).
+- Come per `x += x`, nell'assegnamento `a[i] += e` il nome `a` non può comparire in `e`.
+- Gli array si passano alle procedure per riferimento (`int a[]`). Non viaggiano sui canali: per spedire un array si copia in uno `stack`.
+- Rami diversi di un `par` non possono usare lo stesso array (stesso controllo degli `int`).
 
 ---
 
@@ -623,6 +661,22 @@ Al termine dell’esecuzione, la VM produce sempre anche un dump finale dello st
 x: 0
 ```
 
+
+---
+
+### skip e clausole facoltative
+
+Come in Janus, `then` ed `else` di `if` e `do` e `loop` di `from` sono facoltativi (una clausola assente vale `skip`), e `skip` è il comando vuoto. La guardia d'uscita (`fi`, `until`) è sempre obbligatoria.
+
+```kairos
+if x == 3 else
+    skip
+fi x == 3
+
+from i == 0 do
+    i += 1
+until i == 3
+```
 
 ---
 
