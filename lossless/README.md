@@ -14,7 +14,7 @@ lavoro è però interamente sequenziale.
 
 | file | contenuto |
 |---|---|
-| `indice_su_stack.kairos` | accesso per indice reversibile sopra gli stack, che Kairos non ha nativamente |
+| `indice_su_stack.kairos` | accesso per indice sopra gli stack (il ponte che serviva prima degli array; resta come esempio) |
 | `bwt.kairos` | trasformata di Burrows–Wheeler su un blocco, e la sua inversa |
 | `bwt_parallelo.kairos` | i blocchi come rami di un `par`, colonne e indici consegnati per canale |
 | `compress_par.kairos` | trasformata delta a blocchi: lo scheletro concorrente, più semplice da leggere |
@@ -77,23 +77,39 @@ blocco                   [2, 1, 3, 1, 3, 1]     banana
 rotazioni ordinate       [5, 3, 1, 0, 4, 2]
 ultima colonna           [3, 3, 2, 1, 1, 1]     nnbaaa
 indice                   3
-ricostruzione da (colonna, indice)              banana
+ricostruzione da (colonna, indice)  [2, 1, 3, 1, 3, 1]   banana
 ```
 
-Costo: l'esponente misurato passa da 3,29 a 3,57 fra n=6 e n=12, in
-avvicinamento a n^4. Il lavoro di riferimento dichiara n^3 per la BWT ingenua
-con gli array; il fattore in più è l'accesso per indice emulato sugli stack.
+Costo di un blocco, `genera_bwt.py <n> 1 seq` (minimo di 3 esecuzioni):
 
-Concorrenza, su 24 nuclei:
+```
+ n      6     8    12    16    20    24    28    32
+ s   0,13  0,17  0,38  0,76  1,42  2,79  3,97  5,63
+```
+
+La pendenza della regressione log-log fra n=12 e n=32 e' 2,82: il costo e' n^3,
+come nel lavoro di riferimento (il tempo fisso di avvio pesa sui blocchi piccoli).
+
+Concorrenza, n=20 (mediana di 3 esecuzioni, 10 per 6 blocchi; 6 nuclei / 12 thread):
 
 ```
 blocchi   sequenziale   concorrente   guadagno
-   2         4,53 s        3,77 s      1,20x
-   4         9,01 s        6,86 s      1,31x
-   6        13,60 s        7,68 s      1,77x
-   8        18,21 s       10,68 s      1,71x
+   2         2,29 s        1,27 s       1,80x
+   4         4,49 s        1,41 s       3,19x
+   6         6,77 s        1,58 s       4,29x
+  12        13,62 s        2,95 s       4,62x
 ```
 
-Il guadagno si ferma attorno a 1,75x pur con nuclei liberi: il raccoglitore è un
-ramo solo che riceve dai canali uno per volta, e l'ingresso in un `par` costa una
-copia dell'intero bytecode per ramo.
+Riferimento hardware: lo stesso blocco lanciato come processi indipendenti da'
+un throughput di 3,50x (4), 4,59x (6), 5,10x (12). Il `par` ne raggiunge il 91%.
+
+Il guadagno e' quasi lineare fino a 4 blocchi e poi si appiattisce: oltre i sei
+nuclei fisici i thread condividono le unita' di calcolo, e resta la parte
+sequenziale (il raccoglitore riceve dai canali uno per volta).
+
+Le misure hanno richiesto tre correzioni della VM, tutte sul percorso dei rami
+di `par`: i lock globali sull'indice dei nomi a ogni chiamata e a ogni
+`local`/`delocal`, la copia di 16 KB per istruzione, e un risveglio perso sulla
+variabile di condizione condivisa del `par` (con `pthread_cond_signal` il
+mittente di un rendez-vous poteva restare fermo finche' un altro thread non
+terminava, e l'inversione di un `par` girava di fatto un ramo alla volta).

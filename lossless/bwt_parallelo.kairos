@@ -3,58 +3,30 @@
 //    Lyngby, Nylandsted, Gluck, Yokoyama,
 //    "Towards Clean Reversible Lossless Compression", RC 2024.
 //
-//  Loro lavorano su array; qui gli array non ci sono, e l'accesso per indice e'
-//  costruito sopra gli stack. Il resto della struttura e' la loro: una procedura
-//  che produce l'uscita piu' i dati ausiliari, e i dati ausiliari azzerati
-//  disfacendo una seconda procedura che li ricalcola dall'uscita.
+//  Come nel lavoro di riferimento il blocco, le rotazioni ordinate e la colonna
+//  trasformata sono array: la cella j si legge in tempo costante, senza
+//  consumarla e senza toccare le altre. Il resto della struttura e' la loro: una
+//  procedura che produce l'uscita piu' i dati ausiliari, e i dati ausiliari
+//  azzerati disfacendo la procedura che li ha prodotti.
 //
 //  Alfabeto ridotto: a=1, b=2, n=3.
 //  Vettore di prova: "banana" -> ultima colonna "nnbaaa", indice 3.
 // ---------------------------------------------------------------------------
 
-// --- accesso per indice sopra gli stack ------------------------------------
-
-procedure sposta(stack a, stack b, int m)
-    if m > 0 then
-        local int k = 0
-        from k == 0 do
-            local int v = 0
-                pop(v, a)
-                push(v, b)
-            delocal int v = 0
-            k += 1
-        loop until k == m
-        delocal int k = m
-    fi m > 0
-
-procedure leggi(stack s, stack aux, int i, int r)
-    call sposta(s, aux, i)
-    local int v = 0
-        pop(v, s)
-        r += v
-        push(v, s)
-    delocal int v = 0
-    uncall sposta(s, aux, i)
-
-procedure aggiungi(stack s, stack aux, int i, int v)
-    call sposta(s, aux, i)
-    local int t = 0
-        pop(t, s)
-        t += v
-        push(t, s)
-    delocal int t = 0
-    uncall sposta(s, aux, i)
-
 // --- carattere k-esimo della rotazione che parte da off --------------------
-
-procedure car(stack blocco, stack aux, int n, int off, int k, int c)
+//
+//  Il modulo non si scrive con l'operatore ma con un if: j e' una variabile
+//  locale che va riportata a zero, quindi la correzione j -= n deve poter
+//  essere disfatta, e per disfarla serve sapere se e' avvenuta. La guardia
+//  d'uscita j < off lo dice.
+procedure car(int blocco[], int n, int off, int k, int c)
     local int j = 0
         j += off
         j += k
         if j >= n then
             j -= n
         fi j < off
-        call leggi(blocco, aux, j, c)
+        c += blocco[j]
         if j < off then
             j += n
         fi j >= n
@@ -73,13 +45,13 @@ procedure car(stack blocco, stack aux, int n, int off, int k, int c)
 //  quindi `pref == k` dice "siamo ancora nel prefisso comune". Dopo il corpo pref
 //  vale k oppure k+1, in entrambi i casi >= k, mentre se non si e' entrati e'
 //  rimasto sotto k: `pref >= k` e' quindi una guardia d'uscita valida.
-procedure maggiore(stack blocco, stack aux, int n, int o1, int o2, int gt, int pref)
+procedure maggiore(int blocco[], int n, int o1, int o2, int gt, int pref)
     local int k = 0
     from k == 0 do
         local int c1 = 0
         local int c2 = 0
-            call car(blocco, aux, n, o1, k, c1)
-            call car(blocco, aux, n, o2, k, c2)
+            call car(blocco, n, o1, k, c1)
+            call car(blocco, n, o2, k, c2)
             if pref == k then
                 if c1 > c2 then
                     gt += 1
@@ -90,8 +62,8 @@ procedure maggiore(stack blocco, stack aux, int n, int o1, int o2, int gt, int p
                     pref += 1
                 fi pref > k
             fi pref >= k
-            uncall car(blocco, aux, n, o2, k, c2)
-            uncall car(blocco, aux, n, o1, k, c1)
+            uncall car(blocco, n, o2, k, c2)
+            uncall car(blocco, n, o1, k, c1)
         delocal int c2 = 0
         delocal int c1 = 0
         k += 1
@@ -102,33 +74,26 @@ procedure maggiore(stack blocco, stack aux, int n, int o1, int o2, int gt, int p
 //
 //  Un passo confronta le rotazioni in posizione j e j+1 e le scambia se sono
 //  in ordine sbagliato. Gli offset letti finiscono su `scarto` invece di essere
-//  disfatti: dopo lo scambio non si saprebbe piu' quale indice porta quale
+//  disfatti: dopo lo scambio non si saprebbe piu' quale cella porta quale
 //  valore, e la guardia dovrebbe dipendere da gt, che a quel punto e' gia'
 //  stato azzerato. `scarto` e' un dato ausiliario nel senso del paper, e lo
 //  ripulisce chi disfa l'ordinamento.
-procedure passo(stack offs, stack blocco, stack aux, stack scarto, int n, int j)
+procedure passo(int offs[], int blocco[], stack scarto, int n, int j)
     local int j1 = 0
         j1 += j
         j1 += 1
         local int o1 = 0
         local int o2 = 0
-            call leggi(offs, aux, j, o1)
-            call leggi(offs, aux, j1, o2)
+            o1 += offs[j]
+            o2 += offs[j1]
 
             local int gt = 0
             local int pref = 0
-                call maggiore(blocco, aux, n, o1, o2, gt, pref)
+                call maggiore(blocco, n, o1, o2, gt, pref)
                 if gt == 1 then
-                    local int d = 0
-                        d += o2
-                        d -= o1
-                        call   aggiungi(offs, aux, j,  d)
-                        uncall aggiungi(offs, aux, j1, d)
-                        d += o1
-                        d -= o2
-                    delocal int d = 0
+                    offs[j] <=> offs[j1]
                 fi gt == 1
-                uncall maggiore(blocco, aux, n, o1, o2, gt, pref)
+                uncall maggiore(blocco, n, o1, o2, gt, pref)
             delocal int pref = 0
             delocal int gt = 0
 
@@ -140,7 +105,7 @@ procedure passo(stack offs, stack blocco, stack aux, stack scarto, int n, int j)
         j1 -= j
     delocal int j1 = 0
 
-procedure ordina(stack offs, stack blocco, stack aux, stack scarto, int n)
+procedure ordina(int offs[], int blocco[], stack scarto, int n)
     local int m = 0
         m += n
         m -= 1
@@ -148,7 +113,7 @@ procedure ordina(stack offs, stack blocco, stack aux, stack scarto, int n)
         from i == 0 do
             local int j = 0
             from j == 0 do
-                call passo(offs, blocco, aux, scarto, n, j)
+                call passo(offs, blocco, scarto, n, j)
                 j += 1
             loop until j == m
             delocal int j = m
@@ -165,38 +130,30 @@ procedure ordina(stack offs, stack blocco, stack aux, stack scarto, int n)
 //  carattere in posizione n-1 di quella rotazione. idx e' la posizione, nel
 //  nuovo ordine, della rotazione che parte da 0: e' l'informazione senza la
 //  quale la trasformata non si inverte.
-procedure estrai(stack offs, stack blocco, stack aux, stack scarto, stack out, int n, int idx)
+procedure estrai(int offs[], int blocco[], int out[], int n, int idx)
     local int i = 0
     from i == 0 do
-        local int ii = 0
-            ii += n
-            ii -= 1
-            ii -= i                    // da n-1 a 0: cosi' la cima di out e' out[0]
         local int o = 0
-            call leggi(offs, aux, ii, o)
-            local int k = 0
-                k += n
-                k -= 1
-                local int c = 0
-                    call car(blocco, aux, n, o, k, c)
-                    push(c, out)
-                delocal int c = 0
-                k += 1
-                k -= n
-            delocal int k = 0
+        local int k = 0
+            o += offs[i]
+            k += n
+            k -= 1
+            local int c = 0
+                call car(blocco, n, o, k, c)
+                out[i] += c
+                uncall car(blocco, n, o, k, c)
+            delocal int c = 0
             if o == 0 then
-                idx += ii
+                idx += i
             fi o == 0
-            push(o, scarto)
+            k -= n
+            k += 1
+            o -= offs[i]
+        delocal int k = 0
         delocal int o = 0
-            ii += i
-            ii += 1
-            ii -= n
-        delocal int ii = 0
         i += 1
     loop until i == n
     delocal int i = n
-
 
 // --- trasformata inversa: da (out, idx) si ricostruisce il blocco -----------
 //
@@ -210,76 +167,58 @@ procedure estrai(stack offs, stack blocco, stack aux, stack scarto, stack out, i
 //  ordinata. I due conteggi si fanno con due scansioni, senza congiunzioni:
 //  la `if` di Kairos confronta due espressioni e basta.
 
-procedure conta_minori(stack out, stack aux, int n, int c, int r)
+procedure conta_minori(int out[], int n, int c, int r)
     local int j = 0
     from j == 0 do
-        local int d = 0
-            call leggi(out, aux, j, d)
-            if d < c then
-                r += 1
-            fi d < c
-            uncall leggi(out, aux, j, d)
-        delocal int d = 0
+        if out[j] < c then
+            r += 1
+        fi out[j] < c
         j += 1
     loop until j == n
     delocal int j = n
 
-procedure conta_uguali_prima(stack out, stack aux, int i, int c, int r)
+procedure conta_uguali_prima(int out[], int i, int c, int r)
     if i > 0 then
         local int j = 0
         from j == 0 do
-            local int d = 0
-                call leggi(out, aux, j, d)
-                if d == c then
-                    r += 1
-                fi d == c
-                uncall leggi(out, aux, j, d)
-            delocal int d = 0
+            if out[j] == c then
+                r += 1
+            fi out[j] == c
             j += 1
         loop until j == i
         delocal int j = i
     fi i > 0
 
-// T viene costruito con la cima in posizione 0.
-procedure costruisci_T(stack out, stack aux, stack tv, int n)
+procedure costruisci_T(int out[], int tv[], int n)
     local int i = 0
     from i == 0 do
-        local int ii = 0
-            ii += n
-            ii -= 1
-            ii -= i                      // scorre da n-1 a 0, cosi' la cima e' T[0]
-            local int c = 0
-                call leggi(out, aux, ii, c)
-                local int t = 0
-                    call conta_minori(out, aux, n, c, t)
-                    call conta_uguali_prima(out, aux, ii, c, t)
-                    push(t, tv)
-                delocal int t = 0
-                uncall leggi(out, aux, ii, c)
-            delocal int c = 0
-            ii += i
-            ii += 1
-            ii -= n
-        delocal int ii = 0
+        local int c = 0
+        local int t = 0
+            c += out[i]
+            call conta_minori(out, n, c, t)
+            call conta_uguali_prima(out, i, c, t)
+            tv[i] += t
+            t -= tv[i]
+            c -= out[i]
+        delocal int t = 0
+        delocal int c = 0
         i += 1
     loop until i == n
     delocal int i = n
 
 // Percorre T da idx e ricostruisce il blocco. Le posizioni visitate finiscono
 // su `cammino`: sono il dato ausiliario di questo passo.
-procedure cammina(stack out, stack tv, stack aux, stack blocco, stack cammino, int idx, int n)
+procedure cammina(int out[], int tv[], int blocco[], int cammino[], int idx, int n)
     local int p = 0
         p += idx
         local int k = 0
         from k == 0 do
-            local int c = 0
-                call leggi(out, aux, p, c)
-                push(c, blocco)
-            delocal int c = 0
+            blocco[((n - 1) - k)] += out[p]       // a ritroso: l'ultimo carattere per primo
             local int q = 0
-                call leggi(tv, aux, p, q)
+                q += tv[p]
                 p <=> q
-                push(q, cammino)         // q e' la posizione vecchia
+                cammino[k] += q          // q e' la posizione vecchia
+                q -= cammino[k]
             delocal int q = 0
             k += 1
         loop until k == n
@@ -287,113 +226,104 @@ procedure cammina(stack out, stack tv, stack aux, stack blocco, stack cammino, i
         p -= idx
     delocal int p = 0
 
-// ===========================================================================
-//  Trasformata di un blocco, e sua inversa
-// ===========================================================================
 
-// bwt: blocco -> (out, idx), lasciando offs e scarto come dati ausiliari.
-// E' la `bwt'` di Listing 1.3 del paper.
-procedure bwt(stack blocco, stack aux, stack offs, stack scarto, stack out, int n, int idx)
-    call ordina(offs, blocco, aux, scarto, n)
-    call estrai(offs, blocco, aux, scarto, out, n, idx)
+procedure identita(int a[], int n)
+    local int i = 0
+    from i == 0 do
+        a[i] += i
+        i += 1
+    loop until i == n
+    delocal int i = n
 
-// gen_in: (out, idx) -> blocco. E' l'inversa classica di Burrows e Wheeler.
-procedure gen_in(stack out, stack aux, stack tv, stack cammino, stack blocco, int n, int idx)
-    call costruisci_T(out, aux, tv, n)
-    call cammina(out, tv, aux, blocco, cammino, idx, n)
-
-// ===========================================================================
-//  Versione concorrente: un ramo per blocco, i risultati tornano per canale
-// ===========================================================================
-//
-//  I blocchi sono indipendenti, quindi i rami operano su porzioni disgiunte
-//  dello store e non condividono nulla. L'unico punto di contatto e' il canale
-//  su cui ciascun ramo consegna la propria colonna e il proprio indice: il
-//  payload di un ssend puo' essere uno stack intero, quindi il blocco compresso
-//  viaggia in un colpo solo.
-
-procedure lavoratore(stack blocco, stack aux, stack offs, stack scarto,
-                     stack out, channel c, int n)
+procedure lavoratore(int blocco[], int offs[], int out[], stack scarto,
+                     stack colonna, channel c, int n)
     local int idx = 0
-        call bwt(blocco, aux, offs, scarto, out, n, idx)
-        ssend(<idx, out>, c)
+        call ordina(offs, blocco, scarto, n)
+        call estrai(offs, blocco, out, n, idx)
+        local int i = 0
+        from i == 0 do
+            local int t = 0
+                t += out[i]
+                push(t, colonna)
+            delocal int t = 0
+            i += 1
+        loop until i == n
+        delocal int i = n
+        ssend(<idx, colonna>, c)
     delocal int idx = 0
 
-procedure raccoglitore(channel c1, channel c2,
-                       stack col1, stack col2, stack indici, int n)
+procedure raccoglitore(channel c0, channel c1, stack col0, stack col1, stack indici)
+    local int i0 = 0
     local int i1 = 0
-    local int i2 = 0
+        srecv(<i0, col0>, c0)
         srecv(<i1, col1>, c1)
-        srecv(<i2, col2>, c2)
+        push(i0, indici)
         push(i1, indici)
-        push(i2, indici)
-    delocal int i2 = 0
     delocal int i1 = 0
+    delocal int i0 = 0
 
-procedure comprimi(stack b1, stack b2, stack aux1, stack aux2,
-                   stack offs1, stack offs2, stack sc1, stack sc2,
-                   stack out1, stack out2,
-                   stack col1, stack col2, stack indici, int n)
+procedure comprimi(int b0[], int b1[], int offs0[], int offs1[], int out0[], int out1[], stack sc0, stack sc1, stack st0, stack st1, stack col0, stack col1, stack indici, int n)
+    local channel c0 = empty
     local channel c1 = empty
-    local channel c2 = empty
     par
-        call lavoratore(b1, aux1, offs1, sc1, out1, c1, n)
+        call lavoratore(b0, offs0, out0, sc0, st0, c0, n)
     and
-        call lavoratore(b2, aux2, offs2, sc2, out2, c2, n)
+        call lavoratore(b1, offs1, out1, sc1, st1, c1, n)
     and
-        call raccoglitore(c1, c2, col1, col2, indici, n)
+        call raccoglitore(c0, c1, col0, col1, indici)
     rap
-    delocal channel c2 = empty
     delocal channel c1 = empty
+    delocal channel c0 = empty
 
 procedure main()
-    stack b1    stack b2
-    stack aux1  stack aux2
-    stack offs1 stack offs2
-    stack sc1   stack sc2
-    stack out1  stack out2
-    stack col1  stack col2
+    stack sc0  stack sc1
+    stack st0  stack st1
+    stack col0  stack col1
     stack indici
     local int n = 6
-
-    local int t = 0
-    // blocco 1: "banana"
-    t += 1   push(t, b1)
-    t += 3   push(t, b1)
-    t += 1   push(t, b1)
-    t += 3   push(t, b1)
-    t += 1   push(t, b1)
-    t += 2   push(t, b1)
-    // blocco 2: "ananab"
-    t += 2   push(t, b2)
-    t += 1   push(t, b2)
-    t += 3   push(t, b2)
-    t += 1   push(t, b2)
-    t += 3   push(t, b2)
-    t += 1   push(t, b2)
-    // offsets 0..5 per entrambi
-    t += 5   push(t, offs1)   t += 5   push(t, offs2)
-    t += 4   push(t, offs1)   t += 4   push(t, offs2)
-    t += 3   push(t, offs1)   t += 3   push(t, offs2)
-    t += 2   push(t, offs1)   t += 2   push(t, offs2)
-    t += 1   push(t, offs1)   t += 1   push(t, offs2)
-             push(t, offs1)            push(t, offs2)
-    delocal int t = 0
-
-    show(b1)
-    show(b2)
-
-    call comprimi(b1, b2, aux1, aux2, offs1, offs2, sc1, sc2,
-                  out1, out2, col1, col2, indici, n)
-
+    local int b0[6] = 0
+    local int b1[6] = 0
+    local int offs0[6] = 0
+    local int offs1[6] = 0
+    local int out0[6] = 0
+    local int out1[6] = 0
+    call identita(offs0, n)
+    b0[0] += 2
+    b0[1] += 1
+    b0[2] += 3
+    b0[3] += 1
+    b0[4] += 3
+    b0[5] += 1
+    call identita(offs1, n)
+    b1[0] += 1
+    b1[1] += 3
+    b1[2] += 1
+    b1[3] += 3
+    b1[4] += 1
+    b1[5] += 2
+    call comprimi(b0, b1, offs0, offs1, out0, out1, sc0, sc1, st0, st1, col0, col1, indici, n)
+    show(col0)
     show(col1)
-    show(col2)
     show(indici)
-
-    uncall comprimi(b1, b2, aux1, aux2, offs1, offs2, sc1, sc2,
-                    out1, out2, col1, col2, indici, n)
-
-    show(b1)
-    show(b2)
-
+    uncall comprimi(b0, b1, offs0, offs1, out0, out1, sc0, sc1, st0, st1, col0, col1, indici, n)
+    b0[5] -= 1
+    b0[4] -= 3
+    b0[3] -= 1
+    b0[2] -= 3
+    b0[1] -= 1
+    b0[0] -= 2
+    uncall identita(offs0, n)
+    b1[5] -= 2
+    b1[4] -= 1
+    b1[3] -= 3
+    b1[2] -= 1
+    b1[1] -= 3
+    b1[0] -= 1
+    uncall identita(offs1, n)
+    delocal int out1[6] = 0
+    delocal int out0[6] = 0
+    delocal int offs1[6] = 0
+    delocal int offs0[6] = 0
+    delocal int b1[6] = 0
+    delocal int b0[6] = 0
     delocal int n = 6
