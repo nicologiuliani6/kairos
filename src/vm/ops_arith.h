@@ -8,7 +8,7 @@
 static inline void op_pusheq(VM *vm, const char *frame_name)
 {
     char *ID     = strtok(NULL, " \t");
-    char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
+    VM_REST_EXPR(expr);
     uint  Findex = get_findex(frame_name);
     Var  *v;
     int64_t *cell = lvalue_ptr(vm, Findex, ID, &v, "PUSHEQ");
@@ -32,7 +32,7 @@ static inline int expr_is_bare_ident(const char *expr)
 static inline void op_mineq(VM *vm, const char *frame_name)
 {
     char *ID     = strtok(NULL, " \t");
-    char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
+    VM_REST_EXPR(expr);
     uint  Findex = get_findex(frame_name);
     Var  *v;
     int64_t *cell = lvalue_ptr(vm, Findex, ID, &v, "MINEQ");
@@ -59,7 +59,7 @@ static inline void op_mineq(VM *vm, const char *frame_name)
 static inline void op_xoreq(VM *vm, const char *frame_name)
 {
     char *ID     = strtok(NULL, " \t");
-    char  expr[256]; read_rest_of_expr(expr, sizeof(expr));
+    VM_REST_EXPR(expr);
     uint  Findex = get_findex(frame_name);
     Var  *v;
     int64_t *cell = lvalue_ptr(vm, Findex, ID, &v, "XOREQ");

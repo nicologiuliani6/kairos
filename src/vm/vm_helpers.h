@@ -185,7 +185,7 @@ static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 
         /* Leggi left operand */
         int llen = token_len(inner);
-        char left[256]; strncpy(left, inner, llen < 255 ? llen : 255); left[llen] = '\0';
+        char left[llen + 1]; memcpy(left, inner, (size_t)llen); left[llen] = '\0';
         int64_t lval = resolve_expr(vm, fi, left);
 
         /* Salta l'operand e spazi */
@@ -199,7 +199,7 @@ static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 
         /* Leggi right operand (fino alla ')' di chiusura) */
         int rlen = token_len(after_op);
-        char right[256]; strncpy(right, after_op, rlen < 255 ? rlen : 255); right[rlen] = '\0';
+        char right[rlen + 1]; memcpy(right, after_op, (size_t)rlen); right[rlen] = '\0';
         int64_t rval = resolve_expr(vm, fi, right);
 
         if (op == '+') return lval + rval;
@@ -238,6 +238,13 @@ static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
  * come unica stringa (gestisce espressioni tipo "(y + z)" che strtok
  * spezzerebbe in più token).
  */
+/* Resto della riga come un'unica espressione, in un buffer della sua lunghezza. */
+#define VM_REST_EXPR(name) \
+    const char *name##_src = strtok(NULL, ""); \
+    if (!name##_src) name##_src = ""; \
+    while (*name##_src == ' ' || *name##_src == '\t') name##_src++; \
+    VM_LINE_COPY(name, name##_src)
+
 static inline void read_rest_of_expr(char *out, size_t outsz)
 {
     const char *rest = strtok(NULL, "");
@@ -260,9 +267,8 @@ static inline int64_t *array_cell(VM *vm, uint fi, const char *tok, Var **vout, 
     size_t nl = (size_t)(lb - tok);
     if (nl >= sizeof(name)) nl = sizeof(name) - 1;
     memcpy(name, tok, nl); name[nl] = '\0';
-    char inner[256];
     size_t il = (size_t)(rb - lb - 1);
-    if (il >= sizeof(inner)) il = sizeof(inner) - 1;
+    char inner[il + 1];
     memcpy(inner, lb + 1, il); inner[il] = '\0';
     Var *v = get_var(vm, fi, name, op);
     if (v->T != TYPE_ARRAY)

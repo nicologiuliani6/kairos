@@ -115,10 +115,7 @@ static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_lin
         char *nline = strchr(cursor_after_snap_line_nl, '\n');
         size_t L    = nline ? (size_t)(nline - cursor_after_snap_line_nl)
                            : strlen(cursor_after_snap_line_nl);
-        char  linebuf[16384];
-
-        if (L >= sizeof(linebuf))
-            vm_debug_panic("[VM] __mn_hist_floor_snap: riga bytecode troppo lunga\n");
+        char  linebuf[L + 1];
         memcpy(linebuf, cursor_after_snap_line_nl, L);
         linebuf[L] = '\0';
 
@@ -233,8 +230,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
-        lb[sizeof(lb)-1] = '\0';
+        VM_LINE_COPY(lb, ptr);
         char *fw = strtok(skip_lineno(lb), " \t");
 
         if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }

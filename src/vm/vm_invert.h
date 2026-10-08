@@ -159,6 +159,13 @@ static inline const char *_loop_label_uid(const char *label, const char *prefix,
     return label + plen + 1;
 }
 
+static inline void guard_copy(char *dst, const char *src)
+{
+    if (strlen(src) >= 256)
+        vm_debug_panic("[VM] guardia troppo lunga per il motore di inversione dinamico: %.60s...\n", src);
+    strcpy(dst, src);
+}
+
 static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                                  LoopDescriptor *out, int max)
 {
@@ -210,8 +217,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     while (ptr && *ptr && n < max) {
         char *nl = strchr(ptr, '\n'); if (!nl) break;
         size_t llen = (size_t)(nl - ptr);
-        if (llen >= 16383) llen = 16383;
-        char lb[16384]; memcpy(lb, ptr, llen); lb[llen] = '\0';
+        char lb[llen + 1]; memcpy(lb, ptr, llen); lb[llen] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { ptr = nl + 1; continue; }
@@ -220,9 +226,9 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
             char *op = strtok(NULL, " \t");
-            char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
-            strncpy(pid,  a   ? a   : "", 255);
-            strncpy(pval, rhs,             255);
+            VM_REST_EXPR(rhs);
+            guard_copy(pid, a   ? a   : "");
+            guard_copy(pval, rhs);
             _copy_compare_op(pop, op);
         } else if (!strcmp(fw, "LABEL")) {
             char *ln = strtok(NULL, " \t");
@@ -260,8 +266,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_entry_line = peval;
-                    strncpy(out[slot].eval_entry_id,  pid,  255);
-                    strncpy(out[slot].eval_entry_val, pval, 255);
+                    guard_copy(out[slot].eval_entry_id, pid);
+                    guard_copy(out[slot].eval_entry_val, pval);
                     _copy_compare_op(out[slot].eval_entry_op, pop);
                     out[slot].jmpf_err_line = cur;
                 }
@@ -271,8 +277,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_exit_line = peval;
-                    strncpy(out[slot].eval_exit_id,  pid,  255);
-                    strncpy(out[slot].eval_exit_val, pval, 255);
+                    guard_copy(out[slot].eval_exit_id, pid);
+                    guard_copy(out[slot].eval_exit_val, pval);
                     _copy_compare_op(out[slot].eval_exit_op, pop);
                     out[slot].jmpf_start_line = cur;
                 }
@@ -325,8 +331,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         char *nl = strchr(ptr, '\n');
         if (!nl) break;
         size_t llen = (size_t)(nl - ptr);
-        if (llen >= 16383) llen = 16383;
-        char lb[16384]; memcpy(lb, ptr, llen); lb[llen] = '\0';
+        char lb[llen + 1]; memcpy(lb, ptr, llen); lb[llen] = '\0';
         uint cur = (uint)atoi(lb);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (!fw) { ptr = nl + 1; continue; }
@@ -335,9 +340,9 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             peval = cur;
             char *a = strtok(NULL, " \t");  /* lhs */
             char *iop = strtok(NULL, " \t");
-            char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
-            strncpy(pid,  a   ? a   : "", 255);
-            strncpy(pval, rhs,             255);
+            VM_REST_EXPR(rhs);
+            guard_copy(pid, a   ? a   : "");
+            guard_copy(pval, rhs);
             _copy_compare_op(pfi_op, iop);
 
             /* EVAL FI: se top dello stack è in_then-completato (jmp_fi visto) e
@@ -345,21 +350,19 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             if (top >= 0 && out[stack_idx[top]].fi_label_line && !stack_eval_exit_set[top]) {
                 int ti = stack_idx[top];
                 out[ti].eval_exit_line = cur;
-                strncpy(out[ti].eval_exit_id,  pid,  255);
-                strncpy(out[ti].eval_exit_val, pval, 255);
+                guard_copy(out[ti].eval_exit_id, pid);
+                guard_copy(out[ti].eval_exit_val, pval);
                 _copy_compare_op(out[ti].eval_exit_op, pfi_op);
                 stack_eval_exit_set[top] = 1;
 
                 /* Peek rigo dopo: se ASSERT, sentinel; altrimenti EVAL=ASSERT collassati. */
                 char *n2 = strchr(nl + 1, '\n');
                 int  nx_asrt = 0;
-                if (n2 && (size_t)(n2 - (nl + 1)) < sizeof(lb)) {
-                    char peekb[16384];
-                    memcpy(peekb, nl + 1, (size_t)(n2 - (nl + 1)));
-                    peekb[(size_t)(n2 - (nl + 1))] = '\0';
-                    char ptmp[16384];
-                    strncpy(ptmp, peekb, sizeof(ptmp) - 1);
-                    ptmp[sizeof(ptmp) - 1] = '\0';
+                if (n2) {
+                    size_t peek_len = (size_t)(n2 - (nl + 1));
+                    char ptmp[peek_len + 1];
+                    memcpy(ptmp, nl + 1, peek_len);
+                    ptmp[peek_len] = '\0';
                     char *p1 = strtok(skip_lineno(ptmp), " \t");
                     nx_asrt = (p1 && !strcmp(p1, "ASSERT"));
                 }
@@ -381,8 +384,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                 stack_eval_exit_set[top] = 0;
                 memset(&out[idx], 0, sizeof(IfDescriptor));
                 out[idx].eval_entry_line = peval;
-                strncpy(out[idx].eval_entry_id,  pid,  255);
-                strncpy(out[idx].eval_entry_val, pval, 255);
+                guard_copy(out[idx].eval_entry_id, pid);
+                guard_copy(out[idx].eval_entry_val, pval);
                 _copy_compare_op(out[idx].eval_entry_op, pfi_op);
                 out[idx].jmpf_else_line = cur;
             }
@@ -423,8 +426,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                     out[ti].assert_line = cur;
                 } else {
                     out[ti].eval_exit_line = peval;
-                    strncpy(out[ti].eval_exit_id,  pid,  255);
-                    strncpy(out[ti].eval_exit_val, pval, 255);
+                    guard_copy(out[ti].eval_exit_id, pid);
+                    guard_copy(out[ti].eval_exit_val, pval);
                     _copy_compare_op(out[ti].eval_exit_op, pfi_op);
                     out[ti].assert_line = cur;
                 }
@@ -555,12 +558,8 @@ static inline int lp_row_first_jmpf_from_start(uint line, char **lp, uint *ln, i
 {
     for (int j = 0; j < nl; j++) {
         if (ln[j] != line) continue;
-        char buf[16384];
-        strncpy(buf, lp[j], sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-        char scan[16384];
-        strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
-        scan[sizeof(scan) - 1] = '\0';
+        VM_LINE_COPY(buf, lp[j]);
+        VM_LINE_COPY(scan, skip_lineno(buf));
         char *ff = strtok(scan, " \t");
         char *a1 = strtok(NULL, " \t");
         /* FROM_BACK: stesso ruolo (test d'uscita) nel layout a due corpi. */
@@ -575,12 +574,8 @@ static inline int lp_row_first_jmpf_from_err(uint line, char **lp, uint *ln, int
 {
     for (int j = 0; j < nl; j++) {
         if (ln[j] != line) continue;
-        char buf[16384];
-        strncpy(buf, lp[j], sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-        char scan[16384];
-        strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
-        scan[sizeof(scan) - 1] = '\0';
+        VM_LINE_COPY(buf, lp[j]);
+        VM_LINE_COPY(scan, skip_lineno(buf));
         char *ff = strtok(scan, " \t");
         char *a1 = strtok(NULL, " \t");
         if (ff && !strcmp(ff, "JMPF") && a1 && !strncmp(a1, "FROM_ERR", 8)) return j;
@@ -592,12 +587,8 @@ static inline int lp_row_first_eval_at_line(uint line, char **lp, uint *ln, int 
 {
     for (int j = 0; j < nl; j++) {
         if (ln[j] != line) continue;
-        char buf[16384];
-        strncpy(buf, lp[j], sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-        char scan[16384];
-        strncpy(scan, skip_lineno(buf), sizeof(scan) - 1);
-        scan[sizeof(scan) - 1] = '\0';
+        VM_LINE_COPY(buf, lp[j]);
+        VM_LINE_COPY(scan, skip_lineno(buf));
         char *ff = strtok(scan, " \t");
         if (ff && !strcmp(ff, "EVAL")) return j;
     }
@@ -895,8 +886,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= proc_end) { *nl = '\n'; break; }
-        char tmp[16384]; strncpy(tmp, ptr, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
+        VM_LINE_COPY(tmp, ptr);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "PAR_START")) {
             out[n].start_line = cur;
@@ -908,8 +898,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
                 char *nl2 = strchr(scan, '\n'); if (!nl2) break; *nl2 = '\0';
                 uint  cur2 = (uint)atoi(scan);
                 if (cur2 > max_inner) max_inner = cur2;
-                char tmp2[16384]; strncpy(tmp2, scan, sizeof(tmp2) - 1);
-                tmp2[sizeof(tmp2) - 1] = '\0';
+                VM_LINE_COPY(tmp2, scan);
                 char *fw2  = strtok(skip_lineno(tmp2), " \t");
                 if (fw2) {
                     if      (!strcmp(fw2, "PAR_START")) depth++;
@@ -1158,10 +1147,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         size_t _clean_len = strlen(clean);
         /* exe_line: copia indipendente per strtok finale (dopo dispatch early-skip).
            zbuf: copia indipendente per strtok early (fw_cls/arg1_cls). */
-        char exe_line[16384];
-        if (_clean_len >= sizeof(exe_line)) _clean_len = sizeof(exe_line) - 1;
+        char exe_line[_clean_len + 1];
         memcpy(exe_line, clean, _clean_len); exe_line[_clean_len] = '\0';
-        char zbuf[16384];
+        char zbuf[_clean_len + 1];
         memcpy(zbuf, clean, _clean_len); zbuf[_clean_len] = '\0';
         char *fw_cls = strtok(zbuf, " \t");
         char *arg1_cls = strtok(NULL, " \t");
@@ -1699,7 +1687,7 @@ static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_l
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
+        VM_LINE_COPY(lb, ptr);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
             char *a1 = strtok(NULL, " \t");
@@ -1725,7 +1713,7 @@ static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_l
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
+        VM_LINE_COPY(lb, ptr);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
             char *a1 = strtok(NULL, " \t");
@@ -1746,7 +1734,7 @@ static inline int branch_span_has_call(char *buf, uint from_line, uint to_line)
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
+        VM_LINE_COPY(lb, ptr);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) {
             *nl = '\n'; return 1;
@@ -1846,7 +1834,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         int idx = nl - 1;
         while (idx >= 0) {
             uint cur = ln[idx];
-            char ob[16384]; strncpy(ob, lp[idx], sizeof(ob) - 1); ob[sizeof(ob) - 1] = '\0';
+            VM_LINE_COPY(ob, lp[idx]);
             char *fw = strtok(skip_lineno(ob), " \t");
             if (!fw) { idx--; continue; }
 
@@ -2029,8 +2017,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             }
         }
         for (int i = count - 1; i >= 0; i--) {
-            char ob[16384]; strncpy(ob, lines[i], sizeof(ob) - 1);
-            ob[sizeof(ob) - 1] = '\0';
+            VM_LINE_COPY(ob, lines[i]);
             char *clean = skip_lineno(ob);
             char *fw = strtok(clean, " \t");
             if (!fw) continue;

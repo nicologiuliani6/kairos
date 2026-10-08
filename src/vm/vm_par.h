@@ -48,9 +48,7 @@ static inline ParBlock scan_par_block(char *par_ptr)
         char *nl = strchr(scan, '\n');
         if (!nl) break;
         *nl = '\0';
-        char tmp[16384];
-        strncpy(tmp, scan, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
+        VM_LINE_COPY(tmp, scan);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw) {
             if      (strcmp(fw, "PAR_START") == 0) depth++;
@@ -161,17 +159,17 @@ static void *thread_entry(void *arg)
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
 
     if (args->is_inverse) {
-        char (*lines)[16384] = malloc(sizeof(char[512][16384]));
+        /* Le righe del ramo, quante sono: il vettore cresce su richiesta. */
+        int    lines_cap = 64;
+        char **lines = malloc(sizeof(char *) * (size_t)lines_cap);
         int nlines = 0;
         int has_complex = 0;
         char *scan = args->start_ptr;
-        while (scan && *scan && nlines < 512) {
+        while (scan && *scan) {
             char *nl = strchr(scan, '\n');
             if (!nl) break;
             *nl = '\0';
-            vm_copy_line(lines[nlines], scan, sizeof(lines[nlines]));
-            char lb[16384];
-            vm_copy_line(lb, scan, sizeof(lb));
+            VM_LINE_COPY(lb, scan);
             char *fw = strtok(skip_lineno(lb), " \t");
             *nl = '\n';
             if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) break;
@@ -181,14 +179,19 @@ static void *thread_entry(void *arg)
                 !strcmp(fw, "PAR_START")) {
                 has_complex = 1;
             }
-            nlines++;
+            if (nlines == lines_cap) {
+                lines_cap *= 2;
+                lines = realloc(lines, sizeof(char *) * (size_t)lines_cap);
+            }
+            *nl = '\0';
+            lines[nlines++] = strdup(scan);
+            *nl = '\n';
             scan = nl + 1;
         }
 
         if (!has_complex) {
             for (int i = nlines - 1; i >= 0; i--) {
-                char lb[16384];
-                vm_copy_line(lb, lines[i], sizeof(lb));
+                VM_LINE_COPY(lb, lines[i]);
                 char *fw = strtok(skip_lineno(lb), " \t");
                 if (!fw) continue;
                 if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, fname);
@@ -212,9 +215,11 @@ static void *thread_entry(void *arg)
                          !strcmp(fw, "LABEL") || !strcmp(fw, "DECL")) { /* skip */ }
                 else { vm_debug_panic("[THREAD-INV] op sconosciuta: '%s'\n", fw); }
             }
+            for (int k = 0; k < nlines; k++) free(lines[k]);
             free(lines);
             goto thread_exit;
         }
+        for (int k = 0; k < nlines; k++) free(lines[k]);
         free(lines);
     }
 
@@ -222,7 +227,7 @@ static void *thread_entry(void *arg)
 
     while (ptr && *ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
+        VM_LINE_COPY(lb, ptr);
         char *fw = strtok(skip_lineno(lb), " \t");
 
         if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END"))

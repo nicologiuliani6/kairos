@@ -15,6 +15,11 @@
    strncpy azzera tutto il resto della destinazione, e con buffer da 16 KB questo
    significava scrivere 16 KB per ogni istruzione eseguita, a ogni thread. */
 #include <string.h>
+/* Copia di una riga (o di un'espressione) in un buffer della sua lunghezza esatta:
+   niente limite fisso sulla lunghezza, e niente da liberare. */
+#define VM_LINE_COPY(dst, src) \
+    size_t dst##_len = strlen(src); char dst[dst##_len + 1]; memcpy(dst, (src), dst##_len + 1)
+
 static inline void vm_copy_line(char *dst, const char *src, size_t cap)
 {
     size_t l = strnlen(src, cap - 1);

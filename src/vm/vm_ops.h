@@ -846,7 +846,7 @@ static inline void op_eval(VM *vm, const char *frame_name)
 {
     char *lhs_tok = strtok(NULL, " \t");   /* ID o numero a sinistra  */
     char *op_tok  = strtok(NULL, " \t");   /* operatore               */
-    char  rhs[256]; read_rest_of_expr(rhs, sizeof(rhs)); /* espressione destra */
+    VM_REST_EXPR(rhs); /* espressione destra */
 
     if (!lhs_tok || !op_tok || rhs[0] == '\0') {
         vm_debug_panic("[VM] EVAL: formato errato (atteso: EVAL <lhs> <op> <rhs>)\n");
@@ -870,7 +870,7 @@ static inline void op_assert(VM *vm, const char *frame_name)
 {
     char *lhs_tok = strtok(NULL, " \t");
     char *op_tok  = strtok(NULL, " \t");
-    char  rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
+    VM_REST_EXPR(rhs);
 
     if (!lhs_tok || !op_tok || rhs[0] == '\0') {
         vm_debug_panic("[VM] ASSERT: formato errato (atteso: ASSERT <lhs> <op> <rhs>)\n");
