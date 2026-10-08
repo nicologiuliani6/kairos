@@ -343,14 +343,17 @@ int vm_debug_goto_line(VMDebugState *dbg, int target_line)
 
 int vm_debug_dump_json_ext(VMDebugState *dbg, char *out, int outsz)
 {
-    if (!g_debug_vm || !out) return 0;
+    /* out == NULL (con outsz 0) chiede solo la lunghezza necessaria. */
+    if (!g_debug_vm) return 0;
+    if (!out) outsz = 0;
     (void)dbg;
     return vm_debug_dump_json(g_debug_vm, out, outsz);
 }
 
 int vm_debug_vars_json_ext(VMDebugState *dbg, char *out, int outsz)
 {
-    if (!g_debug_vm || !out || !dbg) return 0;
+    if (!g_debug_vm || !dbg) return 0;
+    if (!out) outsz = 0;
     return vm_debug_vars_json(g_debug_vm, vm_name_get(dbg->current_frame), out, outsz);
 }
 

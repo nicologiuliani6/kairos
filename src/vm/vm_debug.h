@@ -282,8 +282,15 @@ static inline int vm_debug_dump_json(VM *vm, char *out, int outsz)
     VMDebugState *dbg = vm->dbg;
     int n = 0;
 
-#define JWRITE(...) n += snprintf(out + n, outsz - n, __VA_ARGS__); \
-                    if (n >= outsz) return n;
+/* Come snprintf: si scrive finche' c'e' spazio, ma si conta tutto. Il valore
+   restituito e' la lunghezza completa del JSON; se e' >= outsz il buffer non
+   bastava e il chiamante puo' riprovare con uno di (valore + 1) byte, invece di
+   ricevere un JSON troncato. */
+#define JWRITE(...) do { \
+        int _k = snprintf(out && n < outsz ? out + n : NULL, \
+                          out && n < outsz ? (size_t)(outsz - n) : 0, __VA_ARGS__); \
+        if (_k > 0) n += _k; \
+    } while (0)
 
     JWRITE("{");
     if (dbg) {
@@ -352,8 +359,15 @@ static inline int vm_debug_vars_json(VM *vm, const char *frame_name,
                                      char *out, int outsz)
 {
     int n = 0;
-#define JWRITE(...) n += snprintf(out + n, outsz - n, __VA_ARGS__); \
-                    if (n >= outsz) return n;
+/* Come snprintf: si scrive finche' c'e' spazio, ma si conta tutto. Il valore
+   restituito e' la lunghezza completa del JSON; se e' >= outsz il buffer non
+   bastava e il chiamante puo' riprovare con uno di (valore + 1) byte, invece di
+   ricevere un JSON troncato. */
+#define JWRITE(...) do { \
+        int _k = snprintf(out && n < outsz ? out + n : NULL, \
+                          out && n < outsz ? (size_t)(outsz - n) : 0, __VA_ARGS__); \
+        if (_k > 0) n += _k; \
+    } while (0)
 
     if (!char_id_map_exists(&FrameIndexer, frame_name)) {
         JWRITE("[]");
