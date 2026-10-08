@@ -38,12 +38,9 @@ static inline void var_par_mut_acquire(Var *v)
     /* Gia' impegnata: o siamo noi, ed e' rientranza legittima, oppure e' un
        altro thread, e allora il programma viola la disgiunzione. */
     if (!pthread_equal(v->ref_lock_owner, self)) {
-        char nm[VAR_NAME_LENGTH];
-        strncpy(nm, v->name, VAR_NAME_LENGTH - 1);
-        nm[VAR_NAME_LENGTH - 1] = '\0';
         vm_debug_panic(
             "[VM] mutazione concorrente sulla variabile int '%s' da un altro thread\n",
-            nm);
+            v->name);
     }
     __atomic_fetch_add(&v->ref_lock_depth, 1, __ATOMIC_ACQ_REL);
 }

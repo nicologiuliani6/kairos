@@ -14,9 +14,15 @@ extern VMDebugState *g_debug_dbg;
 #ifdef DEFINE_VM_DEBUG_PANIC
 void vm_debug_panic(const char *fmt, ...)
 {
-    char msg[1024];
+    /* Messaggio della sua misura: i nomi che contiene non hanno lunghezza
+       massima, quindi nemmeno il testo d'errore. */
     va_list ap; va_start(ap, fmt);
-    vsnprintf(msg, sizeof(msg), fmt, ap);
+    int len = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (len < 0) len = 0;
+    char msg[len + 1];
+    va_start(ap, fmt);
+    vsnprintf(msg, (size_t)len + 1, fmt, ap);
     va_end(ap);
 
     if (!g_debug_dbg) {
@@ -24,7 +30,10 @@ void vm_debug_panic(const char *fmt, ...)
         exit(EXIT_FAILURE);
     }
 
-    strncpy(g_debug_dbg->last_error, msg, sizeof(g_debug_dbg->last_error) - 1);
+    {
+        char *e = strdup(msg);
+        if (e) { free(g_debug_dbg->last_error); g_debug_dbg->last_error = e; }
+    }
 
     /* Scrivi sulla pipe — stesso canale usato da SHOW — così il DAP
        adapter lo riceve come OutputEvent nella Debug Console */

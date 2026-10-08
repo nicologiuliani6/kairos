@@ -25,13 +25,17 @@ static inline int invert_extract_srcline(const char *raw_line)
  *  Descrittori strutturali per loop e if (usati dall'inversore)
  * ====================================================================== */
 
+/* Le guardie (operandi di EVAL) sono stringhe sull'heap della loro lunghezza:
+ * nessun limite sulla lunghezza di una guardia. NULL vale "" (vm_name_get).
+ * Le libera loop_descs_free / if_descs_free. L'operatore resta in un campo di 8
+ * byte: e' uno dei sei confronti che il compilatore emette (==, !=, <, ...). */
 typedef struct {
     uint eval_entry_line;
-    char eval_entry_id[256], eval_entry_val[256];
+    char *eval_entry_id, *eval_entry_val;
     char eval_entry_op[8]; /* bytecode EVAL memorizza !=, <, … — obbligatorio per invert */
     uint jmpf_err_line, from_start_line, from_end_line, from_err_line;
     uint eval_exit_line;
-    char eval_exit_id[256], eval_exit_val[256];
+    char *eval_exit_id, *eval_exit_val;
     char eval_exit_op[8];
     uint jmpf_start_line;
     /* Ciclo a DUE corpi (`from b1 do c1 loop c2 until b2`): valorizzati solo in
@@ -43,14 +47,30 @@ typedef struct {
 
 typedef struct {
     uint eval_entry_line;
-    char eval_entry_id[256], eval_entry_val[256];
+    char *eval_entry_id, *eval_entry_val;
     char eval_entry_op[8];
     uint jmpf_else_line, jmp_fi_line, else_label_line, fi_label_line;
     uint eval_exit_line;
-    char eval_exit_id[256], eval_exit_val[256];
+    char *eval_exit_id, *eval_exit_val;
     char eval_exit_op[8];
     uint assert_line;
 } IfDescriptor;
+
+static inline void loop_descs_free(LoopDescriptor *L, int n)
+{
+    for (int i = 0; i < n; i++) {
+        free(L[i].eval_entry_id); free(L[i].eval_entry_val);
+        free(L[i].eval_exit_id);  free(L[i].eval_exit_val);
+    }
+}
+
+static inline void if_descs_free(IfDescriptor *I, int n)
+{
+    for (int i = 0; i < n; i++) {
+        free(I[i].eval_entry_id); free(I[i].eval_entry_val);
+        free(I[i].eval_exit_id);  free(I[i].eval_exit_val);
+    }
+}
 
 typedef enum {
     LOOP_ZONE_NONE, LOOP_ZONE_EVAL_ENTRY, LOOP_ZONE_JMPF_ERR,
@@ -159,21 +179,27 @@ static inline const char *_loop_label_uid(const char *label, const char *prefix,
     return label + plen + 1;
 }
 
-static inline void guard_copy(char *dst, const char *src)
+/* Copia di una guardia nel campo di un descrittore (o nel temporaneo di
+ * collect_*), della sua lunghezza. */
+static inline void guard_copy(char **dst, const char *src)
 {
-    if (strlen(src) >= 256)
-        vm_debug_panic("[VM] guardia troppo lunga per il motore di inversione dinamico: %.60s...\n", src);
-    strcpy(dst, src);
+    char *n = char_id_strdup(src ? src : "");
+    free(*dst);
+    *dst = n;
 }
 
+/* Raccoglie i from-loop della procedura in un vettore che cresce: nessun
+ * numero massimo di cicli per procedura né di livelli di annidamento (prima
+ * 32 e 32, oltre i quali i cicli in più venivano ignorati in silenzio e
+ * l'inversione sbagliava). *outp va liberato con loop_descs_free + free. */
 static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
-                                 LoopDescriptor *out, int max)
+                                 LoopDescriptor **outp)
 {
-    char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
-    char *at = strchr(base, '@'); if (at) *at = '\0';
+    VM_FRAME_BASE(base, frame_name);
     uint fi = char_id_map_get(&FrameIndexer, base);
     char *ptr = go_to_line(buf, vm->frames[fi]->addr + 1);
-    int n = 0;
+    int n = 0, out_cap = 0;
+    LoopDescriptor *out = NULL;
     /* Stack di loop aperti per UID. Due layout Kairos.
      *
      * (a) UN corpo — `from b1 do c1 loop until b2`, c2 vuoto:
@@ -191,11 +217,12 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
      * / JMPF FROM_START|FROM_BACK / LABEL FROM_END / LABEL FROM_ERR. Slot aperto da prima
      * reference, chiuso da LABEL FROM_ERR_<UID>.
      */
-    int stack_slot[32];
-    char stack_uid[32][32];
+    int    stack_cap  = 0;
+    int   *stack_slot = NULL;
+    char **stack_uid  = NULL;
     int top = -1;
 
-    uint peval = 0; char pid[256] = {0}, pval[256] = {0}, pop[8] = {'=', '=', '\0'};
+    uint peval = 0; char *pid = NULL, *pval = NULL; char pop[8] = {'=', '=', '\0'};
 
     /* find_or_open: cerca slot per uid; se non aperto, alloca. */
     #define LOOP_FIND_OR_OPEN(uid, slot_out) do { \
@@ -203,18 +230,27 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
         for (int _s = top; _s >= 0; _s--) { \
             if (!strcmp(stack_uid[_s], uid)) { slot_out = stack_slot[_s]; break; } \
         } \
-        if (slot_out < 0 && n < max && \
-            top + 1 < (int)(sizeof(stack_slot)/sizeof(stack_slot[0]))) { \
+        if (slot_out < 0) { \
+            if (n == out_cap) { \
+                out_cap = out_cap ? out_cap * 2 : 8; \
+                out = (LoopDescriptor *)realloc(out, sizeof(LoopDescriptor) * (size_t)out_cap); \
+                if (!out) vm_debug_panic("[VM] collect_loops: memoria esaurita\n"); \
+            } \
+            if (top + 1 == stack_cap) { \
+                stack_cap = stack_cap ? stack_cap * 2 : 8; \
+                stack_slot = (int *)realloc(stack_slot, sizeof(int) * (size_t)stack_cap); \
+                stack_uid  = (char **)realloc(stack_uid, sizeof(char *) * (size_t)stack_cap); \
+                if (!stack_slot || !stack_uid) vm_debug_panic("[VM] collect_loops: memoria esaurita\n"); \
+            } \
             slot_out = n++; \
             memset(&out[slot_out], 0, sizeof(LoopDescriptor)); \
             top++; \
             stack_slot[top] = slot_out; \
-            strncpy(stack_uid[top], uid, sizeof(stack_uid[0]) - 1); \
-            stack_uid[top][sizeof(stack_uid[0]) - 1] = '\0'; \
+            stack_uid[top]  = char_id_strdup(uid); \
         } \
     } while (0)
 
-    while (ptr && *ptr && n < max) {
+    while (ptr && *ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break;
         size_t llen = (size_t)(nl - ptr);
         char lb[llen + 1]; memcpy(lb, ptr, llen); lb[llen] = '\0';
@@ -227,8 +263,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             char *a = strtok(NULL, " \t");  /* lhs */
             char *op = strtok(NULL, " \t");
             VM_REST_EXPR(rhs);
-            guard_copy(pid, a   ? a   : "");
-            guard_copy(pval, rhs);
+            guard_copy(&pid, a   ? a   : "");
+            guard_copy(&pval, rhs);
             _copy_compare_op(pop, op);
         } else if (!strcmp(fw, "LABEL")) {
             char *ln = strtok(NULL, " \t");
@@ -249,9 +285,10 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 /* Chiude loop, pop stack. */
                 for (int s = top; s >= 0; s--) {
                     if (!strcmp(stack_uid[s], uid)) {
+                        free(stack_uid[s]);
                         for (int k = s; k < top; k++) {
                             stack_slot[k] = stack_slot[k + 1];
-                            strncpy(stack_uid[k], stack_uid[k + 1], sizeof(stack_uid[0]) - 1);
+                            stack_uid[k]  = stack_uid[k + 1];
                         }
                         top--;
                         break;
@@ -266,8 +303,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_entry_line = peval;
-                    guard_copy(out[slot].eval_entry_id, pid);
-                    guard_copy(out[slot].eval_entry_val, pval);
+                    guard_copy(&out[slot].eval_entry_id, pid);
+                    guard_copy(&out[slot].eval_entry_val, pval);
                     _copy_compare_op(out[slot].eval_entry_op, pop);
                     out[slot].jmpf_err_line = cur;
                 }
@@ -277,8 +314,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_exit_line = peval;
-                    guard_copy(out[slot].eval_exit_id, pid);
-                    guard_copy(out[slot].eval_exit_val, pval);
+                    guard_copy(&out[slot].eval_exit_id, pid);
+                    guard_copy(&out[slot].eval_exit_val, pval);
                     _copy_compare_op(out[slot].eval_exit_op, pop);
                     out[slot].jmpf_start_line = cur;
                 }
@@ -296,14 +333,17 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
         ptr = nl + 1;
     }
     #undef LOOP_FIND_OR_OPEN
+    for (int k = 0; k <= top; k++) free(stack_uid[k]);
+    free(stack_slot); free(stack_uid);
+    free(pid); free(pval);
+    *outp = out;
     return n;
 }
 
 static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                                IfDescriptor *out, int max)
 {
-    char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
-    char *at = strchr(base, '@'); if (at) *at = '\0';
+    VM_FRAME_BASE(base, frame_name);
     uint fi = char_id_map_get(&FrameIndexer, base);
     char *ptr = go_to_line(buf, vm->frames[fi]->addr + 1);
     int n = 0;
@@ -320,11 +360,11 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
      * in resolve_atom. depth ≤ #IF aperti ≤ n < max, quindi `max` slot bastano. */
     int    stack_cap          = max > 0 ? max : 1;
     int   *stack_idx          = malloc(sizeof(*stack_idx) * (size_t)stack_cap);
-    char (*stack_uid)[32]     = malloc(sizeof(*stack_uid) * (size_t)stack_cap);
+    char **stack_uid          = calloc((size_t)stack_cap, sizeof(char *));
     int   *stack_eval_exit_set= malloc(sizeof(*stack_eval_exit_set) * (size_t)stack_cap);
     int   top = -1;
 
-    uint peval = 0; char pid[256] = {0}, pval[256] = {0};
+    uint peval = 0; char *pid = NULL, *pval = NULL;
     char pfi_op[8] = {'=', '=', '\0'};
 
     while (ptr && *ptr && n < max) {
@@ -341,8 +381,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             char *a = strtok(NULL, " \t");  /* lhs */
             char *iop = strtok(NULL, " \t");
             VM_REST_EXPR(rhs);
-            guard_copy(pid, a   ? a   : "");
-            guard_copy(pval, rhs);
+            guard_copy(&pid, a   ? a   : "");
+            guard_copy(&pval, rhs);
             _copy_compare_op(pfi_op, iop);
 
             /* EVAL FI: se top dello stack è in_then-completato (jmp_fi visto) e
@@ -350,8 +390,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             if (top >= 0 && out[stack_idx[top]].fi_label_line && !stack_eval_exit_set[top]) {
                 int ti = stack_idx[top];
                 out[ti].eval_exit_line = cur;
-                guard_copy(out[ti].eval_exit_id, pid);
-                guard_copy(out[ti].eval_exit_val, pval);
+                guard_copy(&out[ti].eval_exit_id, pid);
+                guard_copy(&out[ti].eval_exit_val, pval);
                 _copy_compare_op(out[ti].eval_exit_op, pfi_op);
                 stack_eval_exit_set[top] = 1;
 
@@ -379,13 +419,12 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                 int idx = n++;
                 top++;
                 stack_idx[top] = idx;
-                strncpy(stack_uid[top], ln + 5, 31);
-                stack_uid[top][31] = '\0';
+                guard_copy(&stack_uid[top], ln + 5);
                 stack_eval_exit_set[top] = 0;
                 memset(&out[idx], 0, sizeof(IfDescriptor));
                 out[idx].eval_entry_line = peval;
-                guard_copy(out[idx].eval_entry_id, pid);
-                guard_copy(out[idx].eval_entry_val, pval);
+                guard_copy(&out[idx].eval_entry_id, pid);
+                guard_copy(&out[idx].eval_entry_val, pval);
                 _copy_compare_op(out[idx].eval_entry_op, pfi_op);
                 out[idx].jmpf_else_line = cur;
             }
@@ -426,8 +465,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                     out[ti].assert_line = cur;
                 } else {
                     out[ti].eval_exit_line = peval;
-                    guard_copy(out[ti].eval_exit_id, pid);
-                    guard_copy(out[ti].eval_exit_val, pval);
+                    guard_copy(&out[ti].eval_exit_id, pid);
+                    guard_copy(&out[ti].eval_exit_val, pval);
                     _copy_compare_op(out[ti].eval_exit_op, pfi_op);
                     out[ti].assert_line = cur;
                 }
@@ -439,8 +478,10 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
         ptr = nl + 1;
     }
     free(stack_idx);
+    for (int k = 0; k < stack_cap; k++) free(stack_uid[k]);
     free(stack_uid);
     free(stack_eval_exit_set);
+    free(pid); free(pval);
     return n;
 }
 
@@ -680,10 +721,10 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
  * Dopo la chiamata thread_val_IF vale 1 se il ramo preso era il THEN. */
 static inline void do_eval_if_branch(VM *vm, uint fi, const IfDescriptor *d)
 {
-    if (d->eval_exit_id[0] != '\0')
-        do_eval_if_entry(vm, fi, d->eval_exit_id, d->eval_exit_op, d->eval_exit_val);
+    if (vm_name_get(d->eval_exit_id)[0] != '\0')
+        do_eval_if_entry(vm, fi, vm_name_get(d->eval_exit_id), d->eval_exit_op, vm_name_get(d->eval_exit_val));
     else
-        do_eval_if_entry(vm, fi, d->eval_entry_id, d->eval_entry_op, d->eval_entry_val);
+        do_eval_if_entry(vm, fi, vm_name_get(d->eval_entry_id), d->eval_entry_op, vm_name_get(d->eval_entry_val));
 }
 
 /* Il condizionale reversibile ha due guardie e la semantica ne chiede due
@@ -706,13 +747,13 @@ static inline void check_if_entry_inverse(VM *vm, uint fi,
 {
     /* Senza asserzione d'uscita il ramo e' stato dedotto dalla guardia stessa:
      * riverificarla sarebbe una tautologia. */
-    if (d->eval_exit_id[0] == '\0' || d->eval_entry_id[0] == '\0') return;
+    if (vm_name_get(d->eval_exit_id)[0] == '\0' || vm_name_get(d->eval_entry_id)[0] == '\0') return;
     /* Nei rami di par altri thread possono mutare gli int condivisi fra la
      * valutazione e il controllo, come gia' fa op_assert in avanti. */
     if (current_thread_args != NULL) return;
 
-    int64_t lval = resolve_value(vm, fi, d->eval_entry_id);
-    int64_t rval = resolve_value(vm, fi, d->eval_entry_val);
+    int64_t lval = resolve_value(vm, fi, vm_name_get(d->eval_entry_id));
+    int64_t rval = resolve_value(vm, fi, vm_name_get(d->eval_entry_val));
     int guardia = eval_cond(lval, d->eval_entry_op, rval) ? 1 : 0;
     if (guardia != took_then) {
         vm_debug_panic(
@@ -720,7 +761,7 @@ static inline void check_if_entry_inverse(VM *vm, uint fi,
             "guardia d'ingresso (%s %s %s) vale %d: stato fuori dall'immagine "
             "del diretto\n",
             took_then ? "then" : "else",
-            d->eval_entry_id, d->eval_entry_op, d->eval_entry_val, guardia);
+            vm_name_get(d->eval_entry_id), d->eval_entry_op, vm_name_get(d->eval_entry_val), guardia);
     }
 }
 
@@ -728,7 +769,7 @@ static inline void check_if_entry_inverse(VM *vm, uint fi,
    In inversa: ripetere il corpo finché id>0; uscire a JMPF_ERR e JMPF_START quando id<=0. */
 static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
 {
-    return !strcmp(L[li].eval_entry_op, "==") && !strcmp(L[li].eval_entry_val, "0");
+    return !strcmp(L[li].eval_entry_op, "==") && !strcmp(vm_name_get(L[li].eval_entry_val), "0");
 }
 
 /* True se `line` cade nel corpo di un from-loop (tra FROM_START e l'EVAL until).
@@ -753,7 +794,7 @@ static inline int line_inside_loop_body(uint line, const LoopDescriptor *L, int 
 
 static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
 {
-    const char *eid = L[li].eval_entry_id;
+    const char *eid = vm_name_get(L[li].eval_entry_id);
     if (strchr(eid, '[') || eid[0] == '(') return resolve_value(vm, fi, eid);
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, eid)) return 0;
     uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, eid);
@@ -877,18 +918,27 @@ static __thread uint g_invert_nested_filter_to   = 0;
 
 typedef struct { uint start_line, end_line; } ParRange;
 
+/* Vettore che cresce: nessun numero massimo di par per procedura (prima 32,
+ * oltre i quali le istruzioni dei par in più venivano eseguite due volte
+ * all'indietro). *outp va liberato con free. */
 static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
-                                     ParRange *out, int max)
+                                     ParRange **outp)
 {
-    int   n   = 0;
+    int   n   = 0, cap = 0;
+    ParRange *out = NULL;
     char *ptr = go_to_line(buf, proc_start);
-    while (ptr && *ptr && n < max) {
+    while (ptr && *ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= proc_end) { *nl = '\n'; break; }
         VM_LINE_COPY(tmp, ptr);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "PAR_START")) {
+            if (n == cap) {
+                cap = cap ? cap * 2 : 4;
+                out = (ParRange *)realloc(out, sizeof(ParRange) * (size_t)cap);
+                if (!out) vm_debug_panic("[VM] collect_par_ranges: memoria esaurita\n");
+            }
             out[n].start_line = cur;
             int   depth = 1;
             uint  max_inner = cur;
@@ -920,6 +970,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
         *nl = '\n'; ptr = nl + 1;
         next:;
     }
+    *outp = out;
     return n;
 }
 
@@ -945,6 +996,42 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
  *  invert_op_to_line
  * ====================================================================== */
 
+/* Analisi strutturale per procedura (loop, if, par), calcolata una volta per
+ * thread e procedura base. */
+typedef struct {
+    char *base;
+    int nloops, nifs, npars;
+    LoopDescriptor *loops;
+    IfDescriptor   *ifs;
+    ParRange       *pars;
+} FrameAnalysisCache;
+/* Thread-local: due thread par (es. fib_left/fib_right) chiamano
+   invert_op_to_line in parallelo; senza __thread la cache (n++ + array
+   writes) è una race → descriptor partial-write → DELOCAL `__mn_e<N>`
+   value errato a fine inverse. Una voce per procedura base, in un vettore
+   che cresce: le voci non si spostano mai fuori da una chiamata in corso,
+   perché loops/ifs/pars sono blocchi propri, non dentro il vettore. */
+static __thread FrameAnalysisCache *_fa_cache = NULL;
+static __thread int _fa_cache_n = 0, _fa_cache_cap = 0;
+
+/* Alla fine di un thread di par: la cache è __thread, la libera chi l'ha creata. */
+static void vm_invert_free_cache(void)
+{
+    for (int c = 0; c < _fa_cache_n; c++) {
+        free(_fa_cache[c].base);
+        loop_descs_free(_fa_cache[c].loops, _fa_cache[c].nloops);
+        if_descs_free(_fa_cache[c].ifs, _fa_cache[c].nifs);
+        free(_fa_cache[c].loops);
+        free(_fa_cache[c].ifs);
+        free(_fa_cache[c].pars);
+    }
+    free(_fa_cache);
+    _fa_cache = NULL;
+    _fa_cache_n = _fa_cache_cap = 0;
+}
+
+
+
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop, int honor_if_line_skip)
 {
@@ -955,8 +1042,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     char *orig = buffer;
     VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
     vm->inversion_depth++;   
-    char base[VAR_NAME_LENGTH]; strncpy(base, frame_name, VAR_NAME_LENGTH - 1);
-    char *at = strchr(base, '@'); if (at) *at = '\0';
+    VM_FRAME_BASE(base, frame_name);
     uint fi_reset = char_id_map_get(&FrameIndexer, base);
     #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "divmod_nonneg")) {
@@ -974,36 +1060,18 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
     }
     #endif
-    stack_init(&vm->frames[fi_reset]->LocalVariables);
-
-#define MAX_LOOPS 32
-#define MAX_IFS   256
-#define MAX_LINES 1024
-#define MAX_PARS  32
+    /* Svuota tenendo il buffer: lo stack non è stato salvato da nessuno qui. */
+    stack_clear(&vm->frames[fi_reset]->LocalVariables);
 
     /* Per-frame analysis cache. collect_loops/ifs/par_ranges scan ~50KB
        bytecode per invocation. Encrypt opt-uncall fa molte UNCALL su
        stesse procedure (divmod, putd, bit_k_signed, …) → cache per
        base name evita N rescan. */
     /* `ifs` heap-allocato a capacità = righe del frame: una else-if chain
-     * (store a indice runtime su array di N elementi) ha ~N IF annidati, con
-     * ARR_MAX=1024 fino a ~1024. Un `ifs[MAX_IFS=256]` fisso troncava la chain
-     * per array > ~256 → branch-pairing parziale → inverse rotto. nifs ≤ righe
-     * del frame, quindi la capacità per-frame è un bound esatto e compatto. */
-    typedef struct {
-        char base[VAR_NAME_LENGTH];
-        int nloops, nifs, npars;
-        int ifs_cap;
-        LoopDescriptor loops[MAX_LOOPS];
-        IfDescriptor  *ifs;
-        ParRange       pars [MAX_PARS];
-    } FrameAnalysisCache;
-    /* Thread-local: due thread par (es. fib_left/fib_right) chiamano
-       invert_op_to_line in parallelo; senza __thread la cache (n++ + array
-       writes) è una race → descriptor partial-write → DELOCAL `__mn_e<N>`
-       value errato a fine inverse. */
-    static __thread FrameAnalysisCache _fa_cache[64];
-    static __thread int _fa_cache_n = 0;
+     * (store a indice runtime su array di N elementi) ha ~N IF annidati.
+     * nifs ≤ righe del frame, quindi la capacità per-frame è un bound esatto e
+     * compatto. Loop e par in vettori che crescono (collect_loops /
+     * collect_par_ranges): nessun numero massimo per procedura. */
     LoopDescriptor *loops;
     IfDescriptor   *ifs;
     ParRange       *pars;
@@ -1012,43 +1080,35 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     for (int _c = 0; _c < _fa_cache_n; _c++) {
         if (!strcmp(_fa_cache[_c].base, base)) { _fa_hit = _c; break; }
     }
-    /* Capacità IF = righe del frame (bound esatto su nifs). */
-    int _frame_ifs_cap = (int)(vm->frames[fi_reset]->end_addr -
-                               vm->frames[fi_reset]->addr) + 2;
-    if (_frame_ifs_cap < MAX_IFS) _frame_ifs_cap = MAX_IFS;
-    if (_fa_hit < 0 && _fa_cache_n < (int)(sizeof(_fa_cache)/sizeof(_fa_cache[0]))) {
-        _fa_hit = _fa_cache_n++;
-        strncpy(_fa_cache[_fa_hit].base, base, VAR_NAME_LENGTH - 1);
-        _fa_cache[_fa_hit].base[VAR_NAME_LENGTH - 1] = '\0';
-        _fa_cache[_fa_hit].ifs_cap = _frame_ifs_cap;
-        _fa_cache[_fa_hit].ifs = malloc(sizeof(IfDescriptor) * (size_t)_frame_ifs_cap);
-        _fa_cache[_fa_hit].nloops = collect_loops(vm, frame_name, orig,
-                                                  _fa_cache[_fa_hit].loops, MAX_LOOPS);
-        _fa_cache[_fa_hit].nifs   = collect_ifs  (vm, frame_name, orig,
-                                                  _fa_cache[_fa_hit].ifs,   _frame_ifs_cap);
-        _fa_cache[_fa_hit].npars  = collect_par_ranges(orig,
-                                                       vm->frames[fi_reset]->addr + 1,
-                                                       vm->frames[fi_reset]->end_addr,
-                                                       _fa_cache[_fa_hit].pars, MAX_PARS);
+    if (_fa_hit < 0) {
+        /* Capacità IF = righe del frame (bound esatto su nifs). */
+        int _frame_ifs_cap = (int)(vm->frames[fi_reset]->end_addr -
+                                   vm->frames[fi_reset]->addr) + 2;
+        if (_frame_ifs_cap < 16) _frame_ifs_cap = 16;
+        if (_fa_cache_n == _fa_cache_cap) {
+            int nc = _fa_cache_cap ? _fa_cache_cap * 2 : 16;
+            FrameAnalysisCache *n = (FrameAnalysisCache *)realloc(
+                _fa_cache, sizeof(FrameAnalysisCache) * (size_t)nc);
+            if (!n) vm_debug_panic("[UNCALL] cache analisi: memoria esaurita\n");
+            _fa_cache = n;
+            _fa_cache_cap = nc;
+        }
+        FrameAnalysisCache e;
+        e.base   = char_id_strdup(base);
+        e.ifs    = malloc(sizeof(IfDescriptor) * (size_t)_frame_ifs_cap);
+        if (!e.ifs) vm_debug_panic("[UNCALL] cache analisi: memoria esaurita\n");
+        e.nloops = collect_loops(vm, frame_name, orig, &e.loops);
+        e.nifs   = collect_ifs  (vm, frame_name, orig, e.ifs, _frame_ifs_cap);
+        e.npars  = collect_par_ranges(orig, vm->frames[fi_reset]->addr + 1,
+                                      vm->frames[fi_reset]->end_addr, &e.pars);
+        _fa_hit = _fa_cache_n;
+        _fa_cache[_fa_cache_n++] = e;
     }
-    IfDescriptor *_fb_ifs_heap = NULL;
-    if (_fa_hit >= 0) {
-        loops  = _fa_cache[_fa_hit].loops;  nloops = _fa_cache[_fa_hit].nloops;
-        ifs    = _fa_cache[_fa_hit].ifs;    nifs   = _fa_cache[_fa_hit].nifs;
-        pars   = _fa_cache[_fa_hit].pars;   npars  = _fa_cache[_fa_hit].npars;
-    } else {
-        /* Cache piena: arrays di fallback (ifs heap per frame profondi). */
-        static __thread LoopDescriptor _fb_loops[MAX_LOOPS];
-        static __thread ParRange       _fb_pars [MAX_PARS];
-        _fb_ifs_heap = malloc(sizeof(IfDescriptor) * (size_t)_frame_ifs_cap);
-        loops = _fb_loops; ifs = _fb_ifs_heap; pars = _fb_pars;
-        nloops = collect_loops(vm, frame_name, orig, loops, MAX_LOOPS);
-        nifs   = collect_ifs  (vm, frame_name, orig, ifs,   _frame_ifs_cap);
-        npars  = collect_par_ranges(orig, vm->frames[fi_reset]->addr + 1,
-                                    vm->frames[fi_reset]->end_addr, pars, MAX_PARS);
-    }
+    loops  = _fa_cache[_fa_hit].loops;  nloops = _fa_cache[_fa_hit].nloops;
+    ifs    = _fa_cache[_fa_hit].ifs;    nifs   = _fa_cache[_fa_hit].nifs;
+    pars   = _fa_cache[_fa_hit].pars;   npars  = _fa_cache[_fa_hit].npars;
 
-    char cur_frame[VAR_NAME_LENGTH]; strncpy(cur_frame, frame_name, VAR_NAME_LENGTH - 1);
+    VM_LINE_COPY(cur_frame, frame_name);
     uint fi       = get_findex(cur_frame);
     uint start_ln = vm->frames[fi_reset]->addr + 1;
     (void)start_ln;
@@ -1060,12 +1120,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                              strncmp(frame_name, "__mn_divmod_nonneg_fast", 23) != 0);
     int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
 
-    /* Heap, dimensionato allo span del proc: con [MAX_LINES=1024] fisso una
+    /* Heap, dimensionato allo span del proc: con un [1024] fisso una
      * procedura > 1024 righe (es. fill con store a indice runtime su array di
      * ~95+ elementi: disj-chain profonda) veniva troncata in coda → push/delocal
      * del loop-guard esterno (lc1) fuori dalla collection → lc1 non ricreato in
      * inverse → "MINEQ: variabile lc1 è NULL". span = start - stop. */
-    size_t lp_cap = (start > stop) ? (size_t)(start - stop) + 2 : MAX_LINES;
+    size_t lp_cap = (start > stop) ? (size_t)(start - stop) + 2 : 2;
     char   **lp    = malloc(sizeof(char *)  * lp_cap);
     uint    *ln    = malloc(sizeof(uint)    * lp_cap);
     uint8_t *lp_op = malloc(sizeof(uint8_t) * lp_cap);
@@ -1181,8 +1241,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
          * guardia d'ingresso b1 è vera solo nello stato pre-loop — così da
          * produrre I(c1) [I(c2) I(c1)]*, speculare a c1 [c2 c1]* forward. */
         if (lz == LOOP_ZONE_START_LABEL && li >= 0 && loops[li].from_back_line) {
-            do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_op,
-                    loops[li].eval_entry_val);
+            do_eval(vm, fi, vm_name_get(loops[li].eval_entry_id), loops[li].eval_entry_op,
+                    vm_name_get(loops[li].eval_entry_val));
             if (thread_val_IF) {
                 /* Stato pre-loop raggiunto: niente altro c2 da invertire. Chiude
                  * sul JMPF FROM_ERR, esattamente come il layout a un corpo. */
@@ -1215,13 +1275,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             }
             if (_is_bit_k_signed &&
                 loop_entry_eq_zero_guard(loops, li) &&
-                !strcmp(loops[li].eval_entry_id, "i") &&
+                !strcmp(vm_name_get(loops[li].eval_entry_id), "i") &&
                 bit_k_loop_skipped_forward(vm, fi)) {
                 i--;
                 continue;
             }
-            do_eval(vm, fi, loops[li].eval_entry_id, loops[li].eval_entry_op,
-                    loops[li].eval_entry_val);
+            do_eval(vm, fi, vm_name_get(loops[li].eval_entry_id), loops[li].eval_entry_op,
+                    vm_name_get(loops[li].eval_entry_val));
             #ifdef MNEMO_AGENT_LOG
             mn_dbg_log_loop("B", "JMPF_ERR", frame_name, _iter_count, i, nl,
                             (int)thread_val_IF,
@@ -1258,13 +1318,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             }
             if (_is_bit_k_signed &&
                 loop_entry_eq_zero_guard(loops, li) &&
-                !strcmp(loops[li].eval_entry_id, "i") &&
+                !strcmp(vm_name_get(loops[li].eval_entry_id), "i") &&
                 bit_k_loop_skipped_forward(vm, fi)) {
                 i--;
                 continue;
             }
-            do_eval(vm, fi, loops[li].eval_exit_id, loops[li].eval_exit_op,
-                    loops[li].eval_exit_val);
+            do_eval(vm, fi, vm_name_get(loops[li].eval_exit_id), loops[li].eval_exit_op,
+                    vm_name_get(loops[li].eval_exit_val));
             /* Forward: exit loop se exit-cond vera (senza jmp). Inverse: mentre il corpo da
                questa iterazione non è stato completamente inverted, ripeti da prima
                dell'EVAL until; quando la guardia coincide con uscita inversa, solo i--.
@@ -1303,12 +1363,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
              * cursor. Attivo solo se proc base matches trace_proc. */
             int trace_path_active = 0;
             if (vm->branch_trace_active > 0) {
-                char fb[VAR_NAME_LENGTH];
-                strncpy(fb, cur_frame, VAR_NAME_LENGTH - 1);
-                fb[VAR_NAME_LENGTH - 1] = '\0';
-                char *fb_at = strchr(fb, '@');
-                if (fb_at) *fb_at = '\0';
-                if (!strcmp(fb, vm->branch_trace_proc)) trace_path_active = 1;
+                if (vm_base_eq(cur_frame, vm_name_get(vm->branch_trace_proc))) trace_path_active = 1;
             }
             /* IF dentro un loop body: la branch_trace FIFO non si allinea al peel
              * inverso; usa recompute (do_eval_if_entry), affidabile qui. */
@@ -1338,7 +1393,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                         Stack sv = vm->frames[fi]->LocalVariables;
                         stack_init(&vm->frames[fi]->LocalVariables);
                         exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
-                        vm->frames[fi]->LocalVariables = sv;
+                        stack_restore(&vm->frames[fi]->LocalVariables, sv);
                     }
                     int t = -1;
                     for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
@@ -1357,7 +1412,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     Stack sv = vm->frames[fi]->LocalVariables;
                     stack_init(&vm->frames[fi]->LocalVariables);
                     exec_branch_inverse(vm, orig, cur_frame, else_from, else_to, fi);
-                    vm->frames[fi]->LocalVariables = sv;
+                    stack_restore(&vm->frames[fi]->LocalVariables, sv);
                 }
                 uint then_from = ifs[ii].jmpf_else_line + 1;
                 uint then_to = ifs[ii].jmp_fi_line;
@@ -1365,7 +1420,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                     Stack sv = vm->frames[fi]->LocalVariables;
                     stack_init(&vm->frames[fi]->LocalVariables);
                     exec_branch_inverse(vm, orig, cur_frame, then_from, then_to, fi);
-                    vm->frames[fi]->LocalVariables = sv;
+                    stack_restore(&vm->frames[fi]->LocalVariables, sv);
                 }
             } else {
                 do_eval_if_branch(vm, fi, &ifs[ii]);
@@ -1391,7 +1446,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 Stack sv = vm->frames[fi]->LocalVariables;
                 stack_init(&vm->frames[fi]->LocalVariables);
                 exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
-                vm->frames[fi]->LocalVariables = sv;
+                stack_restore(&vm->frames[fi]->LocalVariables, sv);
                 check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
             }
             int t = -1;
@@ -1438,12 +1493,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 mn_native_pool_load_inv(vm, get_findex(frame_name));
                 i--; continue;
             }
-            char base_cur[VAR_NAME_LENGTH];
-            strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
-            base_cur[VAR_NAME_LENGTH - 1] = '\0';
-            char *at_cur = strchr(base_cur, '@');
-            if (at_cur) *at_cur = '\0';
-            int is_rec = (strcmp(pn, base_cur) == 0);
+            /* Ricorsiva se pn è il nome base del frame corrente. */
+            int is_rec = vm_base_eq(frame_name, pn);
             int new_depth = 0;
             if (is_rec) {
                 const char *atf = strchr(frame_name, '@');
@@ -1459,13 +1510,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                                                      : char_id_map_get(&FrameIndexer, pn));
             uint curi = get_findex(frame_name);
             int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
-            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+            VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int j = 0;
             while ((p = strtok(NULL, " \t")) && j < pc) {
                 int si = char_id_map_get(&vm->frames[curi]->VarIndexer, p);
                 vm->frames[cfi]->vars[pi[j++]] = vm->frames[curi]->vars[si];
             }
-            char target[VAR_NAME_LENGTH];
+            VM_FRAME_KEY_BUF(target, pn);
             if (is_rec && current_thread_args) {
                 make_frame_key_par_rec(pn, new_depth, target, sizeof(target));
             } else if (is_rec) {
@@ -1485,12 +1536,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             int trace_did_pop_x = 0;
             uint base_fi_x = 0;
             if (vm->branch_trace_active > 0 && vm->frames[cfi]->trace_window_top > 0) {
-                char pb_c[VAR_NAME_LENGTH];
-                strncpy(pb_c, pn, VAR_NAME_LENGTH - 1);
-                pb_c[VAR_NAME_LENGTH - 1] = '\0';
-                char *pbc_at = strchr(pb_c, '@');
-                if (pbc_at) *pbc_at = '\0';
-                if (!strcmp(pb_c, vm->branch_trace_proc)) {
+                if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
                     int win = vm->frames[cfi]->trace_window_stack[--vm->frames[cfi]->trace_window_top];
                     vm->frames[cfi]->trace_window_start = win;
                     vm->frames[cfi]->trace_window_cursor = 0;
@@ -1513,18 +1559,15 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 vm->frames[base_fi_x]->trace_window_cursor = saved_base_win_cursor_x;
             }
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
+            VM_PARAM_SAVE_FREE(sv);
             i--; continue;
         }
         if (op_tag == INVOP_UNCALL) {
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
-            char base_cur[VAR_NAME_LENGTH];
-            strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
-            base_cur[VAR_NAME_LENGTH - 1] = '\0';
-            char *at_cur = strchr(base_cur, '@');
-            if (at_cur) *at_cur = '\0';
-            int is_rec = (strcmp(pn, base_cur) == 0);
+            /* Ricorsiva se pn è il nome base del frame corrente. */
+            int is_rec = vm_base_eq(frame_name, pn);
             int new_depth = 0;
             if (is_rec) {
                 const char *atf = strchr(frame_name, '@');
@@ -1540,13 +1583,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                                                      : char_id_map_get(&FrameIndexer, pn));
             uint curi = fi;
             int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
-            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+            VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int j = 0;
             while ((p = strtok(NULL, " \t")) && j < pc) {
                 int si = char_id_map_get(&vm->frames[curi]->VarIndexer, p);
                 vm->frames[cfi]->vars[pi[j++]] = vm->frames[curi]->vars[si];
             }
-            char cn[VAR_NAME_LENGTH];
+            VM_FRAME_KEY_BUF(cn, pn);
             if (is_rec && current_thread_args) {
                 make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
             } else if (is_rec) {
@@ -1584,6 +1627,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             vm->invert_hist_floor_min = saved_fm;
             vm->suppress_show = ss;
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
+            VM_PARAM_SAVE_FREE(sv);
             i--; continue;
         }
 
@@ -1600,6 +1644,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             if (par_ptr) {
                 ParBlock pb = scan_par_block(par_ptr);
                 exec_par_threads(vm, orig, cur_frame, &pb, 1, 1);
+                par_block_free(&pb);
             }
             i--; continue;
         }
@@ -1646,7 +1691,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
     free(_arena);
     free(lp); free(ln); free(lp_op);
-    free(_fb_ifs_heap);
     /* orig non strduped → niente free(orig) */
     #ifdef MNEMO_AGENT_LOG
     if (strstr(frame_name, "move_int")) {
@@ -1665,10 +1709,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     VMLOG("[INVERT] completata, righe processate=%d\n", nl);
     vm->inversion_depth--;
     /* orig = buffer (no strdup), niente free */
-#undef MAX_LOOPS
-#undef MAX_IFS
-#undef MAX_LINES
-#undef MAX_PARS
 }
 
 /* ======================================================================
@@ -1752,8 +1792,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     if (from_line >= to_line) return;
 
     uint cfi = get_findex(frame_name);
-    /* snapshot vars dimensionato sulla capacità dinamica del frame (= MAX_VARS
-     * per i programmi noti → identico al vecchio buffer statico). */
+    /* snapshot vars dimensionato sulla capacità dinamica del frame. */
     int _vcap = vm->frames[cfi]->vars_cap > 0 ? vm->frames[cfi]->vars_cap : 1;
     Var **saved = (Var **)malloc(sizeof(Var *) * (size_t)_vcap);
     memcpy(saved, vm->frames[cfi]->vars, sizeof(Var *) * (size_t)_vcap);
@@ -1775,7 +1814,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             vm->frames[cfi]->vars[v]        = calloc(1, sizeof(Var));
             vm->frames[cfi]->vars[v]->T     = TYPE_INT;
             vm->frames[cfi]->vars[v]->value = calloc(1, sizeof(int64_t));
-            if (saved[v]) strncpy(vm->frames[cfi]->vars[v]->name, saved[v]->name, VAR_NAME_LENGTH - 1);
+            vm->frames[cfi]->vars[v]->name  = char_id_strdup(saved[v] ? saved[v]->name : "");
             tmp_alloc[v] = vm->frames[cfi]->vars[v];
         }
     }
@@ -1879,7 +1918,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     Stack sv2 = vm->frames[cfi]->LocalVariables;
                     stack_init(&vm->frames[cfi]->LocalVariables);
                     exec_branch_inverse(vm, original_buffer, frame_name, bf, bt, caller_fi);
-                    vm->frames[cfi]->LocalVariables = sv2;
+                    stack_restore(&vm->frames[cfi]->LocalVariables, sv2);
                 }
                 /* Jump idx a prima dell'EVAL del nested IF. */
                 int t = -1;
@@ -1910,11 +1949,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             if (!strcmp(fw, "CALL")) {
                 vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
-                char base_cur_c[VAR_NAME_LENGTH];
-                strncpy(base_cur_c, frame_name, VAR_NAME_LENGTH - 1);
-                base_cur_c[VAR_NAME_LENGTH - 1] = '\0';
-                char *at_cur_c = strchr(base_cur_c, '@'); if (at_cur_c) *at_cur_c = '\0';
-                int is_rec_c = (strcmp(pn, base_cur_c) == 0);
+                /* Ricorsiva se pn è il nome base del frame corrente. */
+                int is_rec_c = vm_base_eq(frame_name, pn);
                 int new_depth_c = 0;
                 if (is_rec_c) {
                     const char *atf = strchr(frame_name, '@');
@@ -1930,7 +1966,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                                                                    : char_id_map_get(&FrameIndexer, pn));
                 int pc_c = vm->frames[callee_fi_c]->param_count;
                 int *pi_c = vm->frames[callee_fi_c]->param_indices;
-                Var *sv_c[64];
+                VM_PARAM_SAVE(sv_c, pc_c);
                 for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c]->vars[pi_c[k]];
                 Stack slv_c = vm->frames[callee_fi_c]->LocalVariables;
                 stack_init(&vm->frames[callee_fi_c]->LocalVariables);
@@ -1940,7 +1976,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3c);
                     vm->frames[callee_fi_c]->vars[pi_c[jjc++]] = vm->frames[cfi]->vars[si];
                 }
-                char target_c[VAR_NAME_LENGTH];
+                VM_FRAME_KEY_BUF(target_c, pn);
                 if (is_rec_c && current_thread_args) make_frame_key_par_rec(pn, new_depth_c, target_c, sizeof(target_c));
                 else if (is_rec_c) make_frame_key(pn, new_depth_c, target_c, sizeof(target_c));
                 else if (current_thread_args) make_thread_frame_key(pn, target_c, sizeof(target_c));
@@ -1952,12 +1988,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 uint base_fi_eb = 0;
                 if (vm->branch_trace_active > 0 &&
                     vm->frames[callee_fi_c]->trace_window_top > 0) {
-                    char pb_eb[VAR_NAME_LENGTH];
-                    strncpy(pb_eb, pn, VAR_NAME_LENGTH - 1);
-                    pb_eb[VAR_NAME_LENGTH - 1] = '\0';
-                    char *pbeb_at = strchr(pb_eb, '@');
-                    if (pbeb_at) *pbeb_at = '\0';
-                    if (!strcmp(pb_eb, vm->branch_trace_proc)) {
+                    if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
                         int win = vm->frames[callee_fi_c]->trace_window_stack
                                   [--vm->frames[callee_fi_c]->trace_window_top];
                         vm->frames[callee_fi_c]->trace_window_start = win;
@@ -1978,7 +2009,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     vm->frames[base_fi_eb]->trace_window_cursor = saved_bwc_eb;
                 }
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c]->vars[pi_c[k]] = sv_c[k];
-                vm->frames[callee_fi_c]->LocalVariables = slv_c;
+                stack_restore(&vm->frames[callee_fi_c]->LocalVariables, slv_c);
+                VM_PARAM_SAVE_FREE(sv_c);
             }
             else if (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
@@ -2003,6 +2035,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         }
         for (int j = 0; j < nl; j++) free(lp[j]);
         free(lp); free(ln);
+        if_descs_free(ifs, nifs2);
         free(ifs);
     } else {
         int lines_cap = (to_line > from_line) ? (int)(to_line - from_line) + 2 : 2;
@@ -2028,12 +2061,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                    new_depth dal frame_name (@1, @_1, …) e usa clone_frame_for_depth. */
                 vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
-                char base_cur_c[VAR_NAME_LENGTH];
-                strncpy(base_cur_c, frame_name, VAR_NAME_LENGTH - 1);
-                base_cur_c[VAR_NAME_LENGTH - 1] = '\0';
-                char *at_cur_c = strchr(base_cur_c, '@');
-                if (at_cur_c) *at_cur_c = '\0';
-                int is_rec_c = (strcmp(pn, base_cur_c) == 0);
+                /* Ricorsiva se pn è il nome base del frame corrente. */
+                int is_rec_c = vm_base_eq(frame_name, pn);
                 int new_depth_c = 0;
                 if (is_rec_c) {
                     const char *atf = strchr(frame_name, '@');
@@ -2049,7 +2078,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                                                                    : char_id_map_get(&FrameIndexer, pn));
                 int  pc_c = vm->frames[callee_fi_c]->param_count;
                 int *pi_c = vm->frames[callee_fi_c]->param_indices;
-                Var *sv_c[64];
+                VM_PARAM_SAVE(sv_c, pc_c);
                 for (int k = 0; k < pc_c; k++) sv_c[k] = vm->frames[callee_fi_c]->vars[pi_c[k]];
                 Stack slv_c = vm->frames[callee_fi_c]->LocalVariables;
                 stack_init(&vm->frames[callee_fi_c]->LocalVariables);
@@ -2059,7 +2088,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3c);
                     vm->frames[callee_fi_c]->vars[pi_c[jjc++]] = vm->frames[cfi]->vars[si];
                 }
-                char target_c[VAR_NAME_LENGTH];
+                VM_FRAME_KEY_BUF(target_c, pn);
                 if (is_rec_c && current_thread_args) {
                     make_frame_key_par_rec(pn, new_depth_c, target_c, sizeof(target_c));
                 } else if (is_rec_c) {
@@ -2077,12 +2106,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 uint base_fi_eb2 = 0;
                 if (vm->branch_trace_active > 0 &&
                     vm->frames[callee_fi_c]->trace_window_top > 0) {
-                    char pb_eb2[VAR_NAME_LENGTH];
-                    strncpy(pb_eb2, pn, VAR_NAME_LENGTH - 1);
-                    pb_eb2[VAR_NAME_LENGTH - 1] = '\0';
-                    char *peb2_at = strchr(pb_eb2, '@');
-                    if (peb2_at) *peb2_at = '\0';
-                    if (!strcmp(pb_eb2, vm->branch_trace_proc)) {
+                    if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
                         int win = vm->frames[callee_fi_c]->trace_window_stack
                                   [--vm->frames[callee_fi_c]->trace_window_top];
                         vm->frames[callee_fi_c]->trace_window_start = win;
@@ -2103,19 +2127,16 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     vm->frames[base_fi_eb2]->trace_window_cursor = saved_bwc_eb2;
                 }
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c]->vars[pi_c[k]] = sv_c[k];
-                vm->frames[callee_fi_c]->LocalVariables = slv_c;
+                stack_restore(&vm->frames[callee_fi_c]->LocalVariables, slv_c);
+                VM_PARAM_SAVE_FREE(sv_c);
                 continue;
             }
 
             if (!strcmp(fw, "UNCALL")) {
                 vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
-                char base_cur[VAR_NAME_LENGTH];
-                strncpy(base_cur, frame_name, VAR_NAME_LENGTH - 1);
-                base_cur[VAR_NAME_LENGTH - 1] = '\0';
-                char *at_cur = strchr(base_cur, '@');
-                if (at_cur) *at_cur = '\0';
-                int is_rec = (strcmp(pn, base_cur) == 0);
+                /* Ricorsiva se pn è il nome base del frame corrente. */
+                int is_rec = vm_base_eq(frame_name, pn);
                 int new_depth = 0;
                 if (is_rec) {
                     const char *atf = strchr(frame_name, '@');
@@ -2130,7 +2151,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                                         : (current_thread_args ? clone_frame_for_thread(vm, pn)
                                                                : char_id_map_get(&FrameIndexer, pn));
                 int  pc = vm->frames[callee_fi]->param_count, *pi = vm->frames[callee_fi]->param_indices;
-                Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi]->vars[pi[k]];
+                VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi]->vars[pi[k]];
                 Stack slv = vm->frames[callee_fi]->LocalVariables;
                 stack_init(&vm->frames[callee_fi]->LocalVariables);
                 char *p3 = NULL; int jj = 0;
@@ -2138,7 +2159,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3);
                     vm->frames[callee_fi]->vars[pi[jj++]] = vm->frames[cfi]->vars[si];
                 }
-                char cn[VAR_NAME_LENGTH];
+                VM_FRAME_KEY_BUF(cn, pn);
                 if (is_rec && current_thread_args) {
                     make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
                 } else if (is_rec) {
@@ -2162,7 +2183,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 vm->invert_hist_floor_min = saved_fm;
                 vm->suppress_show = ss;
                 for (int k = 0; k < pc; k++) vm->frames[callee_fi]->vars[pi[k]] = sv[k];
-                vm->frames[callee_fi]->LocalVariables = slv;
+                stack_restore(&vm->frames[callee_fi]->LocalVariables, slv);
+                VM_PARAM_SAVE_FREE(sv);
                 continue;
             }
 
@@ -2192,7 +2214,8 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
 
     for (int v = 0; v < vm->frames[cfi]->var_count && v < _vcap; v++)
         if (tmp_alloc[v] && vm->frames[cfi]->vars[v] == tmp_alloc[v]) {
-            free(tmp_alloc[v]->value); free(tmp_alloc[v]); vm->frames[cfi]->vars[v] = NULL;
+            free(tmp_alloc[v]->value); free(tmp_alloc[v]->name); free(tmp_alloc[v]);
+            vm->frames[cfi]->vars[v] = NULL;
         }
 
     /* Restore SOLO gli slot param relinkati al caller (vedi 1525-1531).
@@ -2210,7 +2233,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         if (pidx < _vcap)
             vm->frames[cfi]->vars[pidx] = saved[pidx];
     }
-    vm->frames[cfi]->LocalVariables = saved_lv;
+    stack_restore(&vm->frames[cfi]->LocalVariables, saved_lv);
     free(saved);
     free(tmp_alloc);
 }

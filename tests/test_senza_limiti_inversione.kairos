@@ -1,0 +1,685 @@
+// Nessun limite nelle strutture del motore di inversione dinamico (uncall di
+// procedure non ricorsive): 40 cicli in una procedura e 40 cicli annidati
+// (prima al più 32, gli altri ignorati: qui il più interno gira tre volte), 40 par in una procedura (prima 32,
+// le istruzioni dei par in più venivano invertite due volte), una guardia di
+// if lunga oltre 256 caratteri (prima errore esplicito). Ogni call è seguita
+// dall'uncall e i delocal controllano che lo stato torni quello di partenza.
+procedure cicli(int x)
+    local int i = 0
+    from i == 0 do
+        x += 1
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 2
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 3
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 4
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 5
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 6
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 7
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 8
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 9
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 10
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 11
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 12
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 13
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 14
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 15
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 16
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 17
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 18
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 19
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 20
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 21
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 22
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 23
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 24
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 25
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 26
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 27
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 28
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 29
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 30
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 31
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 32
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 33
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 34
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 35
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 36
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 37
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 38
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 39
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+    local int i = 0
+    from i == 0 do
+        x += 40
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+
+procedure annidati(int x)
+    local int i0 = 0
+    from i0 == 0 do
+        local int i1 = 0
+        from i1 == 0 do
+            local int i2 = 0
+            from i2 == 0 do
+                local int i3 = 0
+                from i3 == 0 do
+                    local int i4 = 0
+                    from i4 == 0 do
+                        local int i5 = 0
+                        from i5 == 0 do
+                            local int i6 = 0
+                            from i6 == 0 do
+                                local int i7 = 0
+                                from i7 == 0 do
+                                    local int i8 = 0
+                                    from i8 == 0 do
+                                        local int i9 = 0
+                                        from i9 == 0 do
+                                            local int i10 = 0
+                                            from i10 == 0 do
+                                                local int i11 = 0
+                                                from i11 == 0 do
+                                                    local int i12 = 0
+                                                    from i12 == 0 do
+                                                        local int i13 = 0
+                                                        from i13 == 0 do
+                                                            local int i14 = 0
+                                                            from i14 == 0 do
+                                                                local int i15 = 0
+                                                                from i15 == 0 do
+                                                                    local int i16 = 0
+                                                                    from i16 == 0 do
+                                                                        local int i17 = 0
+                                                                        from i17 == 0 do
+                                                                            local int i18 = 0
+                                                                            from i18 == 0 do
+                                                                                local int i19 = 0
+                                                                                from i19 == 0 do
+                                                                                    local int i20 = 0
+                                                                                    from i20 == 0 do
+                                                                                        local int i21 = 0
+                                                                                        from i21 == 0 do
+                                                                                            local int i22 = 0
+                                                                                            from i22 == 0 do
+                                                                                                local int i23 = 0
+                                                                                                from i23 == 0 do
+                                                                                                    local int i24 = 0
+                                                                                                    from i24 == 0 do
+                                                                                                        local int i25 = 0
+                                                                                                        from i25 == 0 do
+                                                                                                            local int i26 = 0
+                                                                                                            from i26 == 0 do
+                                                                                                                local int i27 = 0
+                                                                                                                from i27 == 0 do
+                                                                                                                    local int i28 = 0
+                                                                                                                    from i28 == 0 do
+                                                                                                                        local int i29 = 0
+                                                                                                                        from i29 == 0 do
+                                                                                                                            local int i30 = 0
+                                                                                                                            from i30 == 0 do
+                                                                                                                                local int i31 = 0
+                                                                                                                                from i31 == 0 do
+                                                                                                                                    local int i32 = 0
+                                                                                                                                    from i32 == 0 do
+                                                                                                                                        local int i33 = 0
+                                                                                                                                        from i33 == 0 do
+                                                                                                                                            local int i34 = 0
+                                                                                                                                            from i34 == 0 do
+                                                                                                                                                local int i35 = 0
+                                                                                                                                                from i35 == 0 do
+                                                                                                                                                    local int i36 = 0
+                                                                                                                                                    from i36 == 0 do
+                                                                                                                                                        local int i37 = 0
+                                                                                                                                                        from i37 == 0 do
+                                                                                                                                                            local int i38 = 0
+                                                                                                                                                            from i38 == 0 do
+                                                                                                                                                                local int i39 = 0
+                                                                                                                                                                from i39 == 0 do
+                                                                                                                                                                    x += 1
+                                                                                                                                                                    i39 += 1
+                                                                                                                                                                loop until i39 == 3
+                                                                                                                                                                delocal int i39 = 3
+                                                                                                                                                                i38 += 1
+                                                                                                                                                            loop until i38 == 1
+                                                                                                                                                            delocal int i38 = 1
+                                                                                                                                                            i37 += 1
+                                                                                                                                                        loop until i37 == 1
+                                                                                                                                                        delocal int i37 = 1
+                                                                                                                                                        i36 += 1
+                                                                                                                                                    loop until i36 == 1
+                                                                                                                                                    delocal int i36 = 1
+                                                                                                                                                    i35 += 1
+                                                                                                                                                loop until i35 == 1
+                                                                                                                                                delocal int i35 = 1
+                                                                                                                                                i34 += 1
+                                                                                                                                            loop until i34 == 1
+                                                                                                                                            delocal int i34 = 1
+                                                                                                                                            i33 += 1
+                                                                                                                                        loop until i33 == 1
+                                                                                                                                        delocal int i33 = 1
+                                                                                                                                        i32 += 1
+                                                                                                                                    loop until i32 == 1
+                                                                                                                                    delocal int i32 = 1
+                                                                                                                                    i31 += 1
+                                                                                                                                loop until i31 == 1
+                                                                                                                                delocal int i31 = 1
+                                                                                                                                i30 += 1
+                                                                                                                            loop until i30 == 1
+                                                                                                                            delocal int i30 = 1
+                                                                                                                            i29 += 1
+                                                                                                                        loop until i29 == 1
+                                                                                                                        delocal int i29 = 1
+                                                                                                                        i28 += 1
+                                                                                                                    loop until i28 == 1
+                                                                                                                    delocal int i28 = 1
+                                                                                                                    i27 += 1
+                                                                                                                loop until i27 == 1
+                                                                                                                delocal int i27 = 1
+                                                                                                                i26 += 1
+                                                                                                            loop until i26 == 1
+                                                                                                            delocal int i26 = 1
+                                                                                                            i25 += 1
+                                                                                                        loop until i25 == 1
+                                                                                                        delocal int i25 = 1
+                                                                                                        i24 += 1
+                                                                                                    loop until i24 == 1
+                                                                                                    delocal int i24 = 1
+                                                                                                    i23 += 1
+                                                                                                loop until i23 == 1
+                                                                                                delocal int i23 = 1
+                                                                                                i22 += 1
+                                                                                            loop until i22 == 1
+                                                                                            delocal int i22 = 1
+                                                                                            i21 += 1
+                                                                                        loop until i21 == 1
+                                                                                        delocal int i21 = 1
+                                                                                        i20 += 1
+                                                                                    loop until i20 == 1
+                                                                                    delocal int i20 = 1
+                                                                                    i19 += 1
+                                                                                loop until i19 == 1
+                                                                                delocal int i19 = 1
+                                                                                i18 += 1
+                                                                            loop until i18 == 1
+                                                                            delocal int i18 = 1
+                                                                            i17 += 1
+                                                                        loop until i17 == 1
+                                                                        delocal int i17 = 1
+                                                                        i16 += 1
+                                                                    loop until i16 == 1
+                                                                    delocal int i16 = 1
+                                                                    i15 += 1
+                                                                loop until i15 == 1
+                                                                delocal int i15 = 1
+                                                                i14 += 1
+                                                            loop until i14 == 1
+                                                            delocal int i14 = 1
+                                                            i13 += 1
+                                                        loop until i13 == 1
+                                                        delocal int i13 = 1
+                                                        i12 += 1
+                                                    loop until i12 == 1
+                                                    delocal int i12 = 1
+                                                    i11 += 1
+                                                loop until i11 == 1
+                                                delocal int i11 = 1
+                                                i10 += 1
+                                            loop until i10 == 1
+                                            delocal int i10 = 1
+                                            i9 += 1
+                                        loop until i9 == 1
+                                        delocal int i9 = 1
+                                        i8 += 1
+                                    loop until i8 == 1
+                                    delocal int i8 = 1
+                                    i7 += 1
+                                loop until i7 == 1
+                                delocal int i7 = 1
+                                i6 += 1
+                            loop until i6 == 1
+                            delocal int i6 = 1
+                            i5 += 1
+                        loop until i5 == 1
+                        delocal int i5 = 1
+                        i4 += 1
+                    loop until i4 == 1
+                    delocal int i4 = 1
+                    i3 += 1
+                loop until i3 == 1
+                delocal int i3 = 1
+                i2 += 1
+            loop until i2 == 1
+            delocal int i2 = 1
+            i1 += 1
+        loop until i1 == 1
+        delocal int i1 = 1
+        i0 += 1
+    loop until i0 == 1
+    delocal int i0 = 1
+
+procedure tanti_par(int x, int y)
+    par
+        x += 1
+    and
+        y += 1
+    rap
+    par
+        x += 2
+    and
+        y += 1
+    rap
+    par
+        x += 3
+    and
+        y += 1
+    rap
+    par
+        x += 4
+    and
+        y += 1
+    rap
+    par
+        x += 5
+    and
+        y += 1
+    rap
+    par
+        x += 6
+    and
+        y += 1
+    rap
+    par
+        x += 7
+    and
+        y += 1
+    rap
+    par
+        x += 8
+    and
+        y += 1
+    rap
+    par
+        x += 9
+    and
+        y += 1
+    rap
+    par
+        x += 10
+    and
+        y += 1
+    rap
+    par
+        x += 11
+    and
+        y += 1
+    rap
+    par
+        x += 12
+    and
+        y += 1
+    rap
+    par
+        x += 13
+    and
+        y += 1
+    rap
+    par
+        x += 14
+    and
+        y += 1
+    rap
+    par
+        x += 15
+    and
+        y += 1
+    rap
+    par
+        x += 16
+    and
+        y += 1
+    rap
+    par
+        x += 17
+    and
+        y += 1
+    rap
+    par
+        x += 18
+    and
+        y += 1
+    rap
+    par
+        x += 19
+    and
+        y += 1
+    rap
+    par
+        x += 20
+    and
+        y += 1
+    rap
+    par
+        x += 21
+    and
+        y += 1
+    rap
+    par
+        x += 22
+    and
+        y += 1
+    rap
+    par
+        x += 23
+    and
+        y += 1
+    rap
+    par
+        x += 24
+    and
+        y += 1
+    rap
+    par
+        x += 25
+    and
+        y += 1
+    rap
+    par
+        x += 26
+    and
+        y += 1
+    rap
+    par
+        x += 27
+    and
+        y += 1
+    rap
+    par
+        x += 28
+    and
+        y += 1
+    rap
+    par
+        x += 29
+    and
+        y += 1
+    rap
+    par
+        x += 30
+    and
+        y += 1
+    rap
+    par
+        x += 31
+    and
+        y += 1
+    rap
+    par
+        x += 32
+    and
+        y += 1
+    rap
+    par
+        x += 33
+    and
+        y += 1
+    rap
+    par
+        x += 34
+    and
+        y += 1
+    rap
+    par
+        x += 35
+    and
+        y += 1
+    rap
+    par
+        x += 36
+    and
+        y += 1
+    rap
+    par
+        x += 37
+    and
+        y += 1
+    rap
+    par
+        x += 38
+    and
+        y += 1
+    rap
+    par
+        x += 39
+    and
+        y += 1
+    rap
+    par
+        x += 40
+    and
+        y += 1
+    rap
+
+procedure guardia(int x, int valore_di_riferimento_unitario)
+    if x == ((valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario) - (valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario)) then
+        x += 5
+    else
+        x += 7
+    fi x == (((valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario) - (valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario + valore_di_riferimento_unitario)) + 5)
+
+procedure main()
+    int x
+    int y
+    int u
+    u += 1
+    call cicli(x)
+    show(x)
+    local int chk = 0
+    chk += x
+    delocal int chk = 2460
+    uncall cicli(x)
+    call annidati(x)
+    show(x)
+    uncall annidati(x)
+    call tanti_par(x, y)
+    show(x)
+    show(y)
+    uncall tanti_par(x, y)
+    call guardia(x, u)
+    show(x)
+    uncall guardia(x, u)
+    local int fine = 0
+    fine += x
+    fine += y
+    delocal int fine = 0

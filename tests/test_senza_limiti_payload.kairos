@@ -1,0 +1,350 @@
+// Nessun limite sul payload di ssend/srecv: 70 interi più uno stack di 1000
+// elementi in un solo messaggio (la VM leggeva al più 64 token, e il buffer
+// del canale partiva da 128 celle). Le due procedure hanno 72 parametri.
+// Il delocal di somma e lo svuotamento dello stack ricevuto controllano che
+// sia arrivato tutto. In fondo un intero oltre i 32 bit attraverso il canale
+// (il ramo rendezvous di srecv lo troncava a int).
+procedure riempi(stack s, int n)
+    local int i = 0
+    from i == 0 do
+        local int v = 0
+        v += i
+        push(v, s)
+        delocal int v = 0
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+procedure svuota(stack c, int n)
+    local int j = n
+    from j == n do
+        j -= 1
+        local int w = 0
+        pop(w, c)
+        w -= j
+        delocal int w = 0
+    loop until j == 0
+    delocal int j = 0
+
+procedure manda(channel t, int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7, int a8, int a9, int a10, int a11, int a12, int a13, int a14, int a15, int a16, int a17, int a18, int a19, int a20, int a21, int a22, int a23, int a24, int a25, int a26, int a27, int a28, int a29, int a30, int a31, int a32, int a33, int a34, int a35, int a36, int a37, int a38, int a39, int a40, int a41, int a42, int a43, int a44, int a45, int a46, int a47, int a48, int a49, int a50, int a51, int a52, int a53, int a54, int a55, int a56, int a57, int a58, int a59, int a60, int a61, int a62, int a63, int a64, int a65, int a66, int a67, int a68, int a69, stack s)
+    ssend(<a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31, a32, a33, a34, a35, a36, a37, a38, a39, a40, a41, a42, a43, a44, a45, a46, a47, a48, a49, a50, a51, a52, a53, a54, a55, a56, a57, a58, a59, a60, a61, a62, a63, a64, a65, a66, a67, a68, a69, s>, t)
+
+procedure ricevi(channel t, int b0, int b1, int b2, int b3, int b4, int b5, int b6, int b7, int b8, int b9, int b10, int b11, int b12, int b13, int b14, int b15, int b16, int b17, int b18, int b19, int b20, int b21, int b22, int b23, int b24, int b25, int b26, int b27, int b28, int b29, int b30, int b31, int b32, int b33, int b34, int b35, int b36, int b37, int b38, int b39, int b40, int b41, int b42, int b43, int b44, int b45, int b46, int b47, int b48, int b49, int b50, int b51, int b52, int b53, int b54, int b55, int b56, int b57, int b58, int b59, int b60, int b61, int b62, int b63, int b64, int b65, int b66, int b67, int b68, int b69, stack r)
+    srecv(<b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16, b17, b18, b19, b20, b21, b22, b23, b24, b25, b26, b27, b28, b29, b30, b31, b32, b33, b34, b35, b36, b37, b38, b39, b40, b41, b42, b43, b44, b45, b46, b47, b48, b49, b50, b51, b52, b53, b54, b55, b56, b57, b58, b59, b60, b61, b62, b63, b64, b65, b66, b67, b68, b69, r>, t)
+
+procedure manda_uno(channel t, int a)
+    ssend(<a>, t)
+
+procedure ricevi_uno(channel t, int b)
+    srecv(<b>, t)
+
+procedure main()
+    channel t
+    int a0
+    int a1
+    int a2
+    int a3
+    int a4
+    int a5
+    int a6
+    int a7
+    int a8
+    int a9
+    int a10
+    int a11
+    int a12
+    int a13
+    int a14
+    int a15
+    int a16
+    int a17
+    int a18
+    int a19
+    int a20
+    int a21
+    int a22
+    int a23
+    int a24
+    int a25
+    int a26
+    int a27
+    int a28
+    int a29
+    int a30
+    int a31
+    int a32
+    int a33
+    int a34
+    int a35
+    int a36
+    int a37
+    int a38
+    int a39
+    int a40
+    int a41
+    int a42
+    int a43
+    int a44
+    int a45
+    int a46
+    int a47
+    int a48
+    int a49
+    int a50
+    int a51
+    int a52
+    int a53
+    int a54
+    int a55
+    int a56
+    int a57
+    int a58
+    int a59
+    int a60
+    int a61
+    int a62
+    int a63
+    int a64
+    int a65
+    int a66
+    int a67
+    int a68
+    int a69
+    int b0
+    int b1
+    int b2
+    int b3
+    int b4
+    int b5
+    int b6
+    int b7
+    int b8
+    int b9
+    int b10
+    int b11
+    int b12
+    int b13
+    int b14
+    int b15
+    int b16
+    int b17
+    int b18
+    int b19
+    int b20
+    int b21
+    int b22
+    int b23
+    int b24
+    int b25
+    int b26
+    int b27
+    int b28
+    int b29
+    int b30
+    int b31
+    int b32
+    int b33
+    int b34
+    int b35
+    int b36
+    int b37
+    int b38
+    int b39
+    int b40
+    int b41
+    int b42
+    int b43
+    int b44
+    int b45
+    int b46
+    int b47
+    int b48
+    int b49
+    int b50
+    int b51
+    int b52
+    int b53
+    int b54
+    int b55
+    int b56
+    int b57
+    int b58
+    int b59
+    int b60
+    int b61
+    int b62
+    int b63
+    int b64
+    int b65
+    int b66
+    int b67
+    int b68
+    int b69
+    stack s
+    stack r
+    a0 += 1
+    a1 += 2
+    a2 += 3
+    a3 += 4
+    a4 += 5
+    a5 += 6
+    a6 += 7
+    a7 += 8
+    a8 += 9
+    a9 += 10
+    a10 += 11
+    a11 += 12
+    a12 += 13
+    a13 += 14
+    a14 += 15
+    a15 += 16
+    a16 += 17
+    a17 += 18
+    a18 += 19
+    a19 += 20
+    a20 += 21
+    a21 += 22
+    a22 += 23
+    a23 += 24
+    a24 += 25
+    a25 += 26
+    a26 += 27
+    a27 += 28
+    a28 += 29
+    a29 += 30
+    a30 += 31
+    a31 += 32
+    a32 += 33
+    a33 += 34
+    a34 += 35
+    a35 += 36
+    a36 += 37
+    a37 += 38
+    a38 += 39
+    a39 += 40
+    a40 += 41
+    a41 += 42
+    a42 += 43
+    a43 += 44
+    a44 += 45
+    a45 += 46
+    a46 += 47
+    a47 += 48
+    a48 += 49
+    a49 += 50
+    a50 += 51
+    a51 += 52
+    a52 += 53
+    a53 += 54
+    a54 += 55
+    a55 += 56
+    a56 += 57
+    a57 += 58
+    a58 += 59
+    a59 += 60
+    a60 += 61
+    a61 += 62
+    a62 += 63
+    a63 += 64
+    a64 += 65
+    a65 += 66
+    a66 += 67
+    a67 += 68
+    a68 += 69
+    a69 += 70
+    local int n = 1000
+    call riempi(s, n)
+    par
+        manda(t, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31, a32, a33, a34, a35, a36, a37, a38, a39, a40, a41, a42, a43, a44, a45, a46, a47, a48, a49, a50, a51, a52, a53, a54, a55, a56, a57, a58, a59, a60, a61, a62, a63, a64, a65, a66, a67, a68, a69, s)
+    and
+        ricevi(t, b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16, b17, b18, b19, b20, b21, b22, b23, b24, b25, b26, b27, b28, b29, b30, b31, b32, b33, b34, b35, b36, b37, b38, b39, b40, b41, b42, b43, b44, b45, b46, b47, b48, b49, b50, b51, b52, b53, b54, b55, b56, b57, b58, b59, b60, b61, b62, b63, b64, b65, b66, b67, b68, b69, r)
+    rap
+    local int somma = 0
+    somma += b0
+    somma += b1
+    somma += b2
+    somma += b3
+    somma += b4
+    somma += b5
+    somma += b6
+    somma += b7
+    somma += b8
+    somma += b9
+    somma += b10
+    somma += b11
+    somma += b12
+    somma += b13
+    somma += b14
+    somma += b15
+    somma += b16
+    somma += b17
+    somma += b18
+    somma += b19
+    somma += b20
+    somma += b21
+    somma += b22
+    somma += b23
+    somma += b24
+    somma += b25
+    somma += b26
+    somma += b27
+    somma += b28
+    somma += b29
+    somma += b30
+    somma += b31
+    somma += b32
+    somma += b33
+    somma += b34
+    somma += b35
+    somma += b36
+    somma += b37
+    somma += b38
+    somma += b39
+    somma += b40
+    somma += b41
+    somma += b42
+    somma += b43
+    somma += b44
+    somma += b45
+    somma += b46
+    somma += b47
+    somma += b48
+    somma += b49
+    somma += b50
+    somma += b51
+    somma += b52
+    somma += b53
+    somma += b54
+    somma += b55
+    somma += b56
+    somma += b57
+    somma += b58
+    somma += b59
+    somma += b60
+    somma += b61
+    somma += b62
+    somma += b63
+    somma += b64
+    somma += b65
+    somma += b66
+    somma += b67
+    somma += b68
+    somma += b69
+    show(somma)
+    delocal int somma = 2485
+    show(a0)
+    show(b69)
+    call svuota(r, n)
+    show(r)
+    show(s)
+    delocal int n = 1000
+    local int grande = 5000000000
+    local int arrivato = 0
+    par
+        manda_uno(t, grande)
+    and
+        ricevi_uno(t, arrivato)
+    rap
+    show(arrivato)
+    delocal int arrivato = 5000000000
+    delocal int grande = 0

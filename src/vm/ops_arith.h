@@ -289,9 +289,7 @@ static inline void op_poolpush(VM *vm, const char *frame_name)
     int64_t v = *cell;
     *cell = 0;
     pthread_mutex_unlock(&mn_pool_mtx);
-    sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int64_t));
-    if (!sv->value) vm_debug_panic("realloc failed\n");
-    sv->value[sv->stack_len++] = v;
+    var_stack_push(sv, v);
 }
 
 static inline void op_poolpop(VM *vm, const char *frame_name)
@@ -303,9 +301,7 @@ static inline void op_poolpop(VM *vm, const char *frame_name)
     int64_t idx = resolve_value(vm, fi, C_idx);
     Var *sv = mn_pool_stack_var(vm, fi, C_stk, "POOLPOP");
     if (sv->stack_len == 0) vm_debug_panic("[VM] POOLPOP: stack vuoto!\n");
-    int64_t v = sv->value[--sv->stack_len];
-    if (sv->stack_len > 0)
-        sv->value = realloc(sv->value, sv->stack_len * sizeof(int64_t));
+    int64_t v = sv->value[--sv->stack_len];   /* la capacità resta per i push */
     pthread_mutex_lock(&mn_pool_mtx);
     *mn_pool_at(vm, idx) += v;
     pthread_mutex_unlock(&mn_pool_mtx);

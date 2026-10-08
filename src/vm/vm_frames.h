@@ -8,15 +8,16 @@
 
 void vm_debug_panic(const char *fmt, ...);
 
-/* Cap di sicurezza per la profondità di ricorsione dei frame clonati.
- * Forward la profondità reale è piccola (cifre ≤ 19 per __mn_putd_uint,
- * divmod mnhalve ≤ ~64). L'inverse (UNCALL) col fallback recursion_depth-replay
- * (vm_invert.h ~riga 1130) NON termina per procedure con struttura
- * "1×THEN per livello poi base ELSE" (es. __mn_putd_uint): clona @1,@2,@3,…
- * all'infinito → OOM/hang. Questo cap non si attiva mai su inversione corretta;
- * trasforma il runaway in errore pulito (exit 1). Fix definitivo (branch_trace
- * whole-program o putd non-ricorsivo) in TODO. */
-#define MN_CLONE_MAX_DEPTH 512
+/* Profondità di ricorsione: nessun massimo. Ogni livello è un frame clonato
+ * ("proc@<depth>") che costa poche centinaia di byte più le variabili della
+ * procedura. Il vecchio tetto (512) serviva a trasformare in errore la
+ * ricorsione inversa non terminante del replay per recursion_depth sulle
+ * primitive di stampa Mnemo (__mn_putd_uint sotto --check-invertibility):
+ * quel caso oggi non arriva più qui, perché l'inverso delle CALL __mn_put*
+ * è saltato in invert_op_to_line (identità sullo stato), e la ricorsione
+ * delle procedure utente gira in avanti sul corpo inverso compilato
+ * (<proc>__inv, src/frontend/inverse.py). Una ricorsione davvero infinita si
+ * comporta come in qualunque linguaggio: consuma memoria finché c'è. */
 
 /* ======================================================================
  *  Frames dynamic capacity
@@ -27,17 +28,17 @@ void vm_debug_panic(const char *fmt, ...);
  */
 static inline void vm_ensure_frame_cap(VM *vm, uint needed)
 {
-    /* Grow del pointer array vm->frames se needed >= cap. Ogni slot vuoto. */
-    if (needed >= vm->frames_cap) {
+    /* Grow del pointer array vm->frames se needed >= cap. Ogni slot vuoto.
+     * Gli altri thread leggono vm->frames[fi] senza lock (ogni istruzione di
+     * ogni ramo di un par): il vettore vecchio non si libera, lo si sostituisce
+     * con uno più grande pubblicato in un colpo solo (vm_grow_keep). Con la
+     * ricorsione senza tetto il vettore cresce davvero anche dentro un par. */
+    if (needed >= vm->frames_cap || !vm->frames) {
         uint new_cap = vm->frames_cap ? vm->frames_cap : VM_FRAMES_INIT_CAP;
         while (new_cap <= needed) new_cap *= 2;
-        Frame **nf = (Frame **)realloc(vm->frames, sizeof(Frame *) * new_cap);
-        if (!nf) {
-            fprintf(stderr, "[VM] vm_ensure_frame_cap: realloc(%u) fallita\n", new_cap);
-            exit(1);
-        }
-        memset(nf + vm->frames_cap, 0, sizeof(Frame *) * (new_cap - vm->frames_cap));
-        vm->frames = nf;
+        Frame **nf = (Frame **)vm_grow_keep(vm->frames, sizeof(Frame *) * vm->frames_cap,
+                                            sizeof(Frame *) * new_cap);
+        __atomic_store_n(&vm->frames, nf, __ATOMIC_RELEASE);
         vm->frames_cap = new_cap;
     }
     /* Alloca Frame individuale per lo slot needed se ancora NULL. */
@@ -61,9 +62,19 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     Frame *base  = vm->frames[base_fi];
     Frame *clone = vm->frames[clone_fi];
 
+    /* Slot riusato (indici dei frame riciclati dal pattern opt-uncall di
+     * Mnemo): le mappe e il nome del clone precedente sono sull'heap. */
+    char_id_map_destroy(&clone->VarIndexer);
+    char_id_map_destroy(&clone->LabelIndexer);
+    free(clone->name);
+    stack_release(&clone->LocalVariables);
+
     memset(clone, 0, sizeof(Frame));
-    clone->VarIndexer   = base->VarIndexer;
-    clone->LabelIndexer = base->LabelIndexer;
+    /* Copia profonda: il clone inserisce i suoi LOCAL nella sua mappa. */
+    char_id_map_copy(&clone->VarIndexer,   &base->VarIndexer);
+    char_id_map_copy(&clone->LabelIndexer, &base->LabelIndexer);
+    clone->names_hint   = base->names_hint;
+    clone->locals_hint  = base->locals_hint;
     clone->addr         = base->addr;
     clone->end_addr     = base->end_addr;
     clone->var_count    = base->var_count;
@@ -80,12 +91,14 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
         frame_ensure_labels(clone, base->label_cap - 1);
         memcpy(clone->label, base->label, sizeof(uint) * (size_t)base->label_cap);
     }
-    snprintf(clone->name, VAR_NAME_LENGTH, "%s", key);
+    clone->name = char_id_strdup(key);
     stack_init(&clone->LocalVariables);
 
     /* memset ha azzerato clone->vars (NULL) e vars_cap (0): alloca il buffer
-     * heap del clone prima di scriverci (gli slot Var* restano NULL). */
-    frame_ensure_vars(clone, base->var_count);
+     * heap del clone prima di scriverci (gli slot Var* restano NULL), della
+     * stessa capacità del base. */
+    frame_ensure_vars(clone, base->vars_cap > base->var_count ? base->vars_cap - 1
+                                                              : base->var_count);
 
     for (int k = 0; k < clone->param_count; k++) {
         int pidx = clone->param_indices[k];
@@ -100,7 +113,7 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
             exit(1);
         }
         clone->vars[pidx] = calloc(1, sizeof(Var));
-        strncpy(clone->vars[pidx]->name, base->vars[pidx]->name, VAR_NAME_LENGTH - 1);
+        clone->vars[pidx]->name = char_id_strdup(base->vars[pidx]->name);
         clone->vars[pidx]->T = TYPE_PARAM;
     }
 
@@ -147,14 +160,8 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
 
 static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 {
-    if (depth > MN_CLONE_MAX_DEPTH)
-        vm_debug_panic(
-            "[VM] clone depth %d > %d su '%s' — ricorsione inversa non "
-            "terminante (recursion_depth-replay non adatto a questa proc, "
-            "es. __mn_putd_uint/printf sotto --check-invertibility). Vedi TODO.\n",
-            depth, MN_CLONE_MAX_DEPTH, proc);
     pthread_mutex_lock(&var_indexer_mtx);
-    char key[VAR_NAME_LENGTH];
+    VM_FRAME_KEY_BUF(key, proc);
     if (current_thread_args)
         make_frame_key_par_rec(proc, depth, key, sizeof(key));
     else
@@ -173,7 +180,7 @@ static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 
 static inline uint clone_frame_for_thread(VM *vm, const char *proc)
 {
-    char key[VAR_NAME_LENGTH];
+    VM_FRAME_KEY_BUF(key, proc);
     make_thread_frame_key(proc, key, sizeof(key));
 
     /* Cammino veloce senza esclusione. L'indice dei frame e' append-only e

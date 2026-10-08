@@ -1,0 +1,45 @@
+// Nessun limite sulla profondità di ricorsione: 3000 livelli con call e uncall
+// (la VM si fermava oltre 512 frame clonati), poi due rami di un par che
+// ricorrono ciascuno 1500 livelli insieme, così che anche il vettore dei frame
+// cresca mentre l'altro thread lo legge.
+procedure giu(int m, int k)
+    if k == 0 then
+        m += 1
+    else
+        k -= 1
+        call giu(m, k)
+        k += 1
+        m += 2
+    fi k == 0
+
+procedure main()
+    local int a = 0
+    local int n = 3000
+    call giu(a, n)
+    show(a)
+    uncall giu(a, n)
+    show(a)
+    delocal int n = 3000
+    delocal int a = 0
+
+    local int p = 0
+    local int q = 0
+    local int np = 1500
+    local int nq = 1500
+    par
+        call giu(p, np)
+    and
+        call giu(q, nq)
+    rap
+    show(p)
+    show(q)
+    local int somma = 0
+    somma += p
+    somma += q
+    delocal int somma = 6002
+    uncall giu(q, nq)
+    uncall giu(p, np)
+    delocal int nq = 1500
+    delocal int np = 1500
+    delocal int q = 0
+    delocal int p = 0

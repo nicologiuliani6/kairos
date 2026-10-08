@@ -33,10 +33,9 @@ static int vm_debug_line_inside_par(const char *src, int target_line)
     while (line && *line) {
         const char *nl = strchr(line, '\n');
         size_t len = nl ? (size_t)(nl - line) : strlen(line);
-        char row[DBG_INSTR_LEN];
-        size_t cpy = len < sizeof(row) - 1 ? len : sizeof(row) - 1;
-        memcpy(row, line, cpy);
-        row[cpy] = '\0';
+        char row[len + 1];              /* riga intera, della sua misura */
+        memcpy(row, line, len);
+        row[len] = '\0';
 
         const char *at = strchr(line, '@');
         int srcline = at ? atoi(at + 1) : 0;
@@ -52,11 +51,9 @@ static int vm_debug_line_inside_par(const char *src, int target_line)
             continue;
         }
 
-        char op[32];
-        int oi = 0;
-        while (*p && *p != ' ' && *p != '\t' && oi < (int)sizeof(op) - 1)
-            op[oi++] = *p++;
-        op[oi] = '\0';
+        char *op = p;                   /* primo token, terminato sul posto */
+        while (*p && *p != ' ' && *p != '\t') p++;
+        *p = '\0';
         if (op[0] == '\0') {
             line = nl ? (nl + 1) : NULL;
             continue;
@@ -77,13 +74,14 @@ static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
 {
     if (!dbg || !g_debug_src_raw) return -1;
 
+    /* Breakpoint dell'utente messi da parte durante il rebuild: tutti. */
     int bp_count = dbg->bp_count;
-    int bps[DBG_MAX_BREAKPOINTS];
-    if (bp_count > DBG_MAX_BREAKPOINTS) bp_count = DBG_MAX_BREAKPOINTS;
+    int *bps = (int *)malloc(sizeof(int) * (size_t)(bp_count ? bp_count : 1));
+    if (!bps) return -1;
     for (int i = 0; i < bp_count; i++) bps[i] = dbg->breakpoints[i];
 
     char *src = strdup(g_debug_src_raw);
-    if (!src) return -1;
+    if (!src) { free(bps); return -1; }
 
     /* Mantieni stabile la stessa pipe output durante i rebuild (step-back/revert):
        il client DAP puo` aver gia` aperto il fd in lettura e non lo ri-chiede. */
@@ -101,8 +99,8 @@ static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
     dbg->first_pause_reached = 0;
     dbg->mode = VM_MODE_STEP;
     dbg->out_len = 0;
-    dbg->bp_count = bp_count;
-    for (int i = 0; i < bp_count; i++) dbg->breakpoints[i] = bps[i];
+    dbg->bp_count = 0;
+    for (int i = 0; i < bp_count; i++) _vm_debug_set_breakpoint(dbg, bps[i]);
 
     vm_debug_start(src, dbg);
     free(src);
@@ -121,8 +119,9 @@ static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
     (void)line;
     dbg->rebuild_active = 0;
     dbg->rebuild_target_top = -1;
-    dbg->bp_count = bp_count;
-    for (int i = 0; i < bp_count; i++) dbg->breakpoints[i] = bps[i];
+    dbg->bp_count = 0;
+    for (int i = 0; i < bp_count; i++) _vm_debug_set_breakpoint(dbg, bps[i]);
+    free(bps);
 
     dbg->suppress_output = 0;
     return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
@@ -258,16 +257,16 @@ int vm_debug_step_back(VMDebugState *dbg)
     /* Fallback sicuro per frame PAR/threaded: il rebuild completo puo` bloccare
        quando il breakpoint cade dentro un thread del blocco PAR (es. call consumer).
        In tal caso facciamo uno step-back "logico" sulla history senza rebuild. */
-    if ((strstr(dbg->current_frame, "@t") != NULL) ||
-        (dbg->history_top >= 0 && strstr(dbg->history[dbg->history_top].frame, "@t") != NULL) ||
+    if ((strstr(vm_name_get(dbg->current_frame), "@t") != NULL) ||
+        (dbg->history_top >= 0 && strstr(vm_name_get(dbg->history[dbg->history_top].frame), "@t") != NULL) ||
         in_par) {
         int target_top = dbg->history_top;
         if (dbg->history[target_top].line == dbg->current_line && target_top > 0)
             target_top--;
         dbg->history_top = target_top;
         dbg->current_line = dbg->history[target_top].line;
-        strncpy(dbg->current_frame, dbg->history[target_top].frame, VAR_NAME_LENGTH - 1);
-        dbg->current_frame[VAR_NAME_LENGTH - 1] = '\0';
+        vm_name_set(&dbg->current_frame, &dbg->current_frame_cap,
+                    vm_name_get(dbg->history[target_top].frame));
         return dbg->current_line;
     }
 
@@ -352,7 +351,7 @@ int vm_debug_dump_json_ext(VMDebugState *dbg, char *out, int outsz)
 int vm_debug_vars_json_ext(VMDebugState *dbg, char *out, int outsz)
 {
     if (!g_debug_vm || !out || !dbg) return 0;
-    return vm_debug_vars_json(g_debug_vm, dbg->current_frame, out, outsz);
+    return vm_debug_vars_json(g_debug_vm, vm_name_get(dbg->current_frame), out, outsz);
 }
 
 void vm_debug_stop(VMDebugState *dbg)
@@ -412,17 +411,24 @@ void vm_debug_clear_all_breakpoints(VMDebugState *dbg)
 
 int vm_debug_output_ext(VMDebugState *dbg, char *out, int outsz)
 {
-    if (!dbg || dbg->out_len == 0) return 0;
+    if (!dbg || !out || outsz <= 0) return 0;
+    pthread_mutex_lock(&dbg->out_mtx);
+    if (dbg->out_len == 0) { pthread_mutex_unlock(&dbg->out_mtx); return 0; }
     int n = dbg->out_len < outsz - 1 ? dbg->out_len : outsz - 1;
     memcpy(out, dbg->out_buf, n);
     out[n] = '\0';
-    dbg->out_len = 0;
+    /* Quel che non entra nel buffer del chiamante resta per la lettura dopo,
+       invece di andare perso. */
+    dbg->out_len -= n;
+    if (dbg->out_len > 0) memmove(dbg->out_buf, dbg->out_buf + n, (size_t)dbg->out_len);
+    dbg->out_buf[dbg->out_len] = '\0';
+    pthread_mutex_unlock(&dbg->out_mtx);
     return n;
 }
 
 int vm_debug_error_ext(VMDebugState *dbg, char *out, int outsz)
 {
-    if (!dbg || dbg->last_error[0] == '\0') return 0;
+    if (!dbg || !dbg->last_error || dbg->last_error[0] == '\0') return 0;
     int n = (int)strlen(dbg->last_error);
     if (n >= outsz) n = outsz - 1;
     memcpy(out, dbg->last_error, n);

@@ -13,39 +13,59 @@
 
 #ifdef DAP_MODE
 #include <unistd.h>
+#include <stdarg.h>
 extern VM *g_current_vm;
-#define vm_printf(...) do { \
-    VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL; \
-    if (_d) { \
-        if (_d->suppress_output) break; \
-        char _tmp[1024]; \
-        int _nw = snprintf(_tmp, sizeof(_tmp), __VA_ARGS__); \
-        if (_nw > 0) { \
-            if (_d->output_pipe_fd > 0) { \
-                /* Canale real-time */ \
-                (void)write(_d->output_pipe_fd, _tmp, (size_t)_nw); \
-            } \
-            /* Mantieni sempre anche il buffer interno come fallback/backup \
-               (alcuni client leggono vm_debug_output_ext invece della pipe \
-               in certi passaggi di stepback/revert). */ \
-            int _avail = DBG_OUTPUT_BUF_SIZE - _d->out_len - 1; \
-            if (_avail > 0) { \
-                int _copy = _nw < _avail ? _nw : _avail; \
-                memcpy(_d->out_buf + _d->out_len, _tmp, _copy); \
-                _d->out_len += _copy; \
-                _d->out_buf[_d->out_len] = '\0'; \
-            } \
-        } \
-    } \
-} while(0)
+/* Output in DAP_MODE: il testo si formatta in un buffer della sua misura (prima
+ * si misura, poi si scrive), quindi nessuna stampa viene troncata. */
+static void vm_dap_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void vm_dap_printf(const char *fmt, ...)
+{
+    VMDebugState *_d = g_current_vm ? g_current_vm->dbg : NULL;
+    if (!_d || _d->suppress_output) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int _nw = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (_nw <= 0) return;
+    char *_tmp = (char *)malloc((size_t)_nw + 1);
+    if (!_tmp) return;
+    va_start(ap, fmt);
+    vsnprintf(_tmp, (size_t)_nw + 1, fmt, ap);
+    va_end(ap);
+    if (_d->output_pipe_fd > 0) {
+        /* Canale real-time */
+        (void)write(_d->output_pipe_fd, _tmp, (size_t)_nw);
+    }
+    /* Mantieni sempre anche il buffer interno come fallback/backup
+       (alcuni client leggono vm_debug_output_ext invece della pipe
+       in certi passaggi di stepback/revert). Cresce su richiesta. */
+    pthread_mutex_lock(&_d->out_mtx);
+    if (_d->out_len + _nw + 1 > _d->out_cap) {
+        int nc = _d->out_cap ? _d->out_cap : DBG_OUT_INIT_CAP;
+        while (nc < _d->out_len + _nw + 1) nc *= 2;
+        char *nb = (char *)realloc(_d->out_buf, (size_t)nc);
+        if (nb) { _d->out_buf = nb; _d->out_cap = nc; }
+    }
+    if (_d->out_len + _nw + 1 <= _d->out_cap) {
+        memcpy(_d->out_buf + _d->out_len, _tmp, (size_t)_nw);
+        _d->out_len += _nw;
+        _d->out_buf[_d->out_len] = '\0';
+    }
+    pthread_mutex_unlock(&_d->out_mtx);
+    free(_tmp);
+}
+#define vm_printf(...) vm_dap_printf(__VA_ARGS__)
 #else
   #define vm_printf(...) printf(__VA_ARGS__)
 #endif
 
-#define IF_BRANCH_STACK_MAX 65536
-static __thread int if_branch_stack[IF_BRANCH_STACK_MAX];
-static __thread int if_branch_has_call_stack[IF_BRANCH_STACK_MAX];
-static __thread int if_branch_top = -1;
+/* Stack per-thread dei rami presi dagli IF in corso (per il controllo del FI
+ * in op_assert). La profondità è quella di annidamento a run time, ricorsione
+ * compresa: nessun massimo, i due vettori crescono raddoppiando. */
+static __thread int *if_branch_stack          = NULL;
+static __thread int *if_branch_has_call_stack = NULL;
+static __thread int  if_branch_cap            = 0;
+static __thread int  if_branch_top            = -1;
 
 static inline void vm_if_reset_branch_stack(void)
 {
@@ -58,55 +78,82 @@ static inline void vm_if_mark_call(void)
         if_branch_has_call_stack[if_branch_top] = 1;
 }
 
+static inline void vm_if_push_branch(int took_then)
+{
+    if (if_branch_top + 1 >= if_branch_cap) {
+        int nc = if_branch_cap ? if_branch_cap * 2 : 64;
+        int *a = (int *)realloc(if_branch_stack, sizeof(int) * (size_t)nc);
+        if (!a) vm_debug_panic("[VM] IF: memoria esaurita\n");
+        if_branch_stack = a;
+        int *b = (int *)realloc(if_branch_has_call_stack, sizeof(int) * (size_t)nc);
+        if (!b) vm_debug_panic("[VM] IF: memoria esaurita\n");
+        if_branch_has_call_stack = b;
+        if_branch_cap = nc;
+    }
+    if_branch_stack[++if_branch_top] = took_then;
+    if_branch_has_call_stack[if_branch_top] = 0;
+}
+
+/* Alla fine di un thread: i vettori sono __thread, li libera chi li ha creati. */
+static inline void vm_if_free_branch_stack(void)
+{
+    free(if_branch_stack);
+    free(if_branch_has_call_stack);
+    if_branch_stack = if_branch_has_call_stack = NULL;
+    if_branch_cap = 0;
+    if_branch_top = -1;
+}
+
 #define CHANNEL_REF_MARKER (-1001)
 
+/* Canali delocal'd ancora condivisi, da ripristinare se il LOCAL inverso li
+ * ricrea. Vettore che cresce, nomi sull'heap: nessun numero massimo di voci
+ * (prima oltre 4096 una voce si perdeva in silenzio). */
 typedef struct {
-    char proc[VAR_NAME_LENGTH];
-    char var[VAR_NAME_LENGTH];
+    char    *proc;
+    char    *var;
     Channel *channel;
 } ChannelRestoreEntry;
 
-#define CHANNEL_RESTORE_MAX 4096
-static ChannelRestoreEntry g_channel_restore[CHANNEL_RESTORE_MAX];
-static int g_channel_restore_top = 0;
+static ChannelRestoreEntry *g_channel_restore     = NULL;
+static int                  g_channel_restore_cap = 0;
+static int                  g_channel_restore_top = 0;
 static pthread_mutex_t g_channel_restore_mtx = PTHREAD_MUTEX_INITIALIZER;
-
-static inline void frame_base_name(const char *frame_name, char *out, size_t out_sz)
-{
-    size_t i = 0;
-    while (frame_name[i] && frame_name[i] != '@' && i + 1 < out_sz) {
-        out[i] = frame_name[i];
-        i++;
-    }
-    out[i] = '\0';
-}
 
 static inline void channel_restore_push(const char *frame_name, const char *var_name, Channel *ch)
 {
     if (!ch) return;
-    char proc[VAR_NAME_LENGTH];
-    frame_base_name(frame_name, proc, sizeof(proc));
+    VM_FRAME_BASE(proc, frame_name);
+    char *p = char_id_strdup(proc), *v = char_id_strdup(var_name);
     pthread_mutex_lock(&g_channel_restore_mtx);
-    if (g_channel_restore_top < CHANNEL_RESTORE_MAX) {
-        strncpy(g_channel_restore[g_channel_restore_top].proc, proc, VAR_NAME_LENGTH - 1);
-        g_channel_restore[g_channel_restore_top].proc[VAR_NAME_LENGTH - 1] = '\0';
-        strncpy(g_channel_restore[g_channel_restore_top].var, var_name, VAR_NAME_LENGTH - 1);
-        g_channel_restore[g_channel_restore_top].var[VAR_NAME_LENGTH - 1] = '\0';
-        g_channel_restore[g_channel_restore_top].channel = ch;
-        g_channel_restore_top++;
+    if (g_channel_restore_top >= g_channel_restore_cap) {
+        int nc = g_channel_restore_cap ? g_channel_restore_cap * 2 : 64;
+        ChannelRestoreEntry *n = (ChannelRestoreEntry *)realloc(
+            g_channel_restore, sizeof(ChannelRestoreEntry) * (size_t)nc);
+        if (!n) {
+            pthread_mutex_unlock(&g_channel_restore_mtx);
+            vm_debug_panic("[VM] channel restore: memoria esaurita\n");
+        }
+        g_channel_restore = n;
+        g_channel_restore_cap = nc;
     }
+    g_channel_restore[g_channel_restore_top].proc    = p;
+    g_channel_restore[g_channel_restore_top].var     = v;
+    g_channel_restore[g_channel_restore_top].channel = ch;
+    g_channel_restore_top++;
     pthread_mutex_unlock(&g_channel_restore_mtx);
 }
 
 static inline Channel *channel_restore_pop(const char *frame_name, const char *var_name)
 {
-    char proc[VAR_NAME_LENGTH];
-    frame_base_name(frame_name, proc, sizeof(proc));
+    VM_FRAME_BASE(proc, frame_name);
     pthread_mutex_lock(&g_channel_restore_mtx);
     for (int i = g_channel_restore_top - 1; i >= 0; i--) {
         if (strcmp(g_channel_restore[i].proc, proc) == 0 &&
             strcmp(g_channel_restore[i].var, var_name) == 0) {
             Channel *ch = g_channel_restore[i].channel;
+            free(g_channel_restore[i].proc);
+            free(g_channel_restore[i].var);
             g_channel_restore[i] = g_channel_restore[g_channel_restore_top - 1];
             g_channel_restore_top--;
             pthread_mutex_unlock(&g_channel_restore_mtx);
@@ -211,9 +258,7 @@ static inline void op_push(VM *vm, const char *frame_name)
             C_stack, sv->T, frame_name);
 
     if (sv->T == TYPE_STACK) {
-        sv->value = realloc(sv->value, (sv->stack_len + 1) * sizeof(int64_t));
-        if (!sv->value) vm_debug_panic("realloc failed\n");
-        sv->value[sv->stack_len++] = val;
+        var_stack_push(sv, val);
     } else {
         pthread_mutex_lock(&sv->channel->mtx);
         sv->channel->buf = realloc(sv->channel->buf, (sv->channel->buf_len + 1) * sizeof(int64_t));
@@ -239,10 +284,8 @@ static inline void op_pop(VM *vm, const char *frame_name)
     uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
     Var  *sv = vm->frames[fi]->vars[si];
 
-    if (vm->inversion_depth > 0) {
-        strncpy(vm->mn_hist_floor_pop_guard_cur_inv_proc, frame_name, VAR_NAME_LENGTH - 1);
-        vm->mn_hist_floor_pop_guard_cur_inv_proc[VAR_NAME_LENGTH - 1] = '\0';
-    }
+    if (vm->inversion_depth > 0)
+        vm->mn_hist_floor_pop_guard_cur_inv_fi1 = (int)fi + 1;   /* fi = indice di frame_name */
 
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL) vm_debug_panic("[VM] POP: sorgente non è stack/channel!\n");
     if (sv->T == TYPE_STACK && sv->stack_len == 0)
@@ -282,13 +325,11 @@ static inline void op_pop(VM *vm, const char *frame_name)
     } else {
         if (vm->invert_hist_guard_var && sv == vm->invert_hist_guard_var &&
             vm->inversion_depth > 0 && sv->stack_len <= vm->invert_hist_floor_min &&
-            vm->mn_hist_floor_pop_guard_anchor[0] != '\0' &&
-            strcmp(vm->mn_hist_floor_pop_guard_cur_inv_proc, vm->mn_hist_floor_pop_guard_anchor) == 0)
+            vm->mn_hist_floor_pop_guard_anchor_fi1 != 0 &&
+            vm->mn_hist_floor_pop_guard_cur_inv_fi1 == vm->mn_hist_floor_pop_guard_anchor_fi1)
             vm_debug_panic(
                 "[VM] POP: __mn_hist sotto il pavimento mnemo (manca __mn_hist_floor_snap?)\n");
-        popped = sv->value[--sv->stack_len];
-        if (sv->stack_len > 0)
-            sv->value = realloc(sv->value, sv->stack_len * sizeof(int64_t));
+        popped = sv->value[--sv->stack_len];   /* la capacità resta per i push */
     }
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
@@ -320,13 +361,28 @@ static inline void op_pop(VM *vm, const char *frame_name)
         notify_sender_turn_done(sender_to_wake);
 }
 
+/* Token di SSEND/SRECV (valori del payload più il canale): quanti sono. Sullo
+ * stack del C finché sono pochi, sull'heap oltre. I token puntano nella riga
+ * corrente, che resta viva per tutta l'istruzione. */
+#define VM_TOKV_SMALL 16
+#define VM_TOKV_COLLECT(tokv, ntok) \
+    char *tokv##_small[VM_TOKV_SMALL]; char **tokv = tokv##_small; \
+    int tokv##_cap = VM_TOKV_SMALL, ntok = 0; \
+    for (char *_t; (_t = strtok(NULL, " \t")); ) { \
+        if (ntok == tokv##_cap) { \
+            char **_n = (char **)malloc(sizeof(char *) * (size_t)tokv##_cap * 2); \
+            if (!_n) vm_debug_panic("[VM] payload: memoria esaurita\n"); \
+            memcpy(_n, tokv, sizeof(char *) * (size_t)ntok); \
+            if (tokv != tokv##_small) free(tokv); \
+            tokv = _n; tokv##_cap *= 2; \
+        } \
+        tokv[ntok++] = _t; \
+    }
+#define VM_TOKV_FREE(tokv) do { if (tokv != tokv##_small) free(tokv); } while (0)
+
 static inline void op_ssend(VM *vm, const char *frame_name)
 {
-    char *tokv[64];
-    int ntok = 0;
-    char *tok = NULL;
-    while ((tok = strtok(NULL, " \t")) && ntok < 64)
-        tokv[ntok++] = tok;
+    VM_TOKV_COLLECT(tokv, ntok);
 
     if (ntok < 2)
         vm_debug_panic("[VM] SSEND: formato errato (atteso SSEND <v1 ...> <channel>)\n");
@@ -378,7 +434,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
             } else if (src->T == TYPE_STACK) {
                 size_t n = src->stack_len;
                 ENC_PUSH((int)TYPE_STACK);
-                ENC_PUSH((int)n);
+                ENC_PUSH((int64_t)n);       /* lunghezza intera, non troncata a int */
                 for (size_t k = 0; k < n; k++)
                     ENC_PUSH(src->value[k]);
                 src->stack_len = 0;
@@ -394,7 +450,8 @@ static inline void op_ssend(VM *vm, const char *frame_name)
             }
         } else {
             ENC_PUSH((int)TYPE_INT);
-            ENC_PUSH((int)strtoul(src_tok, NULL, 10));
+            /* Valore a 64 bit come nel ramo variabile: (int)strtoul lo troncava. */
+            ENC_PUSH((int64_t)strtoull(src_tok, NULL, 10));
         }
     }
 
@@ -427,6 +484,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
     }
     pthread_mutex_unlock(&chv->channel->mtx);
     free(encoded);
+    VM_TOKV_FREE(tokv);
 
 #undef ENC_PUSH
 
@@ -459,7 +517,7 @@ static inline size_t peek_ssend_payload_words(Channel *ch, int recv_count)
         } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
             if (read_idx >= buf_len)
                 return 0;
-            int n = ch->buf[read_idx++];
+            int64_t n = ch->buf[read_idx++];
             if (n < 0 || read_idx + (size_t)n > buf_len)
                 return 0;
             read_idx += (size_t)n;
@@ -472,11 +530,7 @@ static inline size_t peek_ssend_payload_words(Channel *ch, int recv_count)
 
 static inline void op_srecv(VM *vm, const char *frame_name)
 {
-    char *tokv[64];
-    int ntok = 0;
-    char *tok = NULL;
-    while ((tok = strtok(NULL, " \t")) && ntok < 64)
-        tokv[ntok++] = tok;
+    VM_TOKV_COLLECT(tokv, ntok);
 
     if (ntok < 2)
         vm_debug_panic("[VM] SRECV: formato errato (atteso SRECV <v1 ...> <channel>)\n");
@@ -581,11 +635,7 @@ mutex_mailbox_retry:
                     vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
                 }
                 if (n > 0) {
-                    dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int64_t));
-                    if (!dest->value) {
-                        pthread_mutex_unlock(&chv->channel->mtx);
-                        vm_debug_panic("realloc failed\n");
-                    }
+                    var_stack_reserve(dest, dest->stack_len + (size_t)n);
                     memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int64_t));
                     dest->stack_len += (size_t)n;
                 }
@@ -616,6 +666,7 @@ mutex_mailbox_retry:
         }
         pthread_mutex_unlock(&chv->channel->mtx);
         notify_sender_turn_done(sender_to_wake);
+        VM_TOKV_FREE(tokv);
         return;
     }
     pthread_mutex_unlock(&chv->channel->mtx);
@@ -647,7 +698,7 @@ mutex_mailbox_retry:
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: payload int incompleto\n");
             }
-            int popped = chv->channel->buf[read_idx++];
+            int64_t popped = chv->channel->buf[read_idx++];   /* era int: troncava i valori a 32 bit */
             if (dest->T != TYPE_INT) {
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
@@ -702,7 +753,7 @@ mutex_mailbox_retry:
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
             }
-            int n = chv->channel->buf[read_idx++];
+            int64_t n = chv->channel->buf[read_idx++];
             if (n < 0 || read_idx + (size_t)n > chv->channel->buf_len) {
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
@@ -712,11 +763,7 @@ mutex_mailbox_retry:
                 vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
             }
             if (n > 0) {
-                dest->value = realloc(dest->value, (dest->stack_len + (size_t)n) * sizeof(int64_t));
-                if (!dest->value) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("realloc failed\n");
-                }
+                var_stack_reserve(dest, dest->stack_len + (size_t)n);
                 memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int64_t));
                 dest->stack_len += (size_t)n;
             }
@@ -741,6 +788,7 @@ mutex_mailbox_retry:
     pthread_mutex_unlock(&chv->channel->mtx);
 
     notify_sender_turn_done(sender_to_wake);
+    VM_TOKV_FREE(tokv);
 }
 
 /* ======================================================================
@@ -936,32 +984,25 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf, int cur_line)
     /* JMPF con target ELSE_* identifica il branching di IF.
        Memorizziamo il ramo scelto per validare poi la condizione FI in ASSERT. */
     if (lbl && !strncmp(lbl, "ELSE_", 5)) {
-        if (if_branch_top + 1 >= IF_BRANCH_STACK_MAX) {
-            vm_debug_panic("[VM] IF stack overflow durante JMPF\n");
-        }
-        if_branch_stack[++if_branch_top] = thread_val_IF ? 1 : 0;
-        if_branch_has_call_stack[if_branch_top] = 0;
+        vm_if_push_branch(thread_val_IF ? 1 : 0);
         /* Fix P3 trace push solo se siamo dentro opt-uncall pattern
          * Mnemo (delimitato da __mn_hist_floor_snap…UNCALL match) E
          * proc corrente base matches branch_trace_proc. Procs diverse
          * non interferiscono (loro inverse usa legacy depth path). */
         if (vm->branch_trace_active > 0) {
-            char proc_base[VAR_NAME_LENGTH];
-            strncpy(proc_base, fname, VAR_NAME_LENGTH - 1);
-            proc_base[VAR_NAME_LENGTH - 1] = '\0';
-            char *pb_at = strchr(proc_base, '@');
-            if (pb_at) *pb_at = '\0';
+            int same_proc = vm_base_eq(fname, vm_name_get(vm->branch_trace_proc));
             /* IF dentro un from-loop del callee: NON pushare (l'inverse li
              * recomputa via line_inside_loop_body, non consuma il cursor della
              * window → pusharli disallineerebbe la LIFO degli IF top-level). */
             int inside_loop = 0;
-            if (!strcmp(proc_base, vm->branch_trace_proc)) {
+            if (same_proc) {
+                const uint *lohi = vm->bt_loop_lohi;
                 for (int _li = 0; _li < vm->bt_loop_n; _li++) {
-                    if ((uint)cur_line > vm->bt_loop_lo[_li] &&
-                        (uint)cur_line < vm->bt_loop_hi[_li]) { inside_loop = 1; break; }
+                    if ((uint)cur_line > lohi[2 * _li] &&
+                        (uint)cur_line < lohi[2 * _li + 1]) { inside_loop = 1; break; }
                 }
             }
-            if (!strcmp(proc_base, vm->branch_trace_proc) && !inside_loop) {
+            if (same_proc && !inside_loop) {
                 if ((uint)vm->branch_trace_top >= vm->branch_trace_cap) {
                     uint new_cap = vm->branch_trace_cap ? vm->branch_trace_cap * 2 : VM_BRANCH_TRACE_INIT_CAP;
                     int *nb = (int *)realloc(vm->branch_trace, sizeof(int) * new_cap);
@@ -1065,6 +1106,7 @@ static inline void op_local(VM *vm, const char *frame_name)
         if (src->T == TYPE_INT)
             *(dst->value) = *(src->value);
         else if (src->T == TYPE_STACK) {
+            var_stack_reserve(dst, src->stack_len);
             dst->stack_len = src->stack_len;
             memcpy(dst->value, src->value, src->stack_len * sizeof(int64_t));
         } else {
@@ -1206,12 +1248,12 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 static inline void mn_native_pool_load_inv(VM *vm, uint cfi_cur)
 {
     Frame *f = vm->frames[cfi_cur];
-    char *a; char w0[VAR_NAME_LENGTH] = {0}, w1[VAR_NAME_LENGTH] = {0}, w2[VAR_NAME_LENGTH] = {0};
+    /* Gli ultimi tre argomenti: puntatori nella riga corrente, viva per tutta
+     * l'istruzione, invece di copie a lunghezza fissa. */
+    char *a; const char *w0 = "", *w1 = "", *w2 = "";
     int n = 0;
     while ((a = strtok(NULL, " \t"))) {
-        strncpy(w0, w1, VAR_NAME_LENGTH - 1); w0[VAR_NAME_LENGTH-1]='\0';
-        strncpy(w1, w2, VAR_NAME_LENGTH - 1); w1[VAR_NAME_LENGTH-1]='\0';
-        strncpy(w2, a,  VAR_NAME_LENGTH - 1); w2[VAR_NAME_LENGTH-1]='\0';
+        w0 = w1; w1 = w2; w2 = a;
         n++;
     }
     if (n < 4) vm_debug_panic("[VM] native __mn_pool_load inv: pochi arg (%d)\n", n);

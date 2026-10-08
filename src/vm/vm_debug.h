@@ -43,8 +43,10 @@ static inline void dbg_init(VMDebugState *dbg)
     dbg->rebuild_target_top = -1;
     dbg->ignore_breakpoint_once_line = -1;
     dbg->bp_count    = 0;
+    vm_name_set(&dbg->current_frame, &dbg->current_frame_cap, "");
     pthread_mutex_init(&dbg->pause_mtx, NULL);
     pthread_cond_init (&dbg->pause_cond, NULL);
+    pthread_mutex_init(&dbg->out_mtx, NULL);
     dbg->initialized = 1;
 }
 
@@ -53,6 +55,20 @@ static inline void dbg_destroy(VMDebugState *dbg)
     if (!dbg || !dbg->initialized) return;
     pthread_mutex_destroy(&dbg->pause_mtx);
     pthread_cond_destroy (&dbg->pause_cond);
+    pthread_mutex_destroy(&dbg->out_mtx);
+    for (int i = 0; i < dbg->history_cap; i++) {
+        free(dbg->history[i].frame);
+        free(dbg->history[i].instr);
+    }
+    free(dbg->history);
+    free(dbg->breakpoints);
+    free(dbg->out_buf);
+    free(dbg->last_error);
+    vm_grow_free(dbg->current_frame);
+    dbg->history = NULL; dbg->breakpoints = NULL; dbg->out_buf = NULL;
+    dbg->last_error = NULL; dbg->current_frame = NULL;
+    dbg->history_cap = dbg->bp_cap = dbg->out_cap = 0;
+    dbg->current_frame_cap = 0;
     dbg->initialized = 0;
 }
 
@@ -62,9 +78,16 @@ static inline void dbg_destroy(VMDebugState *dbg)
 
 static inline void _vm_debug_set_breakpoint(VMDebugState *dbg, int line)
 {
-    if (!dbg || dbg->bp_count >= DBG_MAX_BREAKPOINTS) return;
+    if (!dbg) return;
     for (int i = 0; i < dbg->bp_count; i++)
         if (dbg->breakpoints[i] == line) return;  /* già presente */
+    if (dbg->bp_count >= dbg->bp_cap) {           /* nessun numero massimo */
+        int nc = dbg->bp_cap ? dbg->bp_cap * 2 : DBG_BP_INIT_CAP;
+        int *n = (int *)realloc(dbg->breakpoints, sizeof(int) * (size_t)nc);
+        if (!n) return;
+        dbg->breakpoints = n;
+        dbg->bp_cap = nc;
+    }
     dbg->breakpoints[dbg->bp_count++] = line;
 }
 
@@ -101,19 +124,14 @@ static inline void dbg_record(VMDebugState *dbg,
 
     /* Registra solo istruzioni che hanno effetto semantico sullo stato.
        Evita che step-back si fermi su metadati di controllo (es. EVAL/JMP/LABEL). */
-    char instr_copy[DBG_INSTR_LEN];
-    strncpy(instr_copy, instr, sizeof(instr_copy) - 1);
-    instr_copy[sizeof(instr_copy) - 1] = '\0';
+    VM_LINE_COPY(instr_copy, instr);
     char *p = skip_lineno(instr_copy);
     while (*p == ' ' || *p == '\t') p++;
     if (*p == '\0') return;
 
-    char op[64];
-    int oi = 0;
-    while (*p && *p != ' ' && *p != '\t' && oi < (int)sizeof(op) - 1) {
-        op[oi++] = *p++;
-    }
-    op[oi] = '\0';
+    char *op = p;                   /* primo token, terminato sul posto */
+    while (*p && *p != ' ' && *p != '\t') p++;
+    *p = '\0';
     if (op[0] == '\0') return;
     if (!strcmp(op, "EVAL")   || !strcmp(op, "JMPF")  || !strcmp(op, "JMP")   ||
         !strcmp(op, "ASSERT") || !strcmp(op, "LABEL") || !strcmp(op, "DECL")  ||
@@ -128,16 +146,21 @@ static inline void dbg_record(VMDebugState *dbg,
         return;
 
     int idx = dbg->history_top + 1;
-    if (idx >= DBG_MAX_HISTORY) {
-        /* Ring buffer: scorriamo di uno (perdiamo la storia più vecchia) */
-        memmove(dbg->history, dbg->history + 1,
-                (DBG_MAX_HISTORY - 1) * sizeof(ExecRecord));
-        idx = DBG_MAX_HISTORY - 1;
+    if (idx >= dbg->history_cap) {
+        /* La storia cresce: nessun record vecchio viene scartato, così
+           l'indice di un record resta quello che il rebuild ritrova. */
+        int nc = dbg->history_cap ? dbg->history_cap * 2 : DBG_HISTORY_INIT_CAP;
+        ExecRecord *n = (ExecRecord *)realloc(dbg->history, sizeof(ExecRecord) * (size_t)nc);
+        if (!n) return;
+        memset(n + dbg->history_cap, 0, sizeof(ExecRecord) * (size_t)(nc - dbg->history_cap));
+        dbg->history = n;
+        dbg->history_cap = nc;
     }
     dbg->history_top = idx;
     dbg->history[idx].line = line;
-    strncpy(dbg->history[idx].frame, frame,  VAR_NAME_LENGTH - 1);
-    strncpy(dbg->history[idx].instr, instr,  DBG_INSTR_LEN   - 1);
+    /* Un record oltre la cima puo' essere di un run precedente (rebuild). */
+    vm_str_replace(&dbg->history[idx].frame, frame);
+    vm_str_replace(&dbg->history[idx].instr, instr);
 }
 
 static inline ExecRecord *dbg_pop_history(VMDebugState *dbg)
@@ -168,7 +191,7 @@ static inline void dbg_hook(VMDebugState *dbg,
        ad altri thread di sovrascrivere la posizione mostrata nel debugger. */
     if (dbg->mode != VM_MODE_PAUSE) {
         dbg->current_line = line;
-        strncpy(dbg->current_frame, frame, VAR_NAME_LENGTH - 1);
+        vm_name_set(&dbg->current_frame, &dbg->current_frame_cap, frame);
         if (dbg->mode != VM_MODE_CONTINUE_INV)
             dbg_record(dbg, line, frame, instr_text);
     }
@@ -265,7 +288,7 @@ static inline int vm_debug_dump_json(VM *vm, char *out, int outsz)
     JWRITE("{");
     if (dbg) {
         JWRITE("\"line\":%d,", dbg->current_line);
-        JWRITE("\"frame\":\"%s\",", dbg->current_frame);
+        JWRITE("\"frame\":\"%s\",", vm_name_get(dbg->current_frame));
         JWRITE("\"mode\":\"%s\",", mode_name(dbg->mode));
     } else {
         JWRITE("\"line\":0,\"frame\":\"\",\"mode\":\"RUN\",");
@@ -275,7 +298,7 @@ static inline int vm_debug_dump_json(VM *vm, char *out, int outsz)
     int first_frame = 1;
     for (int fi = 0; fi <= vm->frame_top; fi++) {
         Frame *f = vm->frames[fi];
-        if (f->name[0] == '\0') continue;
+        if (!f || !f->name || f->name[0] == '\0') continue;
 
         if (!first_frame) JWRITE(",");
         first_frame = 0;

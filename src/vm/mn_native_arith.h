@@ -13,12 +13,7 @@ extern int g_vm_native_arith;
  * alias del caller e hanno nome __mn_mem*, non il formale — si usa il template. */
 static inline int64_t *mn_formal_int(VM *vm, uint cfi, const char *formal)
 {
-    char proc[VAR_NAME_LENGTH];
-    strncpy(proc, vm->frames[cfi]->name, sizeof(proc) - 1);
-    proc[sizeof(proc) - 1] = '\0';
-    char *at = strchr(proc, '@');
-    if (at)
-        *at = '\0';
+    VM_FRAME_BASE(proc, vm->frames[cfi]->name);
     if (!char_id_map_exists(&FrameIndexer, proc))
         return NULL;
     uint bfi = char_id_map_get(&FrameIndexer, proc);
@@ -39,12 +34,7 @@ static inline int64_t *mn_formal_int(VM *vm, uint cfi, const char *formal)
 
 static inline Var *mn_formal_stack(VM *vm, uint cfi, const char *formal)
 {
-    char proc[VAR_NAME_LENGTH];
-    strncpy(proc, vm->frames[cfi]->name, sizeof(proc) - 1);
-    proc[sizeof(proc) - 1] = '\0';
-    char *at = strchr(proc, '@');
-    if (at)
-        *at = '\0';
+    VM_FRAME_BASE(proc, vm->frames[cfi]->name);
     if (!char_id_map_exists(&FrameIndexer, proc))
         return NULL;
     uint bfi = char_id_map_get(&FrameIndexer, proc);
@@ -64,24 +54,14 @@ static inline Var *mn_formal_stack(VM *vm, uint cfi, const char *formal)
 
 static inline void mn_hist_push(Var *hist, int64_t val)
 {
-    hist->value = realloc(hist->value, (hist->stack_len + 1) * sizeof(int64_t));
-    if (!hist->value)
-        vm_debug_panic("[VM] native arith: hist push OOM\n");
-    hist->value[hist->stack_len++] = val;
+    var_stack_push(hist, val);
 }
 
 static inline int64_t mn_hist_pop(Var *hist)
 {
     if (!hist || hist->stack_len == 0)
         vm_debug_panic("[VM] native arith: hist pop su stack vuoto\n");
-    int64_t v = hist->value[--hist->stack_len];
-    if (hist->stack_len > 0)
-        hist->value = realloc(hist->value, hist->stack_len * sizeof(int64_t));
-    else {
-        free(hist->value);
-        hist->value = NULL;
-    }
-    return v;
+    return hist->value[--hist->stack_len];   /* la capacità resta per i push */
 }
 
 static inline Var *mn_require_hist(VM *vm, uint cfi)
@@ -698,11 +678,7 @@ static const MnNativeProcEntry MN_NATIVE_PROCS[] = {
 
 static inline const MnNativeProcEntry *mn_native_lookup(const char *proc)
 {
-    char base[VAR_NAME_LENGTH];
-    strncpy(base, proc, sizeof(base) - 1);
-    base[sizeof(base) - 1] = '\0';
-    char *at = strchr(base, '@');
-    if (at) *at = '\0';
+    VM_FRAME_BASE(base, proc);
     for (size_t i = 0; i < sizeof(MN_NATIVE_PROCS) / sizeof(MN_NATIVE_PROCS[0]); i++) {
         if (!strcmp(base, MN_NATIVE_PROCS[i].name))
             return &MN_NATIVE_PROCS[i];

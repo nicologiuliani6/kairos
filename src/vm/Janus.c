@@ -37,6 +37,7 @@ __thread char       *strtok_saveptr      = NULL;
 __thread uint        thread_val_IF       = 0;
 
 pthread_mutex_t var_indexer_mtx = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t char_id_map_ins_mtx = PTHREAD_MUTEX_INITIALIZER;   /* char_id_map.h */
 CharIdMap       FrameIndexer;
 
 /* ======================================================================
@@ -51,12 +52,9 @@ CharIdMap       FrameIndexer;
 
 static inline int extract_lineno(const char *raw_line)
 {
-    /* Estrae il numero fisico di riga (i primi 4 digit) */
-    char tmp[8] = {0};
-    int  i;
-    for (i = 0; i < 4 && raw_line[i] >= '0' && raw_line[i] <= '9'; i++)
-        tmp[i] = raw_line[i];
-    return atoi(tmp);
+    /* Estrae il numero fisico di riga: tutte le cifre iniziali ("%04u" ne
+       scrive almeno 4, oltre la riga 9999 di più). */
+    return atoi(raw_line);
 }
 
 static inline int extract_srcline(const char *raw_line)
@@ -91,25 +89,25 @@ static inline char *mn_skip_bytecode_lineno_prefix(char *line)
     return p;
 }
 
-static int mn_bytecode_next_token(char **scan, char *buf, size_t bufsz)
+/* Prossimo token della riga: lo termina sul posto (la riga è una copia locale)
+   e ne ritorna l'inizio, NULL a fine riga. Nessuna lunghezza massima. */
+static char *mn_bytecode_next_token(char **scan)
 {
     char *s = *scan;
     while (*s == ' ' || *s == '\t' || *s == '\r') s++;
     if (*s == '\0' || *s == '\n') {
         *scan = s;
-        return 0;
+        return NULL;
     }
-    size_t i = 0;
-    while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n' && i + 1 < bufsz)
-        buf[i++] = *s++;
-    buf[i] = '\0';
+    char *tok = s;
+    while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n') s++;
+    if (*s) *s++ = '\0';
     *scan = s;
-    return 1;
+    return tok;
 }
 
-static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_line_nl,
-                                                     char *out_callee,
-                                                     size_t callee_sz)
+/* Nome della procedura chiamata subito dopo lo snap, in una stringa sull'heap. */
+static char *mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_line_nl)
 {
     for (; *cursor_after_snap_line_nl;) {
         char *nline = strchr(cursor_after_snap_line_nl, '\n');
@@ -125,24 +123,24 @@ static void mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_lin
         if (*past == '\0')
             continue;
 
-        char *wk       = past;
-        char  tok_op[VAR_NAME_LENGTH], callee[VAR_NAME_LENGTH];
-        if (!mn_bytecode_next_token(&wk, tok_op, sizeof(tok_op)))
+        char *wk     = past;
+        char *tok_op = mn_bytecode_next_token(&wk);
+        if (!tok_op)
             continue;
         if (strcmp(tok_op, "CALL") != 0) {
             vm_debug_panic(
                 "[VM] __mn_hist_floor_snap: dopo lo snap attendevo CALL <proc>, trovato '%s'\n",
                 tok_op);
         }
-        if (!mn_bytecode_next_token(&wk, callee, sizeof(callee)))
+        char *callee = mn_bytecode_next_token(&wk);
+        if (!callee)
             vm_debug_panic("[VM] __mn_hist_floor_snap: CALL senza nome procedura\n");
         if (!strcmp(callee, "__mn_hist_floor_snap"))
             vm_debug_panic("[VM] __mn_hist_floor_snap: snapshot Mnemo duplicati consecutivi\n");
-        strncpy(out_callee, callee, callee_sz - 1);
-        out_callee[callee_sz - 1] = '\0';
-        return;
+        return char_id_strdup(callee);
     }
     vm_debug_panic("[VM] __mn_hist_floor_snap: nessuna CALL dopo snapshot\n");
+    return NULL;
 }
 
 /* ======================================================================
@@ -164,14 +162,14 @@ void vm_stats_sample(VM *vm);
 static int mn_native_pool_load_fwd(VM *vm, uint cfi_cur)
 {
     Frame *f = vm->frames[cfi_cur];
-    char *a; char first[VAR_NAME_LENGTH] = {0};
-    char w0[VAR_NAME_LENGTH] = {0}, w1[VAR_NAME_LENGTH] = {0}, w2[VAR_NAME_LENGTH] = {0};
+    /* Primo e ultimi tre argomenti: puntatori nella riga corrente, viva per
+       tutta l'istruzione, invece di copie a lunghezza fissa. */
+    char *a; const char *first = "";
+    const char *w0 = "", *w1 = "", *w2 = "";
     int n = 0;
     while ((a = strtok(NULL, " \t"))) {
-        if (n == 0) { strncpy(first, a, VAR_NAME_LENGTH - 1); first[VAR_NAME_LENGTH-1]='\0'; }
-        strncpy(w0, w1, VAR_NAME_LENGTH - 1); w0[VAR_NAME_LENGTH-1]='\0';
-        strncpy(w1, w2, VAR_NAME_LENGTH - 1); w1[VAR_NAME_LENGTH-1]='\0';
-        strncpy(w2, a,  VAR_NAME_LENGTH - 1); w2[VAR_NAME_LENGTH-1]='\0';
+        if (n == 0) first = a;
+        w0 = w1; w1 = w2; w2 = a;
         n++;
     }
     /* arg layout: slot=first, mem0..memK, out=w0, __mn_hist=w1, __mn_scratch=w2 */
@@ -195,38 +193,63 @@ static int mn_native_pool_load_fwd(VM *vm, uint cfi_cur)
     return 1;
 }
 
+/* Nome del frame corrente di vm_run_BT, e nome del chiamante salvato in un
+ * CallRecord: buffer che crescono solo quando il nome nuovo non ci sta. Nessuna
+ * lunghezza massima e nessuna allocazione per chiamata a regime. */
+static inline void vm_buf_set(char **buf, size_t *cap, const char *src)
+{
+    size_t l = strlen(src) + 1;
+    if (l > *cap) {
+        size_t nc = *cap ? *cap : 32;
+        while (nc < l) nc *= 2;
+        char *n = (char *)realloc(*buf, nc);
+        if (!n) vm_debug_panic("[VM] nome di frame: memoria esaurita\n");
+        *buf = n; *cap = nc;
+    }
+    memcpy(*buf, src, l);
+}
+
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 {
     g_current_vm = vm;
     char *orig = strdup(buffer);
-    char  fname[VAR_NAME_LENGTH];
-    strncpy(fname, frame_name_init, VAR_NAME_LENGTH - 1);
-    fname[VAR_NAME_LENGTH - 1] = '\0';
+    char  *fname = NULL;
+    size_t fname_cap = 0;
+    vm_buf_set(&fname, &fname_cap, frame_name_init);
 
+    /* Un record per chiamata attiva. I parametri salvati e il nome del chiamante
+     * sono buffer del record, riusati dalle chiamate successive alla stessa
+     * profondità: crescono quando servono, nessun numero massimo di parametri
+     * né lunghezza massima del nome. */
     typedef struct {
-        char *return_ptr;
-        char  caller_frame[VAR_NAME_LENGTH];
-        Var  *saved_params[MAX_PROC_PARAMS];
-        int   saved_param_count, callee_findex;
-        Stack saved_local_vars;
-        int   is_recursive_clone;
-        int   base_findex;   /* frame-base della proc chiamata: per decremento `active` a END_PROC */
+        char  *return_ptr;
+        char  *caller_frame;
+        size_t caller_frame_cap;
+        Var  **saved_params;
+        int    saved_params_cap;
+        int    saved_param_count, callee_findex;
+        Stack  saved_local_vars;
+        int    is_recursive_clone;
+        int    base_findex;   /* frame-base della proc chiamata: per decremento `active` a END_PROC */
     } CallRecord;
-    /* Call stack dinamico: cresce on-demand (raddoppia). Nessun hard cap. */
-    uint cs_cap = VM_FRAMES_INIT_CAP;
-    CallRecord *cs = malloc(sizeof(CallRecord) * cs_cap);
+    /* Call stack dinamico: cresce on-demand (raddoppia). Nessun hard cap.
+     * Gli slot nuovi sono azzerati: i loro buffer partono vuoti. */
+    uint cs_cap = 64;
+    CallRecord *cs = calloc(cs_cap, sizeof(CallRecord));
+    if (!cs) vm_debug_panic("[VM] call stack: memoria esaurita\n");
     int cs_top = -1;
 #define VM_CS_ENSURE(needed) do { \
     if ((uint)(needed) >= cs_cap) { \
         uint _nc = cs_cap; while (_nc <= (uint)(needed)) _nc *= 2; \
         CallRecord *_nb = (CallRecord *)realloc(cs, sizeof(CallRecord) * _nc); \
         if (!_nb) vm_debug_panic("[VM] CALL: realloc(%u) fallita\n", _nc); \
+        memset(_nb + cs_cap, 0, sizeof(CallRecord) * (_nc - cs_cap)); \
         cs = _nb; cs_cap = _nc; \
     } \
 } while (0)
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si]->addr + 1);
-    if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); free(cs); free(orig); return; }
+    if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); goto done; }
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
@@ -254,14 +277,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     vm->frames[cs[cs_top].base_findex]->active--;
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
                     vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] = cs[cs_top].saved_params[k];
-                vm->frames[cfi]->LocalVariables = cs[cs_top].saved_local_vars;
+                stack_restore(&vm->frames[cfi]->LocalVariables, cs[cs_top].saved_local_vars);
                 /* Non liberare i Var PARAM dei cloni ricorsivi qui: sono guscio allocato
                  * in init_clone_frame; free() tra restore e ripresa del chiamante può
                  * corrompere l'heap o interferire con alias ancora attivi. vm_free() a
                  * fine esecuzione deduplica i Var* condivisi. */
                 ptr = cs[cs_top].return_ptr;
-                strncpy(fname, cs[cs_top].caller_frame, VAR_NAME_LENGTH - 1);
-                fname[VAR_NAME_LENGTH - 1] = '\0';
+                vm_buf_set(&fname, &fname_cap, cs[cs_top].caller_frame);
                 cs_top--;
             } else break;
             continue;
@@ -293,39 +315,51 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     &vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp];
                 ent->hist_len_floor = hv->stack_len;
                 ent->frame_indexer_count_at_snap = FrameIndexer.count;
-                mn_hist_floor_snap_peek_next_call_callee(nl + 1, ent->opt_call_callee,
-                                                        sizeof(ent->opt_call_callee));
+                free(ent->opt_call_callee);     /* voce riusata */
+                ent->opt_call_callee = mn_hist_floor_snap_peek_next_call_callee(nl + 1);
                 vm->mn_hist_floor_snap_sp++;
                 /* Fix P3: attiva execution trace per il subtree opt-uncall.
                  * op_jmpf forward push trace mentre active>0 E proc match.
                  * Inverse JMPF_ELSE pop quando trace non vuota.
                  * Decremento dopo UNCALL match. */
                 vm->branch_trace_active++;
-                strncpy(vm->branch_trace_proc, ent->opt_call_callee, VAR_NAME_LENGTH - 1);
-                vm->branch_trace_proc[VAR_NAME_LENGTH - 1] = '\0';
+                vm_name_set(&vm->branch_trace_proc, &vm->branch_trace_proc_cap,
+                            ent->opt_call_callee);
                 /* Cache line-range dei from-loop del callee: la forward op_jmpf
                  * NON deve pushare su branch_trace gli IF dentro un loop (il loro
                  * inverse usa recompute, non consuma il cursor → la window LIFO si
                  * disallineerebbe e gli IF top-level leggerebbero entry sbagliate
                  * → DELOCAL loop-counter / branch errati sotto opt-uncall). */
                 {
-                    LoopDescriptor _ld[VM_BT_LOOP_MAX];
-                    int _nlp = collect_loops(vm, vm->branch_trace_proc, orig,
-                                             _ld, VM_BT_LOOP_MAX);
+                    /* Tutti i loop del callee, quanti sono (prima al più 128). Le
+                     * coppie (lo, hi) stanno in un blocco che cresce senza essere
+                     * liberato sotto op_jmpf degli altri thread (vm_grow_keep). */
+                    LoopDescriptor *_ld = NULL;
+                    int _nlp = collect_loops(vm, vm->branch_trace_proc, orig, &_ld);
+                    if (_nlp > vm->bt_loop_cap) {
+                        int nc = vm->bt_loop_cap ? vm->bt_loop_cap : 16;
+                        while (nc < _nlp) nc *= 2;
+                        uint *nb = (uint *)vm_grow_keep(vm->bt_loop_lohi, 0,
+                                                        sizeof(uint) * 2 * (size_t)nc);
+                        vm->bt_loop_n = 0;
+                        __atomic_store_n(&vm->bt_loop_lohi, nb, __ATOMIC_RELEASE);
+                        vm->bt_loop_cap = nc;
+                    }
                     vm->bt_loop_n = 0;
-                    for (int _li = 0; _li < _nlp && vm->bt_loop_n < VM_BT_LOOP_MAX; _li++) {
+                    for (int _li = 0; _li < _nlp; _li++) {
                         /* Due corpi: la finestra parte da FROM_BACK, altrimenti un IF
                          * dentro c2 finirebbe nel branch trace e l'inversione sbaglierebbe. */
                         uint _lo = _ld[_li].from_start_line;
                         if (_ld[_li].from_back_line && _ld[_li].from_back_line < _lo)
                             _lo = _ld[_li].from_back_line;
-                        vm->bt_loop_lo[vm->bt_loop_n] = _lo;
-                        vm->bt_loop_hi[vm->bt_loop_n] = _ld[_li].eval_exit_line;
+                        vm->bt_loop_lohi[2 * vm->bt_loop_n]     = _lo;
+                        vm->bt_loop_lohi[2 * vm->bt_loop_n + 1] = _ld[_li].eval_exit_line;
                         vm->bt_loop_n++;
                     }
-                    strncpy(vm->bt_loops_cached_proc, vm->branch_trace_proc,
-                            VAR_NAME_LENGTH - 1);
-                    vm->bt_loops_cached_proc[VAR_NAME_LENGTH - 1] = '\0';
+                    loop_descs_free(_ld, _nlp);
+                    free(_ld);
+                    vm_name_set(&vm->bt_loops_cached_proc, &vm->bt_loops_cached_proc_cap,
+                                vm_name_get(vm->branch_trace_proc));
                 }
                 *nl = '\n'; ptr = nl + 1;
                 continue;
@@ -337,9 +371,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 mn_native_pool_load_fwd(vm, cfi_cur);
                 *nl = '\n'; ptr = nl + 1; continue;
             }
-            char  base[VAR_NAME_LENGTH]; strncpy(base, fname, VAR_NAME_LENGTH - 1);
-            char *at = strchr(base, '@'); if (at) *at = '\0';
-            int   is_rec    = !strcmp(pn, base);
+            int   is_rec    = vm_base_eq(fname, pn);
             int   new_depth = 0;
             if (is_rec) {
                 char *at2 = strchr(fname, '@');
@@ -380,12 +412,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             cs[cs_top].callee_findex      = cfi;
             cs[cs_top].base_findex        = (int)base_fi_pn;
             vm->frames[base_fi_pn]->active++;
-            strncpy(cs[cs_top].caller_frame, fname, VAR_NAME_LENGTH - 1);
-            cs[cs_top].caller_frame[VAR_NAME_LENGTH - 1] = '\0';
+            vm_buf_set(&cs[cs_top].caller_frame, &cs[cs_top].caller_frame_cap, fname);
             int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
             cs[cs_top].saved_param_count = pc;
             cs[cs_top].saved_local_vars  = vm->frames[cfi]->LocalVariables;
             stack_init(&vm->frames[cfi]->LocalVariables);
+            if (pc > cs[cs_top].saved_params_cap) {
+                int nc = cs[cs_top].saved_params_cap ? cs[cs_top].saved_params_cap : 8;
+                while (nc < pc) nc *= 2;
+                Var **np = (Var **)realloc(cs[cs_top].saved_params, sizeof(Var *) * (size_t)nc);
+                if (!np) vm_debug_panic("[VM] CALL: memoria esaurita per i parametri\n");
+                cs[cs_top].saved_params = np;
+                cs[cs_top].saved_params_cap = nc;
+            }
             for (int k = 0; k < pc; k++) cs[cs_top].saved_params[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
@@ -414,18 +453,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
              * corrente. Stack necessario perché clone reused tra siblings.
              * Solo se proc base matches trace_proc (procs altre = skip). */
             if (vm->branch_trace_active > 0) {
-                char p_base[VAR_NAME_LENGTH];
-                strncpy(p_base, pn, VAR_NAME_LENGTH - 1);
-                p_base[VAR_NAME_LENGTH - 1] = '\0';
-                char *pb_at2 = strchr(p_base, '@');
-                if (pb_at2) *pb_at2 = '\0';
-                if (!strcmp(p_base, vm->branch_trace_proc)) {
+                if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
                     frame_ensure_trace(vm->frames[cfi], vm->frames[cfi]->trace_window_top);
                     vm->frames[cfi]->trace_window_stack[vm->frames[cfi]->trace_window_top++] =
                         vm->branch_trace_top;
                 }
             }
-            char nfname[VAR_NAME_LENGTH];
+            VM_FRAME_KEY_BUF(nfname, pn);
             if (is_rec) {
                 if (current_thread_args)
                     make_frame_key_par_rec(pn, new_depth, nfname, sizeof(nfname));
@@ -438,23 +472,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             } else {
                 if (current_thread_args)
                     make_thread_frame_key(pn, nfname, sizeof(nfname));
-                else {
-                    strncpy(nfname, pn, VAR_NAME_LENGTH - 1);
-                    nfname[VAR_NAME_LENGTH - 1] = '\0';
-                }
+                else
+                    memcpy(nfname, pn, strlen(pn) + 1);
             }
-            strncpy(fname, nfname, VAR_NAME_LENGTH - 1);
-            fname[VAR_NAME_LENGTH - 1] = '\0';
+            vm_buf_set(&fname, &fname_cap, nfname);
             if (pn && mn_native_arith_call_forward(vm, pn, cfi)) {
                 if (vm->frames[cs[cs_top].base_findex]->active > 0)
                     vm->frames[cs[cs_top].base_findex]->active--;
                 for (int k = 0; k < cs[cs_top].saved_param_count; k++)
                     vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] =
                         cs[cs_top].saved_params[k];
-                vm->frames[cfi]->LocalVariables = cs[cs_top].saved_local_vars;
+                stack_restore(&vm->frames[cfi]->LocalVariables, cs[cs_top].saved_local_vars);
                 ptr = cs[cs_top].return_ptr;
-                strncpy(fname, cs[cs_top].caller_frame, VAR_NAME_LENGTH - 1);
-                fname[VAR_NAME_LENGTH - 1] = '\0';
+                vm_buf_set(&fname, &fname_cap, cs[cs_top].caller_frame);
                 cs_top--;
                 *nl = '\n';
                 continue;
@@ -471,7 +501,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                                             : char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
             int   pc  = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
-            Var  *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+            VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
             Stack slv = vm->frames[cfi]->LocalVariables;
             stack_init(&vm->frames[cfi]->LocalVariables);
             char *p = NULL; int ii = 0;
@@ -484,13 +514,11 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             VMLOG("[UNCALL] param linkati: %d, end_addr=%u addr=%u\n",
                     ii, vm->frames[cfi]->end_addr, vm->frames[cfi]->addr);
-            char inv_name[VAR_NAME_LENGTH];
+            VM_FRAME_KEY_BUF(inv_name, pn);
             if (current_thread_args)
                 make_thread_frame_key(pn, inv_name, sizeof(inv_name));
-            else {
-                strncpy(inv_name, pn, sizeof(inv_name) - 1);
-                inv_name[sizeof(inv_name) - 1] = '\0';
-            }
+            else
+                memcpy(inv_name, pn, strlen(pn) + 1);
             Var *histv = NULL;
             for (int hk = 0; hk < pc; hk++) {
                 Var *cv = vm->frames[cfi]->vars[pi[hk]];
@@ -501,7 +529,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             vm->invert_hist_guard_var   = NULL;
             vm->invert_hist_floor_min   = 0;
-            vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
+            vm->mn_hist_floor_pop_guard_anchor_fi1 = 0;
             int matched_opt_uncall = 0;
             int frame_indexer_floor_to_restore = -1;
             if (histv && vm->mn_hist_floor_snap_sp > 0 &&
@@ -510,8 +538,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     &vm->mn_hist_floor_snaps[--vm->mn_hist_floor_snap_sp];
                 vm->invert_hist_floor_min = top->hist_len_floor;
                 vm->invert_hist_guard_var = histv;
-                strncpy(vm->mn_hist_floor_pop_guard_anchor, inv_name, VAR_NAME_LENGTH - 1);
-                vm->mn_hist_floor_pop_guard_anchor[VAR_NAME_LENGTH - 1] = '\0';
+                /* cfi è l'indice di inv_name in FrameIndexer (clone_frame_for_thread
+                 * costruisce la stessa chiave, altrimenti è pn stesso). */
+                vm->mn_hist_floor_pop_guard_anchor_fi1 = (int)cfi + 1;
                 matched_opt_uncall = 1;
                 frame_indexer_floor_to_restore = top->frame_indexer_count_at_snap;
             }
@@ -538,7 +567,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                                   vm->frames[cfi]->addr + 1, 1);
             vm->invert_hist_guard_var = NULL;
             vm->invert_hist_floor_min   = 0;
-            vm->mn_hist_floor_pop_guard_anchor[0] = '\0';
+            vm->mn_hist_floor_pop_guard_anchor_fi1 = 0;
             /* Fix P3: chiudi modalità trace e azzera trace residua (sanity).
              * Tronca branch_trace_top allo start della finestra consumata: il
              * consume inverso legge LIFO (top-1-cursor), quindi dopo l'uncall di
@@ -562,23 +591,16 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             if (matched_opt_uncall && frame_indexer_floor_to_restore >= 0 &&
                 frame_indexer_floor_to_restore < FrameIndexer.count) {
                 pthread_mutex_lock(&var_indexer_mtx);
-                /* Sanity: non scendere sotto floor. */
-                if (frame_indexer_floor_to_restore < FrameIndexer.count) {
-                    int old_count = FrameIndexer.count;
-                    FrameIndexer.count = frame_indexer_floor_to_restore;
-                    /* I frame [floor..old_count) restano allocati con Var*
-                     * dangling. Reset name slot per evitare match futuri su
-                     * chiave stale. */
-                    for (int fi = frame_indexer_floor_to_restore;
-                         fi < old_count; fi++) {
-                        FrameIndexer.names[fi][0] = '\0';
-                    }
-                }
+                /* I frame [floor..old_count) restano allocati con Var*
+                 * dangling. Le loro chiavi spariscono dall'indice (niente
+                 * match futuri su chiave stale); gli slot si riusano. */
+                char_id_map_truncate(&FrameIndexer, frame_indexer_floor_to_restore);
                 pthread_mutex_unlock(&var_indexer_mtx);
             }
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
-            vm->frames[cfi]->LocalVariables = slv;
+            stack_restore(&vm->frames[cfi]->LocalVariables, slv);
+            VM_PARAM_SAVE_FREE(sv);
             ptr = nl + 1; continue;
         }
         else if (!strcmp(fw, "PAR_START")) {
@@ -586,6 +608,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             ParBlock pb = scan_par_block(nl + 1);
             exec_par_threads(vm, orig, fname, &pb, 1, 0);
             ptr = pb.after_end ? pb.after_end : nl + 1;
+            par_block_free(&pb);
             continue;
         }
         else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
@@ -639,7 +662,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
 done:
     free(orig);
+    for (uint k = 0; k < cs_cap; k++) {
+        free(cs[k].caller_frame);
+        free(cs[k].saved_params);
+    }
     free(cs);
+    free(fname);
 }
 
 /* ======================================================================
@@ -651,6 +679,11 @@ void vm_exec(VM *vm, char *buffer)
     char *orig = strdup(buffer);
     char *ptr  = buffer;
     int   line = 1;
+    /* Nomi che il testo della procedura corrente può introdurre (DECL, PARAM,
+     * LOCAL, DELOCAL) e LOCAL: a END_PROC dimensionano vars[] e lo stack dei
+     * local del frame (names_hint/locals_hint), così che in esecuzione non
+     * debbano crescere. Sono stime per eccesso, non limiti. */
+    int   proc_names = 0, proc_locals = 0;
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n');
@@ -660,6 +693,13 @@ void vm_exec(VM *vm, char *buffer)
         if (*skip_lineno(ptr)) {
             char *_skipped = skip_lineno(ptr);
             char *fw = strtok(_skipped, " \t");
+
+            if (!strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "DELOCAL"))
+                proc_names++;
+            else if (!strcmp(fw, "LOCAL")) {
+                proc_names++;
+                proc_locals++;
+            }
 
             if (!strcmp(fw, "START")) {
                 char_id_map_init(&FrameIndexer);
@@ -672,13 +712,20 @@ void vm_exec(VM *vm, char *buffer)
                 vm->frame_top = idx;
                 char_id_map_init(&vm->frames[idx]->VarIndexer);
                 stack_init(&vm->frames[idx]->LocalVariables);
-                strncpy(vm->frames[idx]->name, name, VAR_NAME_LENGTH - 1);
+                vm_str_replace(&vm->frames[idx]->name, name);
                 vm->frames[idx]->addr = line;
+                proc_names = proc_locals = 0;
                 VMLOG("[EXEC] PROC '%s' addr=%u\n", name, line);
 
             } else if (!strcmp(fw, "END_PROC")) {
                 char *name = strtok(NULL, " \t");
                 vm->frames[vm->frame_top]->end_addr = line;
+                {
+                    Frame *pf = vm->frames[vm->frame_top];
+                    pf->names_hint  = proc_names + FRAME_VARS_INIT_CAP;
+                    pf->locals_hint = proc_locals;
+                    frame_ensure_vars(pf, pf->names_hint - 1);
+                }
                 VMLOG("[EXEC] END_PROC '%s' addr=%u end_addr=%u\n",
                     name,
                     vm->frames[vm->frame_top]->addr,
@@ -705,7 +752,7 @@ void vm_exec(VM *vm, char *buffer)
                 vm->frames[vm->frame_top]->vars[vi]          = calloc(1, sizeof(Var));
                 vm->frames[vm->frame_top]->vars[vi]->T        = TYPE_PARAM;
                 vm->frames[vm->frame_top]->vars[vi]->is_local = 0;
-                strncpy(vm->frames[vm->frame_top]->vars[vi]->name, vn, VAR_NAME_LENGTH - 1);
+                vm->frames[vm->frame_top]->vars[vi]->name     = char_id_strdup(vn);
                 (void)vtype;
                 if (vi >= vm->frames[vm->frame_top]->var_count)
                     vm->frames[vm->frame_top]->var_count = vi + 1;
@@ -730,66 +777,74 @@ void vm_exec(VM *vm, char *buffer)
  *  vm_free — libera tutte le variabili allocate da vm_exec
  * ====================================================================== */
 
+static int vm_ptr_cmp(const void *a, const void *b)
+{
+    uintptr_t x = (uintptr_t)*(Var *const *)a, y = (uintptr_t)*(Var *const *)b;
+    return (x > y) - (x < y);
+}
+
+static void vm_free_var(Var *to_free)
+{
+    if (to_free->T == TYPE_CHANNEL && to_free->channel) {
+        pthread_mutex_lock(&to_free->channel->mtx);
+        to_free->channel->refcount--;
+        int do_free = (to_free->channel->refcount <= 0);
+        pthread_mutex_unlock(&to_free->channel->mtx);
+        if (do_free) {
+            pthread_mutex_destroy(&to_free->channel->mtx);
+            if (to_free->channel->buf) free(to_free->channel->buf);
+            free(to_free->channel);
+        }
+    } else if (to_free->value) {
+        free(to_free->value);
+    }
+    free(to_free->name);
+    free(to_free);
+}
+
 void vm_free(VM *vm)
 {
     if (!vm) return;
-    size_t freed_cap = (size_t)vm->frames_cap * (size_t)MAX_VARS;
-    if (freed_cap == 0) freed_cap = (size_t)VM_FRAMES_INIT_CAP * (size_t)MAX_VARS;
-    Var **freed = (Var **)calloc(freed_cap, sizeof(Var *));
-    if (!freed) return;
-    int freed_count = 0;
-    for (int i = 0; i <= vm->frame_top; i++) {
+    /* Evita double-free quando piu` slot puntano alla stessa Var (es. alias
+       parametri durante call/uncall in debug rebuild): si raccolgono tutti i
+       puntatori, si ordinano e si libera ciascuno una volta sola. Il vettore è
+       della misura delle variabili davvero presenti. */
+    size_t nptr = 0;
+    for (int i = 0; vm->frames && i <= vm->frame_top; i++)
+        if (vm->frames[i]) nptr += (size_t)vm->frames[i]->var_count;
+    Var **all = (Var **)malloc(sizeof(Var *) * (nptr ? nptr : 1));
+    if (!all) return;
+    size_t n = 0;
+    for (int i = 0; vm->frames && i <= vm->frame_top; i++) {
         Frame *f = vm->frames[i];
         if (!f) continue;
         for (int j = 0; j < f->var_count; j++) {
-            Var *v = f->vars[j];
-            if (v) {
-                int already_freed = 0;
-                for (int k = 0; k < freed_count; k++) {
-                    if (freed[k] == v) {
-                        already_freed = 1;
-                        break;
-                    }
-                }
-                if (!already_freed) {
-                    Var *to_free = v;
-                    /* Evita double-free quando piu` slot puntano alla stessa Var
-                       (es. alias parametri durante call/uncall in debug rebuild). */
-                    if (to_free->T == TYPE_CHANNEL && to_free->channel) {
-                        pthread_mutex_lock(&to_free->channel->mtx);
-                        to_free->channel->refcount--;
-                        int do_free = (to_free->channel->refcount <= 0);
-                        pthread_mutex_unlock(&to_free->channel->mtx);
-                        if (do_free) {
-                            pthread_mutex_destroy(&to_free->channel->mtx);
-                            if (to_free->channel->buf) free(to_free->channel->buf);
-                            free(to_free->channel);
-                        }
-                    } else if (to_free->value) {
-                        free(to_free->value);
-                    }
-                    free(to_free);
-                    if (freed_count < (int)freed_cap) freed[freed_count++] = to_free;
-                }
-                f->vars[j] = NULL;
-            }
+            if (f->vars[j]) all[n++] = f->vars[j];
+            f->vars[j] = NULL;
         }
         f->var_count = 0;
     }
-    free(freed);
+    qsort(all, n, sizeof(Var *), vm_ptr_cmp);
+    for (size_t k = 0; k < n; k++)
+        if (k == 0 || all[k] != all[k - 1]) vm_free_var(all[k]);
+    free(all);
     if (vm->frames) {
         for (uint i = 0; i < vm->frames_cap; i++) {
             if (vm->frames[i]) {
                 /* buffer heap dinamici per-Frame */
-                free(vm->frames[i]->vars);
+                vm_grow_free(vm->frames[i]->vars);
                 free(vm->frames[i]->label);
                 free(vm->frames[i]->param_indices);
                 free(vm->frames[i]->trace_window_stack);
+                free(vm->frames[i]->name);
+                stack_release(&vm->frames[i]->LocalVariables);
+                char_id_map_destroy(&vm->frames[i]->VarIndexer);
+                char_id_map_destroy(&vm->frames[i]->LabelIndexer);
                 free(vm->frames[i]);
                 vm->frames[i] = NULL;
             }
         }
-        free(vm->frames);
+        vm_grow_free(vm->frames);
         vm->frames = NULL;
         vm->frames_cap = 0;
     }
@@ -799,6 +854,8 @@ void vm_free(VM *vm)
         vm->branch_trace_cap = 0;
     }
     if (vm->mn_hist_floor_snaps) {
+        for (uint k = 0; k < vm->mn_hist_floor_snaps_cap; k++)
+            free(vm->mn_hist_floor_snaps[k].opt_call_callee);
         free(vm->mn_hist_floor_snaps);
         vm->mn_hist_floor_snaps = NULL;
         vm->mn_hist_floor_snaps_cap = 0;
@@ -809,6 +866,13 @@ void vm_free(VM *vm)
         vm->mn_pool_len = 0;
         vm->mn_pool_cap = 0;
     }
+    vm_grow_free(vm->branch_trace_proc);
+    vm_grow_free(vm->bt_loops_cached_proc);
+    vm_grow_free(vm->bt_loop_lohi);
+    vm->branch_trace_proc = vm->bt_loops_cached_proc = NULL;
+    vm->branch_trace_proc_cap = vm->bt_loops_cached_proc_cap = 0;
+    vm->bt_loop_lohi = NULL;
+    vm->bt_loop_cap = vm->bt_loop_n = 0;
 }
 
 /* ======================================================================
@@ -949,18 +1013,15 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     VM *vm = calloc(1, sizeof(VM));
     if (!vm) { fprintf(stderr, "VM alloc failed\n"); free(ast); return; }
     vm->dbg = NULL;
-    /* Init frames dinamico (cresce on-demand via vm_ensure_frame_cap). */
-    vm->frames = (Frame **)calloc(VM_FRAMES_INIT_CAP, sizeof(Frame *));
-    if (!vm->frames) { fprintf(stderr, "VM frames alloc failed\n"); free(ast); free(vm); return; }
-    vm->frames_cap = VM_FRAMES_INIT_CAP;
+    /* frames: lo crea vm_ensure_frame_cap al primo PROC e cresce on-demand. */
     vm->branch_trace = (int *)calloc(VM_BRANCH_TRACE_INIT_CAP, sizeof(int));
-    if (!vm->branch_trace) { fprintf(stderr, "VM branch_trace alloc failed\n"); free(vm->frames); free(ast); free(vm); return; }
+    if (!vm->branch_trace) { fprintf(stderr, "VM branch_trace alloc failed\n"); free(ast); free(vm); return; }
     vm->branch_trace_cap = VM_BRANCH_TRACE_INIT_CAP;
     vm->mn_hist_floor_snaps = (MnemoHistFloorSnapEntry *)calloc(
         MNEMO_HIST_SNAP_INIT_CAP, sizeof(MnemoHistFloorSnapEntry));
     if (!vm->mn_hist_floor_snaps) {
         fprintf(stderr, "VM mn_hist_floor_snaps alloc failed\n");
-        free(vm->branch_trace); free(vm->frames); free(ast); free(vm); return;
+        free(vm->branch_trace); free(ast); free(vm); return;
     }
     vm->mn_hist_floor_snaps_cap = MNEMO_HIST_SNAP_INIT_CAP;
     vm_exec(vm, ast);
@@ -971,6 +1032,8 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm_free(vm);
     free(ast);
     free(vm);
+    vm_if_free_branch_stack();    /* vettori __thread del thread chiamante */
+    vm_invert_free_cache();
 }
 
 void vm_run_from_string(const char *bytecode)

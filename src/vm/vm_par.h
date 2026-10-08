@@ -24,6 +24,7 @@ static inline int par_extract_srcline(const char *raw_line)
 /* Forward declarations — definite rispettivamente in vm_par.h (thread_entry)
    e in Kairos.c (vm_run_BT, invert_op_to_line). */
 static void *thread_entry(void *arg);
+static void vm_invert_free_cache(void);   /* vm_invert.h: cache __thread dell'inversione */
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop, int honor_if_line_skip);
@@ -32,15 +33,26 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
  *  PAR — struttura di un blocco parallelo
  * ====================================================================== */
 
+/* Inizio di ciascun ramo: quanti sono i rami, tanti sono i thread. Il vettore
+ * cresce (prima ne teneva 16 e i rami in più venivano ignorati in silenzio);
+ * lo libera par_block_free. */
 typedef struct {
-    char *starts[16];
-    int   count;
-    char *after_end;   /* puntatore dopo PAR_END + '\n' */
+    char **starts;
+    int    count;
+    int    cap;
+    char  *after_end;   /* puntatore dopo PAR_END + '\n' */
 } ParBlock;
+
+static inline void par_block_free(ParBlock *pb)
+{
+    free(pb->starts);
+    pb->starts = NULL;
+    pb->count = pb->cap = 0;
+}
 
 static inline ParBlock scan_par_block(char *par_ptr)
 {
-    ParBlock pb = { .count = 0, .after_end = NULL };
+    ParBlock pb = { .starts = NULL, .count = 0, .cap = 0, .after_end = NULL };
     int   depth = 1;
     char *scan  = par_ptr;
 
@@ -55,7 +67,13 @@ static inline ParBlock scan_par_block(char *par_ptr)
             else if (strcmp(fw, "PAR_END")   == 0) {
                 depth--;
                 if (depth == 0) { *nl = '\n'; pb.after_end = nl + 1; break; }
-            } else if (strncmp(fw, "THREAD_", 7) == 0 && depth == 1 && pb.count < 16) {
+            } else if (strncmp(fw, "THREAD_", 7) == 0 && depth == 1) {
+                if (pb.count == pb.cap) {
+                    pb.cap = pb.cap ? pb.cap * 2 : 8;
+                    char **n = (char **)realloc(pb.starts, sizeof(char *) * (size_t)pb.cap);
+                    if (!n) vm_debug_panic("[VM] PAR: memoria esaurita\n");
+                    pb.starts = n;
+                }
                 pb.starts[pb.count++] = nl + 1;
             }
         }
@@ -71,7 +89,22 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     pthread_mutex_t done_mtx  = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t  done_cond = PTHREAD_COND_INITIALIZER;
 
-    ThreadArgs *args[16];
+    /* I rami che fanno local girano tutti nel frame del par e spingono sullo
+     * stesso stack dei local: lo si dimensiona qui, prima che partano, così
+     * nessun ramo deve riallocarlo mentre un altro lo usa. I local aperti
+     * insieme nel frame sono al più quelli già aperti più i LOCAL del testo
+     * della procedura (locals_hint); il doppio copre anche un par annidato in
+     * un ramo, che ne riserva al più altrettanti partendo da più in alto. */
+    {
+        uint pfi = get_findex(frame_name);
+        Frame *pf = vm->frames[pfi];
+        stack_reserve(&pf->LocalVariables,
+                      pf->LocalVariables.top + 1 + 2 * (pf->locals_hint + 1));
+    }
+
+    ThreadArgs **args = (ThreadArgs **)calloc((size_t)(pb->count ? pb->count : 1),
+                                              sizeof(ThreadArgs *));
+    if (!args) vm_debug_panic("[VM] PAR: memoria esaurita\n");
     for (int t = 0; t < pb->count; t++) {
         args[t] = calloc(1, sizeof(ThreadArgs));
         args[t]->vm        = vm;
@@ -85,8 +118,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t]->done_mtx    = &done_mtx;
         args[t]->done_cond   = &done_cond;
         args[t]->is_inverse  = is_inverse;
-        strncpy(args[t]->frame_name, frame_name, VAR_NAME_LENGTH - 1);
-        args[t]->frame_name[VAR_NAME_LENGTH - 1] = '\0';
+        args[t]->frame_name  = char_id_strdup(frame_name);
     }
 
     /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
@@ -138,8 +170,10 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     for (int t = 0; t < pb->count; t++) {
         pthread_join(args[t]->tid, NULL);
         if (dup_buffer) free(args[t]->buffer);
+        free(args[t]->frame_name);
         free(args[t]);
     }
+    free(args);
     session_par_exit();                        /* vm_session.h */
 }
 
@@ -152,9 +186,7 @@ static void *thread_entry(void *arg)
     ThreadArgs *args = (ThreadArgs *)arg;
     //fprintf(stderr, "[THREAD_ENTRY] ptr=%p is_inverse=%d\n", (void*)args, args->is_inverse);
     VM         *vm   = args->vm;
-    char        fname[VAR_NAME_LENGTH];
-    strncpy(fname, args->frame_name, VAR_NAME_LENGTH - 1);
-    fname[VAR_NAME_LENGTH - 1] = '\0';
+    const char *fname = args->frame_name;   /* vive quanto il thread */
     current_thread_args = args;
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
 
@@ -247,6 +279,7 @@ static void *thread_entry(void *arg)
                i parser line-based modificano temporaneamente '\n' in '\0'. */
             exec_par_threads(vm, args->buffer, fname, &pb, 1, args->is_inverse);
             ptr = pb.after_end ? pb.after_end : nl + 1;
+            par_block_free(&pb);
             continue;
         }
         else if (!strcmp(fw, "SHOW"))   { if (!args->is_inverse) op_show(vm, fname); }
@@ -304,9 +337,9 @@ static void *thread_entry(void *arg)
             uint  cfi_cur = get_findex(fname);
             uint cfi = clone_frame_for_thread(vm, pn);
             int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
-            Var *sv[MAX_PROC_PARAMS]; for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+            VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
             Stack slv = vm->frames[cfi]->LocalVariables; stack_init(&vm->frames[cfi]->LocalVariables);
-            char thread_key[VAR_NAME_LENGTH]; make_thread_frame_key(pn, thread_key, sizeof(thread_key));
+            VM_FRAME_KEY_BUF(thread_key, pn); make_thread_frame_key(pn, thread_key, sizeof(thread_key));
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
                 int si = char_id_map_get(&vm->frames[cfi_cur]->VarIndexer, p);
@@ -325,7 +358,8 @@ static void *thread_entry(void *arg)
                 vm->suppress_show = ss;
             }
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
-            vm->frames[cfi]->LocalVariables = slv;
+            stack_restore(&vm->frames[cfi]->LocalVariables, slv);
+            VM_PARAM_SAVE_FREE(sv);
         }
         else if (!strcmp(fw, "START") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }
@@ -334,6 +368,8 @@ static void *thread_entry(void *arg)
         *nl = '\n'; ptr = nl + 1;
     }
 thread_exit:
+    vm_if_free_branch_stack();   /* vettori __thread di questo thread */
+    vm_invert_free_cache();
     /* Sveglia sender pendente prima di terminare */
     if (args->sender_to_notify) {
         ThreadArgs *s = args->sender_to_notify;

@@ -10,32 +10,29 @@
  *  Helper generici
  * ====================================================================== */
 
-/* Cresce f->vars (heap) per indicizzare almeno `idx`. Init cap = MAX_VARS:
- * per i programmi noti (var_count < MAX_VARS) il buffer è allocato una volta a
- * MAX_VARS e mai riallocato → identico all'array statico precedente (stesso
- * fast path). Oltre, raddoppia. Zero-fill della regione nuova (Var* = NULL). */
+/* Cresce f->vars per indicizzare almeno `idx`. La prima allocazione è
+ * dimensionata su names_hint (vedi Frame): in esecuzione normale il vettore
+ * non cresce più. Quando cresce, il blocco vecchio non si libera (vm_grow_keep):
+ * i rami di un par girano nello stesso frame e leggono vars[] senza lock.
+ * Zero-fill della regione nuova (Var* = NULL). */
 static inline void frame_ensure_vars(Frame *f, int idx)
 {
     if (idx < f->vars_cap) return;
-    int new_cap = f->vars_cap ? f->vars_cap : MAX_VARS;
+    int new_cap = f->vars_cap ? f->vars_cap * 2 : FRAME_VARS_INIT_CAP;
+    if (new_cap < f->names_hint) new_cap = f->names_hint;
     while (idx >= new_cap) new_cap *= 2;
-    Var **nv = (Var **)realloc(f->vars, sizeof(Var *) * (size_t)new_cap);
-    if (!nv) {
-        fprintf(stderr, "[VM] frame_ensure_vars: realloc(%d) fallita\n", new_cap);
-        exit(1);
-    }
-    memset(nv + f->vars_cap, 0, sizeof(Var *) * (size_t)(new_cap - f->vars_cap));
-    f->vars = nv;
+    Var **nv = (Var **)vm_grow_keep(f->vars, sizeof(Var *) * (size_t)f->vars_cap,
+                                    sizeof(Var *) * (size_t)new_cap);
+    __atomic_store_n(&f->vars, nv, __ATOMIC_RELEASE);
     f->vars_cap = new_cap;
 }
 
-/* Stessa logica (init cap = vecchio MAX, doubling oltre) per gli altri array
- * per-Frame: identici al bump statico per i programmi noti, crescono solo come
- * valvola di sicurezza. */
+/* Stessa logica (raddoppio da una capacità iniziale piccola) per gli altri
+ * array per-Frame, che si scrivono da un thread solo. */
 static inline void frame_ensure_labels(Frame *f, int idx)
 {
     if (idx < f->label_cap) return;
-    int nc = f->label_cap ? f->label_cap : MAX_LABEL;
+    int nc = f->label_cap ? f->label_cap : FRAME_LABEL_INIT_CAP;
     while (idx >= nc) nc *= 2;
     uint *n = (uint *)realloc(f->label, sizeof(uint) * (size_t)nc);
     if (!n) { fprintf(stderr, "[VM] frame_ensure_labels: realloc(%d) fallita\n", nc); exit(1); }
@@ -46,7 +43,7 @@ static inline void frame_ensure_labels(Frame *f, int idx)
 static inline void frame_ensure_params(Frame *f, int idx)
 {
     if (idx < f->param_indices_cap) return;
-    int nc = f->param_indices_cap ? f->param_indices_cap : MAX_PROC_PARAMS;
+    int nc = f->param_indices_cap ? f->param_indices_cap : FRAME_PARAMS_INIT_CAP;
     while (idx >= nc) nc *= 2;
     int *n = (int *)realloc(f->param_indices, sizeof(int) * (size_t)nc);
     if (!n) { fprintf(stderr, "[VM] frame_ensure_params: realloc(%d) fallita\n", nc); exit(1); }
@@ -57,13 +54,33 @@ static inline void frame_ensure_params(Frame *f, int idx)
 static inline void frame_ensure_trace(Frame *f, int idx)
 {
     if (idx < f->trace_window_cap) return;
-    int nc = f->trace_window_cap ? f->trace_window_cap : VM_TRACE_WIN_STACK_MAX;
+    int nc = f->trace_window_cap ? f->trace_window_cap : FRAME_TRACE_INIT_CAP;
     while (idx >= nc) nc *= 2;
     int *n = (int *)realloc(f->trace_window_stack, sizeof(int) * (size_t)nc);
     if (!n) { fprintf(stderr, "[VM] frame_ensure_trace: realloc(%d) fallita\n", nc); exit(1); }
     memset(n + f->trace_window_cap, 0, sizeof(int) * (size_t)(nc - f->trace_window_cap));
     f->trace_window_stack = n; f->trace_window_cap = nc;
 }
+
+/* Rimpiazza una stringa posseduta (nome di frame, di variabile). */
+static inline void vm_str_replace(char **dst, const char *src)
+{
+    char *n = char_id_strdup(src);
+    free(*dst);
+    *dst = n;
+}
+
+/* Vettore di Var* per salvare i parametri attorno a una chiamata: sullo stack
+ * del C finché sono pochi, sull'heap oltre. Nessun numero massimo di
+ * parametri. Uso: VM_PARAM_SAVE(sv, pc); ... VM_PARAM_SAVE_FREE(sv); */
+#define VM_PARAM_SAVE_SMALL 16
+#define VM_PARAM_SAVE(name, n) \
+    Var *name##_small[VM_PARAM_SAVE_SMALL]; \
+    Var **name = ((n) <= VM_PARAM_SAVE_SMALL) ? name##_small \
+                 : (Var **)malloc(sizeof(Var *) * (size_t)(n)); \
+    if (!name) vm_debug_panic("[VM] parametri: memoria esaurita\n")
+#define VM_PARAM_SAVE_FREE(name) \
+    do { if (name != name##_small) free(name); } while (0)
 
 static inline void make_frame_key(const char *name, int depth, char *out, size_t sz)
 {
@@ -74,8 +91,8 @@ static inline void make_frame_key(const char *name, int depth, char *out, size_t
 /*
  * Chiave per cloni ricorsivi dentro THREAD_* (par): evita che due worker
  * condividano lo stesso FrameIndexer di "proc@k" del thread principale.
- * pthread_self in 8 hex + profondità restano sotto CHAR_ID_MAP_NAME_LEN per
- * nomi procedura tipici del progetto.
+ * Il buffer `out` lo dimensiona il chiamante con VM_FRAME_KEY_BUF (nome della
+ * procedura più il suffisso numerico): nessuna lunghezza massima.
  */
 static inline void make_frame_key_par_rec(const char *name, int depth, char *out, size_t sz)
 {
@@ -234,25 +251,15 @@ static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
 }
 
 /*
- * read_rest_of_expr — legge tutto ciò che rimane sulla riga corrente
- * come unica stringa (gestisce espressioni tipo "(y + z)" che strtok
- * spezzerebbe in più token).
+ * Resto della riga corrente come un'unica espressione (gestisce espressioni
+ * tipo "(y + z)" che strtok spezzerebbe in più token), in un buffer della sua
+ * lunghezza.
  */
-/* Resto della riga come un'unica espressione, in un buffer della sua lunghezza. */
 #define VM_REST_EXPR(name) \
     const char *name##_src = strtok(NULL, ""); \
     if (!name##_src) name##_src = ""; \
     while (*name##_src == ' ' || *name##_src == '\t') name##_src++; \
     VM_LINE_COPY(name, name##_src)
-
-static inline void read_rest_of_expr(char *out, size_t outsz)
-{
-    const char *rest = strtok(NULL, "");
-    if (!rest) rest = "";
-    while (*rest == ' ' || *rest == '\t') rest++;
-    strncpy(out, rest, outsz - 1);
-    out[outsz - 1] = '\0';
-}
 
 /* Cella `a[idx]` di un array: ritorna il puntatore alla cella. L'indice e' un'espressione
    valutata nello stesso store sia in avanti sia all'indietro. Fuori dai limiti e'
@@ -263,9 +270,8 @@ static inline int64_t *array_cell(VM *vm, uint fi, const char *tok, Var **vout, 
     const char *rb = strrchr(tok, ']');
     if (!lb || !rb || rb < lb)
         vm_debug_panic("[VM] %s: cella di array malformata '%s'\n", op, tok);
-    char name[VAR_NAME_LENGTH];
     size_t nl = (size_t)(lb - tok);
-    if (nl >= sizeof(name)) nl = sizeof(name) - 1;
+    char name[nl + 1];
     memcpy(name, tok, nl); name[nl] = '\0';
     size_t il = (size_t)(rb - lb - 1);
     char inner[il + 1];
@@ -393,8 +399,32 @@ static inline void delete_var(Var *vars[], int *size, int n)
     } else {
         free(v->value);
     }
+    free(v->name);
     free(v);
     vars[n] = NULL;
+}
+
+/* ======================================================================
+ *  Stack di valori di una Var: capacità separata dalla lunghezza, cresce
+ *  raddoppiando. Nessun numero massimo di elementi. Il pop non rialloca:
+ *  la capacità resta per i push successivi.
+ * ====================================================================== */
+
+static inline void var_stack_reserve(Var *v, size_t n)
+{
+    if (n <= v->stack_cap && v->value) return;
+    size_t nc = v->stack_cap ? v->stack_cap : VAR_STACK_INIT_CAP;
+    while (nc < n) nc *= 2;
+    int64_t *nv = (int64_t *)realloc(v->value, nc * sizeof(int64_t));
+    if (!nv) vm_debug_panic("[VM] stack: memoria esaurita (%zu celle)\n", nc);
+    v->value     = nv;
+    v->stack_cap = nc;
+}
+
+static inline void var_stack_push(Var *v, int64_t val)
+{
+    if (v->stack_len >= v->stack_cap || !v->value) var_stack_reserve(v, v->stack_len + 1);
+    v->value[v->stack_len++] = val;
 }
 
 /* ======================================================================
@@ -404,7 +434,7 @@ static inline void delete_var(Var *vars[], int *size, int n)
 static inline void alloc_var(Var *v, const char *type, const char *name)
 {
     memset(v, 0, sizeof(Var));
-    strncpy(v->name, name, VAR_NAME_LENGTH - 1);
+    v->name     = char_id_strdup(name);
     v->is_local = 1;
 
     if (strcmp(type, "int") == 0) {
@@ -413,7 +443,8 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
     } else if (strcmp(type, "stack") == 0) {
         v->T         = TYPE_STACK;
         v->stack_len = 0;
-        v->value     = malloc(VAR_STACK_MAX_SIZE * sizeof(int64_t));
+        v->stack_cap = 0;
+        var_stack_reserve(v, VAR_STACK_INIT_CAP);   /* cresce con i push */
     } else if (strcmp(type, "array") == 0) {
         /* Le celle le alloca op_local, che conosce la lunghezza. */
         v->T         = TYPE_ARRAY;
@@ -425,7 +456,7 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
         v->value     = NULL;
         v->channel   = calloc(1, sizeof(Channel));
         pthread_mutex_init(&v->channel->mtx, NULL);
-        v->channel->buf = calloc((size_t)VAR_CHANNEL_MAX_SIZE, sizeof(int64_t));
+        v->channel->buf = NULL;     /* lo allocano ssend/push, della misura del messaggio */
         v->channel->buf_len = 0;
         v->channel->refcount = 1;
     } else {

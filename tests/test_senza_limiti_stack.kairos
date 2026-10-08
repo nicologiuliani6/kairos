@@ -1,0 +1,45 @@
+// Nessun limite sulla dimensione di uno stack: 3000 elementi (la VM ne riservava
+// 512 e la copia `local stack c = s` li scriveva in quel buffer fisso).
+// Push in un ciclo, copia, svuotamento in un ciclo, poi uncall del riempimento.
+procedure riempi(stack s, int n)
+    local int i = 0
+    from i == 0 do
+        local int v = 0
+        v += i
+        push(v, s)
+        delocal int v = 0
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+procedure svuota(stack c, int n)
+    local int j = n
+    from j == n do
+        j -= 1
+        local int w = 0
+        pop(w, c)
+        w -= j
+        delocal int w = 0
+    loop until j == 0
+    delocal int j = 0
+
+procedure main()
+    local stack s = nil
+    local int n = 3000
+    call riempi(s, n)
+
+    local int cima = 0
+    pop(cima, s)
+    show(cima)
+    push(cima, s)
+    delocal int cima = 0
+
+    local stack c = s
+    call svuota(c, n)
+    show(c)
+    delocal stack c = nil
+
+    uncall riempi(s, n)
+    show(s)
+    delocal int n = 3000
+    delocal stack s = nil
