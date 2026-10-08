@@ -18,6 +18,9 @@ def _strip_mnemo_par_shared_pragma(source: str) -> tuple[str, bool]:
         return ("\n".join(body) + ("\n" if body else ""), True)
     return source, False
 
+# Operatori di due caratteri dentro un'espressione: la VM li legge come un carattere.
+_EXPR_OP_CODE = {'==': '=', '!=': '#', '>=': '}', '<=': '{', '&&': '&', '||': '|'}
+
 _ASSIGN_OPS = {
     '+=':  'PUSHEQ',
     '-=':  'MINEQ',
@@ -51,7 +54,8 @@ class ByteCode_Compiler:
             _, op, left, right = expr
             l = self.expr_to_str(left)
             r = self.expr_to_str(right)
-            return f"({l} {op} {r})"
+            # La VM legge un operatore di un solo carattere dentro le espressioni.
+            return f"({l} {_EXPR_OP_CODE.get(op, op)} {r})"
         if expr[0] == 'index':
             # Cella di array: `a[idx]`. L'indice e' scritto senza spazi, cosi'
             # la cella resta un unico token per il tokenizer a spazi della VM.

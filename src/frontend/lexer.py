@@ -28,6 +28,7 @@ tokens = (
     # confronto (tutti prima di EQUALS)
     'EQEQ',                                # ==
     'NEQ',                                 # !=
+    'ANDAND', 'OROR',                      # && ||
     'GEQ',                                 # >=
     'LEQ',                                 # <=
     'GT',                                  # >
@@ -80,6 +81,14 @@ def t_EQEQ(t):
 
 def t_NEQ(t):
     r'!='
+    return t
+
+def t_ANDAND(t):
+    r'&&'
+    return t
+
+def t_OROR(t):
+    r'\|\|'
     return t
 
 def t_SWAP(t):

@@ -76,6 +76,9 @@ def _builtin_written_arg_names(name, args):
 
 # ── Precedenza operatori ────────────────────────────────────────────────────
 precedence = (
+    ('left', 'OROR'),
+    ('left', 'ANDAND'),
+    ('nonassoc', 'EQEQ', 'NEQ', 'GEQ', 'LEQ', 'GT', 'LT'),
     ('left', 'PLUS', 'MINUS'),
     ('left', 'TIMES', 'DIVIDE', 'MOD'),
 )
@@ -144,7 +147,17 @@ def p_expr_binop(p):
             | expr MINUS expr
             | expr TIMES expr
             | expr DIVIDE expr
-            | expr MOD expr'''
+            | expr MOD expr
+            | expr EQEQ expr
+            | expr NEQ  expr
+            | expr GEQ  expr
+            | expr LEQ  expr
+            | expr GT   expr
+            | expr LT   expr
+            | expr ANDAND expr
+            | expr OROR expr'''
+    # Come in Janus, confronti e connettivi sono operatori delle espressioni:
+    # valgono 1 (vero) o 0 (falso).
     p[0] = ('binop', p[2], p[1], p[3])
 
 def p_expr_paren(p):
@@ -174,14 +187,18 @@ def p_value_negative(p):
     p[0] = -p[2]
 
 # ── Operatori di confronto ──────────────────────────────────────────────────
+_COMPARE_OPS = ('==', '!=', '>=', '<=', '>', '<')
+
 def p_condition(p):
-    '''condition : expr EQEQ expr
-                 | expr NEQ  expr
-                 | expr GEQ  expr
-                 | expr LEQ  expr
-                 | expr GT   expr
-                 | expr LT   expr'''
-    p[0] = ('cond', p[2], p[1], p[3])
+    '''condition : expr'''
+    # Una guardia e' un'espressione, vera se diversa da zero. Se in cima c'e'
+    # un confronto la si tiene nella forma `lhs op rhs`, come prima; altrimenti
+    # (connettivi, o un'espressione qualsiasi) diventa `e != 0`.
+    e = p[1]
+    if isinstance(e, tuple) and e and e[0] == 'binop' and e[1] in _COMPARE_OPS:
+        p[0] = ('cond', e[1], e[2], e[3])
+    else:
+        p[0] = ('cond', '!=', e, 0)
 
 # ── Dichiarazioni di tipo ───────────────────────────────────────────────────
 def p_type_decl(p):

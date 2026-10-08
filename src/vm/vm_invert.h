@@ -27,11 +27,11 @@ static inline int invert_extract_srcline(const char *raw_line)
 
 typedef struct {
     uint eval_entry_line;
-    char eval_entry_id[64], eval_entry_val[64];
+    char eval_entry_id[256], eval_entry_val[256];
     char eval_entry_op[8]; /* bytecode EVAL memorizza !=, <, … — obbligatorio per invert */
     uint jmpf_err_line, from_start_line, from_end_line, from_err_line;
     uint eval_exit_line;
-    char eval_exit_id[64], eval_exit_val[64];
+    char eval_exit_id[256], eval_exit_val[256];
     char eval_exit_op[8];
     uint jmpf_start_line;
     /* Ciclo a DUE corpi (`from b1 do c1 loop c2 until b2`): valorizzati solo in
@@ -43,11 +43,11 @@ typedef struct {
 
 typedef struct {
     uint eval_entry_line;
-    char eval_entry_id[64], eval_entry_val[64];
+    char eval_entry_id[256], eval_entry_val[256];
     char eval_entry_op[8];
     uint jmpf_else_line, jmp_fi_line, else_label_line, fi_label_line;
     uint eval_exit_line;
-    char eval_exit_id[64], eval_exit_val[64];
+    char eval_exit_id[256], eval_exit_val[256];
     char eval_exit_op[8];
     uint assert_line;
 } IfDescriptor;
@@ -188,7 +188,7 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
     char stack_uid[32][32];
     int top = -1;
 
-    uint peval = 0; char pid[64] = {0}, pval[64] = {0}, pop[8] = {'=', '=', '\0'};
+    uint peval = 0; char pid[256] = {0}, pval[256] = {0}, pop[8] = {'=', '=', '\0'};
 
     /* find_or_open: cerca slot per uid; se non aperto, alloca. */
     #define LOOP_FIND_OR_OPEN(uid, slot_out) do { \
@@ -221,8 +221,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             char *a = strtok(NULL, " \t");  /* lhs */
             char *op = strtok(NULL, " \t");
             char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
-            strncpy(pid,  a   ? a   : "", 63);
-            strncpy(pval, rhs,             63);
+            strncpy(pid,  a   ? a   : "", 255);
+            strncpy(pval, rhs,             255);
             _copy_compare_op(pop, op);
         } else if (!strcmp(fw, "LABEL")) {
             char *ln = strtok(NULL, " \t");
@@ -260,8 +260,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_entry_line = peval;
-                    strncpy(out[slot].eval_entry_id,  pid,  63);
-                    strncpy(out[slot].eval_entry_val, pval, 63);
+                    strncpy(out[slot].eval_entry_id,  pid,  255);
+                    strncpy(out[slot].eval_entry_val, pval, 255);
                     _copy_compare_op(out[slot].eval_entry_op, pop);
                     out[slot].jmpf_err_line = cur;
                 }
@@ -271,8 +271,8 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
                 int slot; LOOP_FIND_OR_OPEN(uid, slot);
                 if (slot >= 0) {
                     out[slot].eval_exit_line = peval;
-                    strncpy(out[slot].eval_exit_id,  pid,  63);
-                    strncpy(out[slot].eval_exit_val, pval, 63);
+                    strncpy(out[slot].eval_exit_id,  pid,  255);
+                    strncpy(out[slot].eval_exit_val, pval, 255);
                     _copy_compare_op(out[slot].eval_exit_op, pop);
                     out[slot].jmpf_start_line = cur;
                 }
@@ -318,7 +318,7 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     int   *stack_eval_exit_set= malloc(sizeof(*stack_eval_exit_set) * (size_t)stack_cap);
     int   top = -1;
 
-    uint peval = 0; char pid[64] = {0}, pval[64] = {0};
+    uint peval = 0; char pid[256] = {0}, pval[256] = {0};
     char pfi_op[8] = {'=', '=', '\0'};
 
     while (ptr && *ptr && n < max) {
@@ -336,8 +336,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             char *a = strtok(NULL, " \t");  /* lhs */
             char *iop = strtok(NULL, " \t");
             char rhs[256]; read_rest_of_expr(rhs, sizeof(rhs));
-            strncpy(pid,  a   ? a   : "", 63);
-            strncpy(pval, rhs,             63);
+            strncpy(pid,  a   ? a   : "", 255);
+            strncpy(pval, rhs,             255);
             _copy_compare_op(pfi_op, iop);
 
             /* EVAL FI: se top dello stack è in_then-completato (jmp_fi visto) e
@@ -345,8 +345,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
             if (top >= 0 && out[stack_idx[top]].fi_label_line && !stack_eval_exit_set[top]) {
                 int ti = stack_idx[top];
                 out[ti].eval_exit_line = cur;
-                strncpy(out[ti].eval_exit_id,  pid,  63);
-                strncpy(out[ti].eval_exit_val, pval, 63);
+                strncpy(out[ti].eval_exit_id,  pid,  255);
+                strncpy(out[ti].eval_exit_val, pval, 255);
                 _copy_compare_op(out[ti].eval_exit_op, pfi_op);
                 stack_eval_exit_set[top] = 1;
 
@@ -381,8 +381,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                 stack_eval_exit_set[top] = 0;
                 memset(&out[idx], 0, sizeof(IfDescriptor));
                 out[idx].eval_entry_line = peval;
-                strncpy(out[idx].eval_entry_id,  pid,  63);
-                strncpy(out[idx].eval_entry_val, pval, 63);
+                strncpy(out[idx].eval_entry_id,  pid,  255);
+                strncpy(out[idx].eval_entry_val, pval, 255);
                 _copy_compare_op(out[idx].eval_entry_op, pfi_op);
                 out[idx].jmpf_else_line = cur;
             }
@@ -423,8 +423,8 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
                     out[ti].assert_line = cur;
                 } else {
                     out[ti].eval_exit_line = peval;
-                    strncpy(out[ti].eval_exit_id,  pid,  63);
-                    strncpy(out[ti].eval_exit_val, pval, 63);
+                    strncpy(out[ti].eval_exit_id,  pid,  255);
+                    strncpy(out[ti].eval_exit_val, pval, 255);
                     _copy_compare_op(out[ti].eval_exit_op, pfi_op);
                     out[ti].assert_line = cur;
                 }

@@ -157,8 +157,7 @@ static inline int token_len(const char *p)
         return i;
     }
     int i = 0;
-    while (p[i] && p[i] != ' ' && p[i] != ')' && p[i] != '+' && p[i] != '-' &&
-           p[i] != '*' && p[i] != '/' && p[i] != '%') {
+    while (p[i] && !strchr(" )+-*/%=#<>{}&|", p[i])) {
         if (p[i] == '[') {                      /* a[...]: l'indice e' parte del token */
             int depth = 0;
             do {
@@ -212,6 +211,16 @@ static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
                                (long long)lval, op);
             return op == '/' ? lval / rval : lval % rval;
         }
+        /* Confronti e connettivi, come in Janus: 1 vero, 0 falso. Il frontend
+           codifica gli operatori di due caratteri in uno: = # { } & | */
+        if (op == '=') return lval == rval;
+        if (op == '#') return lval != rval;
+        if (op == '<') return lval <  rval;
+        if (op == '>') return lval >  rval;
+        if (op == '{') return lval <= rval;
+        if (op == '}') return lval >= rval;
+        if (op == '&') return (lval != 0) && (rval != 0);
+        if (op == '|') return (lval != 0) || (rval != 0);
         vm_debug_panic("[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
     }
 

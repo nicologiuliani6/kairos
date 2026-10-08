@@ -1,0 +1,60 @@
+// Fattorizzazione, dal report di Lutz e Derby (1982), tradotta in Kairos.
+// num finisce a zero, fact contiene i fattori in ordine crescente da fact[1].
+// `try` e' una parola riservata in Kairos: la variabile si chiama t.
+
+procedure nexttry(int t)
+    t += 2
+    if   t == 4
+    then t -= 1
+    fi   t == 3
+
+procedure zeroi(int fact[], int i)
+    from fact[i + 1] == 0
+    loop i -= 1
+    until i == 0
+
+procedure factor(int num, int t, int z, int i, int fact[])
+    from (t == 0) && (num > 1)
+    loop call nexttry(t)
+         from fact[i] != t          // divide via tutte le occorrenze del fattore
+         loop i += 1
+              fact[i] += t
+              z += num / t
+              z <=> num
+              z -= num * t
+         until (num % t) != 0
+    until (t * t) > num             // esce appena possibile
+
+    if   num != 1
+    then i += 1                     // l'ultimo primo va nella tabella
+         fact[i] <=> num            // e num va a zero
+    else num -= 1
+    fi   fact[i] != fact[i - 1]
+
+    if   (fact[i - 1] * fact[i - 1]) < fact[i]      // azzera t
+    then from (t * t) > fact[i]
+         loop uncall nexttry(t)
+         until t == 0
+    else t -= fact[i - 1]
+    fi   (fact[i - 1] * fact[i - 1]) < fact[i]
+
+    call zeroi(fact, i)
+
+procedure main()
+    local int num = 0
+    local int t = 0
+    local int z = 0
+    local int i = 0
+    local int fact[20] = 0
+    num += 840
+    call factor(num, t, z, i, fact)
+    show(num)
+    show(fact)
+    uncall factor(num, t, z, i, fact)
+    show(num)
+    num -= 840
+    delocal int fact[20] = 0
+    delocal int i = 0
+    delocal int z = 0
+    delocal int t = 0
+    delocal int num = 0

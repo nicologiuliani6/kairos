@@ -1,0 +1,40 @@
+// Radice intera, dal report di Lutz e Derby (1982), tradotta in Kairos.
+// rt := floor(sqrt(num)); num finisce con il resto num - rt*rt.
+// Le variabili globali del listato originale diventano parametri.
+
+procedure doublebit(int z, int bit)
+    z += bit
+    bit += z
+    z -= bit / 2
+
+procedure root(int num, int rt, int z, int bit)
+    bit += 1
+    from bit == 1               // trova l'ordine di grandezza
+    loop call doublebit(z, bit)
+    until (bit * bit) > num
+    from (bit * bit) > num
+    do   uncall doublebit(z, bit)
+         if    ((rt + bit) * (rt + bit)) <= num
+         then  rt += bit
+         fi    ((rt / bit) % 2) != 0
+    until bit == 1
+    bit -= 1
+    num -= rt * rt
+
+procedure main()
+    local int num = 0
+    local int rt = 0
+    local int z = 0
+    local int bit = 0
+    num += 66
+    call root(num, rt, z, bit)
+    show(rt)
+    show(num)
+    uncall root(num, rt, z, bit)
+    show(rt)
+    show(num)
+    num -= 66
+    delocal int bit = 0
+    delocal int z = 0
+    delocal int rt = 0
+    delocal int num = 0

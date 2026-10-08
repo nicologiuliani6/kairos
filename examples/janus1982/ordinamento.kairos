@@ -1,0 +1,43 @@
+// Ordinamento a bolle con permutazione, dal report di Lutz e Derby (1982).
+// Il condizionale di `sort` non e' invertibile: la guardia d'uscita confronta perm,
+// che registra da dove viene ogni elemento e non se lo scambio e' appena avvenuto.
+// Con list = [4,2,5,1,3] l'asserzione fallisce alla terza iterazione esterna.
+
+procedure sort(int list[], int perm[], int n, int i, int j)
+    from i == 0
+    loop j += n - 2
+         from j == n - 2
+         loop if   list[j] > list[j + 1]
+              then list[j] <=> list[j + 1]
+                   perm[j] <=> perm[j + 1]
+              fi   perm[j] > perm[j + 1]
+              j -= 1
+         until j == i - 1
+         j -= i - 1
+         i += 1
+    until i == n - 1
+    i -= n - 1
+
+procedure makeidperm(int perm[], int n, int i)
+    from i == 0
+    loop perm[i] += i
+         i += 1
+    until i == n
+    i -= n
+
+procedure main()
+    local int list[5] = 0
+    local int perm[5] = 0
+    local int n = 5
+    local int i = 0
+    local int j = 0
+    list[0] += 4
+    list[1] += 2
+    list[2] += 5
+    list[3] += 1
+    list[4] += 3
+    call makeidperm(perm, n, i)
+    show(perm)
+    call sort(list, perm, n, i, j)
+    show(list)
+    show(perm)
