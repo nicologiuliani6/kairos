@@ -161,12 +161,13 @@ void op_swap(VM *vm, const char *frame_name)
 {
     char *ID1 = strtok(NULL, " \t"), *ID2 = strtok(NULL, " \t");
     uint  fi  = get_findex(frame_name);
-    Var  *v1  = get_var(vm, fi, ID1, "SWAP");
-    Var  *v2  = get_var(vm, fi, ID2, "SWAP");
+    Var  *v1, *v2;
+    int64_t *c1 = lvalue_ptr(vm, fi, ID1, &v1, "SWAP");
+    int64_t *c2 = lvalue_ptr(vm, fi, ID2, &v2, "SWAP");
     var_par_mut_acquire2(v1, v2);
-    int64_t tmp = *(v1->value);
-    *(v1->value) = *(v2->value);
-    *(v2->value) = tmp;
+    int64_t tmp = *c1;
+    *c1 = *c2;
+    *c2 = tmp;
     var_par_mut_release2(v1, v2);
 }
 
@@ -787,12 +788,12 @@ static inline void op_show(VM *vm, const char *frame_name)
             op_show_flush_char_line(vm);
             vm_printf("%s: %lld\n", ID, (long long)*(v->value));
         }
-    } else if (v->T == TYPE_STACK) {
+    } else if (v->T == TYPE_STACK || v->T == TYPE_ARRAY) {
         if (as_char)
             vm_debug_panic("[VM] SHOW char: supportato solo per int\n");
         op_show_flush_char_line(vm);
-        char open = (v->T == TYPE_STACK) ? '[' : '<';
-        char clos = (v->T == TYPE_STACK) ? ']' : '>';
+        char open = '[';
+        char clos = ']';
         vm_printf("%s: %c", ID, open);
         for (size_t k = 0; k < v->stack_len; k++) {
             vm_printf("%lld", (long long)v->value[k]);
@@ -991,11 +992,18 @@ static inline void op_local(VM *vm, const char *frame_name)
     char *Vtype = strtok(NULL, " \t");
     char *Vname = strtok(NULL, " \t");
     char *c_val = strtok(NULL, " \t");
+    char *c_len = (Vtype && !strcmp(Vtype, "array")) ? strtok(NULL, " \t") : NULL;
     uint  fi    = get_findex(frame_name);
 
-    pthread_mutex_lock(&var_indexer_mtx);
-    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
-    pthread_mutex_unlock(&var_indexer_mtx);
+    int vi_gia = char_id_map_lookup(&vm->frames[fi]->VarIndexer, Vname);
+    uint vi;
+    if (vi_gia >= 0) {
+        vi = (uint)vi_gia;          /* nome gia' presente: nessun lock */
+    } else {
+        pthread_mutex_lock(&var_indexer_mtx);
+        vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
+        pthread_mutex_unlock(&var_indexer_mtx);
+    }
 
     frame_ensure_vars(vm->frames[fi], (int)vi);
     /* Local-Err: se lo slot esiste già ed è stato allocato da un LOCAL
@@ -1036,7 +1044,21 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     }
 
-    if (c_val && char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val)) {
+    if (dst->T == TYPE_ARRAY) {
+        long n = c_len ? strtol(c_len, NULL, 10) : 0;
+        if (n <= 0) vm_debug_panic("[VM] LOCAL: array '%s' senza lunghezza valida\n", Vname);
+        int64_t fill = 0;
+        if (c_val) {
+            if (char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val))
+                fill = resolve_value(vm, fi, c_val);
+            else
+                fill = (int64_t)strtoull(c_val, NULL, 10);
+        }
+        dst->value = malloc((size_t)n * sizeof(int64_t));
+        if (!dst->value) vm_debug_panic("[VM] LOCAL: malloc array fallita\n");
+        for (long k = 0; k < n; k++) dst->value[k] = fill;
+        dst->stack_len = (size_t)n;
+    } else if (c_val && char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val)) {
         uint  si  = char_id_map_get(&vm->frames[fi]->VarIndexer, c_val);
         Var  *src = vm->frames[fi]->vars[si];
         if (!src) vm_debug_panic("[VM] LOCAL: sorgente NULL\n");
@@ -1065,6 +1087,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     char *Vtype = strtok(NULL, " \t");
     char *Vname = strtok(NULL, " \t");
     char *c_val = strtok(NULL, " \t");
+    char *c_len = (Vtype && !strcmp(Vtype, "array")) ? strtok(NULL, " \t") : NULL;
     uint  fi    = get_findex(frame_name);
 
     /* ── 1. Valore atteso ── */
@@ -1088,6 +1111,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     /* ── 4. Tipo ── */
     const char *actual_type = (V->T == TYPE_INT)  ? "int"
                             : (V->T == TYPE_STACK) ? "stack"
+                            : (V->T == TYPE_ARRAY) ? "array"
                                                    : "channel";
     if (strcmp(Vtype, actual_type) != 0) {
         vm_debug_panic("[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n",
@@ -1124,12 +1148,22 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     /* ── 5. Valore finale ── */
     int ok = 0;
-    if      (V->T == TYPE_INT)     ok = (*(V->value) == Vvalue);
+    if (V->T == TYPE_ARRAY) {
+        long n = c_len ? strtol(c_len, NULL, 10) : -1;
+        ok = (n == (long)V->stack_len);
+        for (size_t k = 0; ok && k < V->stack_len; k++)
+            ok = (V->value[k] == Vvalue);
+    }
+    else if (V->T == TYPE_INT)     ok = (*(V->value) == Vvalue);
     else if (V->T == TYPE_STACK)   ok = (V->stack_len == 0 && c_val && strcmp(c_val, "nil")   == 0);
     else if (V->T == TYPE_CHANNEL) ok = (V->channel->buf_len == 0 && c_val && strcmp(c_val, "empty") == 0);
 
     if (!ok) {
-        if (V->T == TYPE_INT)
+        if (V->T == TYPE_ARRAY)
+            vm_debug_panic(
+                "[VM] DELOCAL: array '%s' non e' tutto %lld alla chiusura (o lunghezza diversa)\n",
+                Vname, (long long)Vvalue);
+        else if (V->T == TYPE_INT)
             vm_debug_panic(
                 "[VM] DELOCAL: valore finale errato! (frame=%s var=%s, atteso=%lld, trovato=%lld, c_val=%s)\n",
                 frame_name, Vname, (long long)Vvalue, (long long)*(V->value), c_val ? c_val : "NULL");
@@ -1139,9 +1173,15 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     }
 
     /* ── 6. Distruggi ── */
-    pthread_mutex_lock(&var_indexer_mtx);
-    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
-    pthread_mutex_unlock(&var_indexer_mtx);
+    int vi_gia = char_id_map_lookup(&vm->frames[fi]->VarIndexer, Vname);
+    uint vi;
+    if (vi_gia >= 0) {
+        vi = (uint)vi_gia;          /* nome gia' presente: nessun lock */
+    } else {
+        pthread_mutex_lock(&var_indexer_mtx);
+        vi = char_id_map_get(&vm->frames[fi]->VarIndexer, Vname);
+        pthread_mutex_unlock(&var_indexer_mtx);
+    }
 
     if (V->T == TYPE_CHANNEL && vm->inversion_depth == 0) {
         int should_track = 0;

@@ -1,0 +1,9 @@
+// `from b1 do c1 loop c2` senza la guardia d'uscita `until b2` non deve parsare.
+// Le clausole `do` e `loop` sono facoltative (come in Janus), `until` no.
+procedure main()
+    local int x = 0
+    from x == 0 do
+        x += 1
+    loop
+        skip
+    delocal int x = 1

@@ -1,0 +1,9 @@
+// a[i] += a[j]: l'array a sinistra compare anche a destra (come x += x)
+procedure main()
+    local int v[3] = 0
+    local int i = 0
+    local int j = 1
+    v[i] += v[j]
+    delocal int j = 1
+    delocal int i = 0
+    delocal int v[3] = 0

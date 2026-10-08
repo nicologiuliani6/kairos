@@ -5,6 +5,7 @@ procedure encrypt(int m, int k)
         m += k
         k -= 1
         call encrypt(m, k)
+        k += 1
     fi k == 0
 procedure decrypt(int m, int k)
     if k == 0 then
@@ -13,6 +14,7 @@ procedure decrypt(int m, int k)
         m -= k
         k -= 1
         call decrypt(m, k)
+        k += 1
     fi k == 0
 
 procedure main()
@@ -22,7 +24,7 @@ procedure main()
     //show(key)          // 17
     call encrypt(msg, key)
     show(msg)          // 153 (17+16+...+1)
-    //show(key)          // 0 
+    //show(key)          // 17 (k e' ripristinato)
     uncall encrypt(msg, key)
     //call decrypt(msg, key) //stessa cosa di uncall
     show(msg)          // torna 0

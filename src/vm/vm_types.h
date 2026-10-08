@@ -11,6 +11,17 @@
 
 #define uint     unsigned int
 
+/* Copia una riga di bytecode in un buffer senza il riempimento di strncpy:
+   strncpy azzera tutto il resto della destinazione, e con buffer da 16 KB questo
+   significava scrivere 16 KB per ogni istruzione eseguita, a ogni thread. */
+#include <string.h>
+static inline void vm_copy_line(char *dst, const char *src, size_t cap)
+{
+    size_t l = strnlen(src, cap - 1);
+    memcpy(dst, src, l);
+    dst[l] = '\0';
+}
+
 /* ----------------------------------------------------------------------
  *  strtok e i thread
  *
@@ -36,7 +47,8 @@ typedef enum {
     TYPE_INT     = 0,
     TYPE_STACK   = 1,
     TYPE_CHANNEL = 2,
-    TYPE_PARAM   = 3
+    TYPE_PARAM   = 3,
+    TYPE_ARRAY   = 4     /* int[n]: value = n celle, stack_len = n, lunghezza fissa */
 } ValueType;
 
 typedef struct ThreadArgs ThreadArgs;

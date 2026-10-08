@@ -90,6 +90,13 @@ static inline void make_thread_frame_key(const char *proc, char *out, size_t sz)
 
 static inline uint get_findex(const char *name)
 {
+    /* Cammino veloce senza lock: l'indice e' append-only e pubblica ogni voce
+       solo quando e' completa (vedi char_id_map_get). Il lock serve solo al
+       caso raro, voce mancante. Prenderlo a ogni chiamata serializzava tutti i
+       rami di un par. */
+    int gia = char_id_map_lookup(&FrameIndexer, name);
+    if (gia >= 0) return (uint)gia;
+
     pthread_mutex_lock(&var_indexer_mtx);
     int exists = char_id_map_exists(&FrameIndexer, name);
     if (!exists) {
@@ -110,8 +117,15 @@ static inline uint get_findex(const char *name)
  * ====================================================================== */
 static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok);
 
+static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op);
+static inline int64_t *array_cell(VM *vm, uint fi, const char *tok, Var **vout, const char *op);
+
 static inline int64_t resolve_atom(VM *vm, uint fi, const char *s)
 {
+    if (strchr(s, '[')) {                       /* cella di array: a[idx] */
+        Var *av;
+        return *array_cell(vm, fi, s, &av, "lettura");
+    }
     int idx = char_id_map_lookup(&vm->frames[fi]->VarIndexer, s);
     if (idx >= 0) {
         /* Slot delocal'd ma ancora nell'indexer: evita NULL-deref (ritorna 0). */
@@ -143,8 +157,19 @@ static inline int token_len(const char *p)
         return i;
     }
     int i = 0;
-    while (p[i] && p[i] != ' ' && p[i] != ')' && p[i] != '+' && p[i] != '-')
+    while (p[i] && p[i] != ' ' && p[i] != ')' && p[i] != '+' && p[i] != '-' &&
+           p[i] != '*' && p[i] != '/' && p[i] != '%') {
+        if (p[i] == '[') {                      /* a[...]: l'indice e' parte del token */
+            int depth = 0;
+            do {
+                if (p[i] == '[') depth++;
+                else if (p[i] == ']') depth--;
+                i++;
+            } while (depth > 0 && p[i]);
+            continue;
+        }
         i++;
+    }
     return i > 0 ? i : 1;
 }
 
@@ -180,6 +205,13 @@ static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 
         if (op == '+') return lval + rval;
         if (op == '-') return lval - rval;
+        if (op == '*') return lval * rval;
+        if (op == '/' || op == '%') {
+            if (rval == 0)
+                vm_debug_panic("[VM] Div-Err: divisione per zero (%lld %c 0)\n",
+                               (long long)lval, op);
+            return op == '/' ? lval / rval : lval % rval;
+        }
         vm_debug_panic("[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
     }
 
@@ -204,6 +236,45 @@ static inline void read_rest_of_expr(char *out, size_t outsz)
     while (*rest == ' ' || *rest == '\t') rest++;
     strncpy(out, rest, outsz - 1);
     out[outsz - 1] = '\0';
+}
+
+/* Cella `a[idx]` di un array: ritorna il puntatore alla cella. L'indice e' un'espressione
+   valutata nello stesso store sia in avanti sia all'indietro. Fuori dai limiti e'
+   un errore (Idx-Err), non un valore convenzionale. */
+static inline int64_t *array_cell(VM *vm, uint fi, const char *tok, Var **vout, const char *op)
+{
+    const char *lb = strchr(tok, '[');
+    const char *rb = strrchr(tok, ']');
+    if (!lb || !rb || rb < lb)
+        vm_debug_panic("[VM] %s: cella di array malformata '%s'\n", op, tok);
+    char name[VAR_NAME_LENGTH];
+    size_t nl = (size_t)(lb - tok);
+    if (nl >= sizeof(name)) nl = sizeof(name) - 1;
+    memcpy(name, tok, nl); name[nl] = '\0';
+    char inner[256];
+    size_t il = (size_t)(rb - lb - 1);
+    if (il >= sizeof(inner)) il = sizeof(inner) - 1;
+    memcpy(inner, lb + 1, il); inner[il] = '\0';
+    Var *v = get_var(vm, fi, name, op);
+    if (v->T != TYPE_ARRAY)
+        vm_debug_panic("[VM] %s: '%s' non e' un array\n", op, name);
+    int64_t i = resolve_expr(vm, fi, inner);
+    if (i < 0 || (uint64_t)i >= (uint64_t)v->stack_len)
+        vm_debug_panic("[VM] Idx-Err: indice %lld fuori dai limiti di '%s' (lunghezza %zu)\n",
+                       (long long)i, name, v->stack_len);
+    *vout = v;
+    return &v->value[i];
+}
+
+/* Luogo di un assegnamento: una variabile int o una cella di array. */
+static inline int64_t *lvalue_ptr(VM *vm, uint fi, const char *id, Var **vout, const char *op)
+{
+    if (strchr(id, '['))
+        return array_cell(vm, fi, id, vout, op);
+    Var *v = get_var(vm, fi, id, op);
+    if (v->T != TYPE_INT) vm_debug_panic("[VM] %s non su INT!\n", op);
+    *vout = v;
+    return v->value;
 }
 
 static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op)
@@ -328,6 +399,11 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
         v->T         = TYPE_STACK;
         v->stack_len = 0;
         v->value     = malloc(VAR_STACK_MAX_SIZE * sizeof(int64_t));
+    } else if (strcmp(type, "array") == 0) {
+        /* Le celle le alloca op_local, che conosce la lunghezza. */
+        v->T         = TYPE_ARRAY;
+        v->stack_len = 0;
+        v->value     = NULL;
     } else if (strcmp(type, "channel") == 0) {
         v->T         = TYPE_CHANNEL;
         v->stack_len = 0;

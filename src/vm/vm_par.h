@@ -169,11 +169,9 @@ static void *thread_entry(void *arg)
             char *nl = strchr(scan, '\n');
             if (!nl) break;
             *nl = '\0';
-            strncpy(lines[nlines], scan, sizeof(lines[nlines]) - 1);
-            lines[nlines][sizeof(lines[nlines]) - 1] = '\0';
+            vm_copy_line(lines[nlines], scan, sizeof(lines[nlines]));
             char lb[16384];
-            strncpy(lb, scan, sizeof(lb) - 1);
-            lb[sizeof(lb) - 1] = '\0';
+            vm_copy_line(lb, scan, sizeof(lb));
             char *fw = strtok(skip_lineno(lb), " \t");
             *nl = '\n';
             if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) break;
@@ -190,8 +188,7 @@ static void *thread_entry(void *arg)
         if (!has_complex) {
             for (int i = nlines - 1; i >= 0; i--) {
                 char lb[16384];
-                strncpy(lb, lines[i], sizeof(lb) - 1);
-                lb[sizeof(lb) - 1] = '\0';
+                vm_copy_line(lb, lines[i], sizeof(lb));
                 char *fw = strtok(skip_lineno(lb), " \t");
                 if (!fw) continue;
                 if      (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, fname);
@@ -225,8 +222,7 @@ static void *thread_entry(void *arg)
 
     while (ptr && *ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
-        lb[sizeof(lb) - 1] = '\0';
+        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
         char *fw = strtok(skip_lineno(lb), " \t");
 
         if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END"))
@@ -341,7 +337,7 @@ thread_exit:
     }
     pthread_mutex_lock(args->done_mtx);
     args->finished = 1;
-    pthread_cond_signal(args->done_cond);
+    pthread_cond_broadcast(args->done_cond);
     pthread_mutex_unlock(args->done_mtx);
     return NULL;
 }

@@ -13,7 +13,7 @@ static inline void notify_sender_turn_done(ThreadArgs *sender)
     if (!sender) return;
     pthread_mutex_lock(sender->done_mtx);
     sender->turn_done = 1;
-    pthread_cond_signal(sender->done_cond);
+    pthread_cond_broadcast(sender->done_cond);
     pthread_mutex_unlock(sender->done_mtx);
 }
 
@@ -35,7 +35,7 @@ static inline void signal_blocked(ThreadArgs *ta)
     if (!ta) return;
     pthread_mutex_lock(ta->done_mtx);
     ta->blocked = 1;
-    pthread_cond_signal(ta->done_cond);
+    pthread_cond_broadcast(ta->done_cond);
     pthread_mutex_unlock(ta->done_mtx);
 }
 

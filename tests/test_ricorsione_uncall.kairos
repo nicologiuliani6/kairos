@@ -1,0 +1,20 @@
+// Ricorsione + uncall: l'inverso di una procedura ricorsiva e' un corpo calcolato in compilazione (f__inv).
+procedure down(int m, int k)
+    if k == 0 then
+        m += 1
+    else
+        k -= 1
+        call down(m, k)
+        k += 1
+        m += 1
+    fi k == 0
+
+procedure main()
+    local int a = 0
+    local int n = 5
+    call down(a, n)
+    show(a)
+    uncall down(a, n)
+    show(a)
+    delocal int n = 5
+    delocal int a = 0

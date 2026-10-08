@@ -191,7 +191,7 @@ static inline void dbg_hook(VMDebugState *dbg,
                sta aspettando finished/blocked per evitare deadlock. */
             pthread_mutex_lock(current_thread_args->done_mtx);
             current_thread_args->blocked = 1;
-            pthread_cond_signal(current_thread_args->done_cond);
+            pthread_cond_broadcast(current_thread_args->done_cond);
             pthread_mutex_unlock(current_thread_args->done_mtx);
         }
         dbg->mode = VM_MODE_PAUSE;
@@ -294,8 +294,8 @@ static inline int vm_debug_dump_json(VM *vm, char *out, int outsz)
 
             if (v->T == TYPE_INT) {
                 JWRITE("\"type\":\"int\",\"value\":%lld}", (long long)*(v->value));
-            } else if (v->T == TYPE_STACK) {
-                JWRITE("\"type\":\"stack\",\"value\":[");
+            } else if (v->T == TYPE_STACK || v->T == TYPE_ARRAY) {
+                JWRITE(v->T == TYPE_ARRAY ? "\"type\":\"array\",\"value\":[" : "\"type\":\"stack\",\"value\":[");
                 for (size_t k = 0; k < v->stack_len; k++) {
                     if (k) JWRITE(",");
                     JWRITE("%lld", (long long)v->value[k]);
@@ -352,16 +352,17 @@ static inline int vm_debug_vars_json(VM *vm, const char *frame_name,
         JWRITE("{\"name\":\"%s\",", v->name);
         if (v->T == TYPE_INT) {
             JWRITE("\"type\":\"int\",\"value\":%lld}", (long long)*(v->value));
-        } else if (v->T == TYPE_STACK || v->T == TYPE_CHANNEL) {
+        } else if (v->T == TYPE_STACK || v->T == TYPE_ARRAY || v->T == TYPE_CHANNEL) {
             JWRITE("\"type\":\"%s\",\"value\":[",
-                   v->T == TYPE_STACK ? "stack" : "channel");
+                   v->T == TYPE_STACK ? "stack" : v->T == TYPE_ARRAY ? "array" : "channel");
             /* NB: NON chiamare questa lunghezza `n` — `n` è il cursore di
              * output usato da JWRITE, che la incrementa a ogni scrittura.
              * Usarla come bound del for la trasformava in un loop runaway
              * (k oltre stack_len → lettura OOB → segfault, e JSON corrotto
              * → pannello variabili vuoto nel DAP). */
-            size_t slen = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
-            int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
+            int seq = (v->T == TYPE_STACK || v->T == TYPE_ARRAY);
+            size_t slen = seq ? v->stack_len : v->channel->buf_len;
+            int64_t *arr = seq ? v->value : v->channel->buf;
             for (size_t k = 0; k < slen; k++) {
                 if (k) JWRITE(",");
                 JWRITE("%lld", (long long)arr[k]);

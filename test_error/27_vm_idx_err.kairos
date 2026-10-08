@@ -1,0 +1,7 @@
+// Idx-Err: indice fuori dai limiti dell'array
+procedure main()
+    local int v[2] = 0
+    local int i = 5
+    v[i] += 1
+    delocal int i = 5
+    delocal int v[2] = 0

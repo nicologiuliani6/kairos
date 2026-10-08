@@ -1,4 +1,6 @@
-// Ricorsione encrypt + uncall (sequenziale: parallelismo reale richiederebbe canali)
+// Ricorsione encrypt + uncall (sequenziale: parallelismo reale richiederebbe canali).
+// k viene ripristinato dopo la chiamata ricorsiva: cosi' la guardia d'uscita `k == 0`
+// distingue i due rami (vera solo nel caso base) e l'inverso e' ben definito.
 
 procedure encrypt(int m, int k)
     if k == 0 then
@@ -6,6 +8,7 @@ procedure encrypt(int m, int k)
         m += k
         k -= 1
         call encrypt(m, k)
+        k += 1
     fi k == 0
 
 procedure main()

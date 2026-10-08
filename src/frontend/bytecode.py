@@ -2,6 +2,7 @@ import sys
 from queue import Queue
 
 from src.frontend.errors import KairosCompileError
+from src.frontend.inverse import cyclic_procedures, inverse_procedure, INV_SUFFIX
 from src.frontend.parser import (
     lexer, parser, run_static_checks, desugar_try, from_second_body,
     _BUILTIN_CALL_OPCODES,
@@ -34,6 +35,7 @@ class ByteCode_Compiler:
         self.addr  = 0
         self.current_lineno = 0
         self.bytecode_line = 0      # ← AGGIUNGI
+        self.inv_procs = set()      # procedure ricorsive che hanno un corpo inverso compilato
 
     def emit(self, instr, lineno=None):
         self.bytecode_line += 1
@@ -50,6 +52,11 @@ class ByteCode_Compiler:
             l = self.expr_to_str(left)
             r = self.expr_to_str(right)
             return f"({l} {op} {r})"
+        if expr[0] == 'index':
+            # Cella di array: `a[idx]`. L'indice e' scritto senza spazi, cosi'
+            # la cella resta un unico token per il tokenizer a spazi della VM.
+            _, name, idx = expr
+            return f"{name}[{self.expr_to_str(idx).replace(' ', '')}]"
         return str(expr)
 
     def cond_to_str(self, cond):
@@ -58,7 +65,8 @@ class ByteCode_Compiler:
         Il bytecode EVAL usa il formato:  EVAL <lhs> <op> <rhs>
         """
         _, op, lhs, rhs = cond
-        return self.expr_to_str(lhs), op, self.expr_to_str(rhs)
+        # Il lato sinistro e' un solo token (la VM lo separa a spazi): senza spazi.
+        return self.expr_to_str(lhs).replace(' ', ''), op, self.expr_to_str(rhs)
 
     def process(self, ast):
         if not ast:
@@ -67,9 +75,23 @@ class ByteCode_Compiler:
 
             case 'program':
                 self.emit("START", 0)
-                for child in (ast[1] if len(ast) > 1 else []):
-                    if isinstance(child, (list, tuple)):
-                        self.process(child)
+                procs = [c for c in (ast[1] if len(ast) > 1 else []) if isinstance(c, (list, tuple))]
+                # Le procedure ricorsive hanno anche il corpo inverso, calcolato qui:
+                # `uncall f` esegue in avanti `f__inv`, senza dedurre a tempo di
+                # esecuzione quante volte f si e' richiamata.
+                cyc = cyclic_procedures(procs)
+                self.inv_procs = set()
+                inverses = {}
+                for proc in procs:
+                    if proc[0] == 'procedure' and proc[1] in cyc and proc[1] != 'main':
+                        inv = inverse_procedure(proc, cyc)
+                        if inv is not None:
+                            inverses[proc[1]] = inv
+                            self.inv_procs.add(proc[1])
+                for child in procs:
+                    self.process(child)
+                    if child[0] == 'procedure' and child[1] in inverses:
+                        self.process(inverses[child[1]])
                 self.emit("HALT", 0)
 
             case 'procedure':
@@ -87,18 +109,24 @@ class ByteCode_Compiler:
 
             case 'local':
                 _, tipo, name, val, lineno = ast
-                self.emit(f"LOCAL {tipo} {name} {val}", lineno)
+                if tipo.startswith('array:'):       # LOCAL array nome valore lunghezza
+                    self.emit(f"LOCAL array {name} {val} {tipo.split(':')[1]}", lineno)
+                else:
+                    self.emit(f"LOCAL {tipo} {name} {val}", lineno)
 
             case 'delocal':
                 _, tipo, name, val, lineno = ast
-                self.emit(f"DELOCAL {tipo} {name} {val}", lineno)
+                if tipo.startswith('array:'):
+                    self.emit(f"DELOCAL array {name} {val} {tipo.split(':')[1]}", lineno)
+                else:
+                    self.emit(f"DELOCAL {tipo} {name} {val}", lineno)
 
             case 'assign':
                 _, var, op, expr, lineno = ast
                 opcode = _ASSIGN_OPS.get(op)
                 if opcode is None:
                     raise KairosCompileError("BYTECODE", f"operatore aritmetico non supportato: {op}")
-                self.emit(f"{opcode} {var} {self.expr_to_str(expr)}", lineno)
+                self.emit(f"{opcode} {self.expr_to_str(var)} {self.expr_to_str(expr)}", lineno)
 
             case 'call':
                 _, name, args, lineno = ast
@@ -108,7 +136,10 @@ class ByteCode_Compiler:
             case 'uncall':
                 _, name, args, lineno = ast
                 args_str = " ".join(str(a) for a in args)
-                self.emit(f"UNCALL {name} {args_str}".rstrip(), lineno)
+                if name in self.inv_procs:
+                    self.emit(f"CALL {name}{INV_SUFFIX} {args_str}".rstrip(), lineno)
+                else:
+                    self.emit(f"UNCALL {name} {args_str}".rstrip(), lineno)
 
             case 'call_direct':
                 _, name, args, lineno = ast

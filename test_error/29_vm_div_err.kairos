@@ -1,0 +1,7 @@
+// Div-Err: divisore nullo
+procedure main()
+    local int x = 0
+    local int z = 0
+    x += (7 / z)
+    delocal int z = 0
+    delocal int x = 0

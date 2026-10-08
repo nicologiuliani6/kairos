@@ -11,6 +11,7 @@ reserved = {
     'procedure': 'PROCEDURE',
     'int'      : 'INT',   'stack'   : 'STACK', 'nil'   : 'NIL',
     'channel'  : 'CHANNEL', 'empty' : 'EMPT',
+    'skip'     : 'SKIP',
     'local'    : 'LOCAL', 'delocal' : 'DELOCAL',
     'call'     : 'CALL',  'uncall'  : 'UNCALL',
     'if'       : 'IF',    'then'    : 'THEN',  'else'  : 'ELSE', 'fi': 'FI',
@@ -34,7 +35,8 @@ tokens = (
     # assegnamento
     'EQUALS',                              # =
     'PLUSEQUALS', 'MINUSEQUALS', 'SWAP', 'XOREQUALS',   # operatori composti
-    'PLUS', 'MINUS',                       # operatori semplici
+    'PLUS', 'MINUS', 'TIMES', 'DIVIDE', 'MOD',   # operatori semplici
+    'LBRACKET', 'RBRACKET',
     'LPAREN', 'RPAREN',
     'LOCAL', 'DELOCAL',
     'CALL', 'UNCALL',
@@ -42,6 +44,7 @@ tokens = (
     'FROM', 'DO', 'LOOP', 'UNTIL',
     'PAR', 'AND', 'RAP',
     'TRY', 'ROLLBACK', 'YRT',
+    'SKIP',
     'COMMA',
 )
 
@@ -117,6 +120,11 @@ t_MINUSEQUALS = r'[-]='
 t_EQUALS = r'='
 t_PLUS   = r'[+]'
 t_MINUS  = r'[-]'
+t_TIMES  = r'[*]'
+t_DIVIDE = r'/'
+t_MOD    = r'%'
+t_LBRACKET = r'\['
+t_RBRACKET = r'\]'
 
 # parentesi e virgole
 t_LPAREN = r'[(]'

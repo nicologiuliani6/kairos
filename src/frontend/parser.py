@@ -77,6 +77,7 @@ def _builtin_written_arg_names(name, args):
 # ── Precedenza operatori ────────────────────────────────────────────────────
 precedence = (
     ('left', 'PLUS', 'MINUS'),
+    ('left', 'TIMES', 'DIVIDE', 'MOD'),
 )
 
 # ── Programma ───────────────────────────────────────────────────────────────
@@ -90,13 +91,22 @@ def p_procedure_list(p):
     p[0] = [p[1]] if len(p) == 2 else p[1] + [p[2]]
 
 # ── Procedure ───────────────────────────────────────────────────────────────
-def p_param_list(p):
-    '''param_list : type ID
-                  | param_list COMMA type ID'''
-    if len(p) == 3:
-        p[0] = [(p[1], p[2])]
+def p_param(p):
+    '''param : type ID
+             | type ID LBRACKET RBRACKET'''
+    # Un array passato come parametro ha tipo 'array' (per riferimento, come
+    # gli stack); la lunghezza e' quella dell'array dichiarato dal chiamante.
+    if len(p) == 5:
+        if p[1] != 'int':
+            raise KairosCompileError("PARSER", f"riga {p.lineno(2)}: solo gli int possono essere array")
+        p[0] = ('array', p[2])
     else:
-        p[0] = p[1] + [(p[3], p[4])]
+        p[0] = (p[1], p[2])
+
+def p_param_list(p):
+    '''param_list : param
+                  | param_list COMMA param'''
+    p[0] = [p[1]] if len(p) == 2 else p[1] + [p[3]]
 
 def p_procedure(p):
     '''procedure : PROCEDURE ID LPAREN RPAREN opt_body
@@ -117,6 +127,10 @@ def p_opt_body_nonempty(p):
     '''opt_body : opt_body statement'''
     p[0] = p[1] + [p[2]]
 
+def p_opt_body_skip(p):
+    '''opt_body : opt_body SKIP'''
+    p[0] = p[1]          # skip: comando vuoto, non genera nulla
+
 # ── Tipi ────────────────────────────────────────────────────────────────────
 def p_type(p):
     '''type : INT
@@ -127,12 +141,19 @@ def p_type(p):
 # ── Espressioni ─────────────────────────────────────────────────────────────
 def p_expr_binop(p):
     '''expr : expr PLUS expr
-            | expr MINUS expr'''
+            | expr MINUS expr
+            | expr TIMES expr
+            | expr DIVIDE expr
+            | expr MOD expr'''
     p[0] = ('binop', p[2], p[1], p[3])
 
 def p_expr_paren(p):
     '''expr : LPAREN expr RPAREN'''
     p[0] = p[2]
+
+def p_expr_index(p):
+    '''expr : ID LBRACKET expr RBRACKET'''
+    p[0] = ('index', p[1], p[3])
 
 def p_expr_atom(p):
     '''expr : NUMBER
@@ -171,17 +192,41 @@ def p_type_decl(p):
 
 # ── Assegnamenti reversibili ────────────────────────────────────────────────
 def p_assign(p):
-    '''statement : ID PLUSEQUALS expr
-                 | ID MINUSEQUALS expr
-                 | ID XOREQUALS expr
-                 | ID SWAP expr'''
-    p[0] = ('assign', p[1], p[2], p[3], p.lineno(1))
+    '''statement : lvalue PLUSEQUALS expr
+                 | lvalue MINUSEQUALS expr
+                 | lvalue XOREQUALS expr
+                 | lvalue SWAP expr'''
+    if p[2] == '<=>' and not (isinstance(p[3], str) or
+                              (isinstance(p[3], tuple) and p[3][0] == 'index')):
+        raise KairosCompileError(
+            "PARSER", f"riga {p.lineno(2)}: '<=>' scambia due luoghi (variabile o cella)")
+    p[0] = ('assign', p[1], p[2], p[3], p.lineno(2))
+
+def p_lvalue(p):
+    '''lvalue : ID
+              | ID LBRACKET expr RBRACKET'''
+    p[0] = p[1] if len(p) == 2 else ('index', p[1], p[3])
 
 # ── Local / Delocal ─────────────────────────────────────────────────────────
 def p_local(p):
     '''statement : LOCAL type ID EQUALS value'''
     p[0] = ('local', p[2], p[3], p[5], p.lineno(1))
     if VERBOSE: print(f"local: {p[3]} ({p[2]}) = {p[5]}")
+
+def p_local_array(p):
+    '''statement : LOCAL type ID LBRACKET NUMBER RBRACKET EQUALS value'''
+    if p[2] != 'int':
+        raise KairosCompileError("PARSER", f"riga {p.lineno(1)}: solo gli int possono essere array")
+    if p[5] <= 0:
+        raise KairosCompileError("PARSER", f"riga {p.lineno(1)}: lunghezza array non valida {p[5]}")
+    # La lunghezza viaggia nel tipo ('array:N'): la tupla resta di 5 elementi.
+    p[0] = ('local', f'array:{p[5]}', p[3], p[8], p.lineno(1))
+
+def p_delocal_array(p):
+    '''statement : DELOCAL type ID LBRACKET NUMBER RBRACKET EQUALS value'''
+    if p[2] != 'int':
+        raise KairosCompileError("PARSER", f"riga {p.lineno(1)}: solo gli int possono essere array")
+    p[0] = ('delocal', f'array:{p[5]}', p[3], p[8], p.lineno(1))
 
 def p_delocal(p):
     '''statement : DELOCAL type ID EQUALS value
@@ -246,25 +291,42 @@ def p_uncall(p):
         if VERBOSE: print(f"uncall: {p[2]}({p[4]})")
 
 # ── FROM loop ───────────────────────────────────────────────────────────────
+def p_opt_do(p):
+    '''opt_do : DO opt_body
+              | '''
+    p[0] = p[2] if len(p) == 3 else []
+
+def p_opt_loop(p):
+    '''opt_loop : LOOP opt_body
+                | '''
+    p[0] = p[2] if len(p) == 3 else []
+
 def p_from(p):
-    '''statement : FROM condition DO opt_body LOOP opt_body UNTIL condition'''
+    '''statement : FROM condition opt_do opt_loop UNTIL condition'''
     # Ciclo a due corpi (Janus):  from b1 do c1 loop c2 until b2  → traccia  c1 [c2 c1]*
+    # Le clausole `do` e `loop` sono facoltative, come in Janus: una assente vale skip.
     # Salviamo sia la linea di FROM che quella di UNTIL per il mapping breakpoint.
     # Il secondo corpo sta IN CODA alla tupla: i visitatori che destrutturano
     # ('from', b1, c1, b2, *_rest) restano validi.
-    p[0] = ('from', p[2], p[4], p[8], p.lineno(1), p.lineno(7), p[6])
-    if VERBOSE: print(f"from: {p[2]} until: {p[8]}")
+    p[0] = ('from', p[2], p[3], p[6], p.lineno(1), p.lineno(5), p[4])
+    if VERBOSE: print(f"from: {p[2]} until: {p[6]}")
 
 # ── IF / ELSE ───────────────────────────────────────────────────────────────
+def p_opt_then(p):
+    '''opt_then : THEN opt_body
+                | '''
+    p[0] = p[2] if len(p) == 3 else []
+
+def p_opt_else(p):
+    '''opt_else : ELSE opt_body
+                | '''
+    p[0] = p[2] if len(p) == 3 else []
+
 def p_if(p):
-    '''statement : IF condition THEN opt_body FI condition
-                 | IF condition THEN opt_body ELSE opt_body FI condition'''
-    if len(p) == 7:
-        p[0] = ('if', p[2], p[4], [], p[6], p.lineno(1))
-        if VERBOSE: print(f"if: {p[2]} fi: {p[6]}")
-    else:
-        p[0] = ('if', p[2], p[4], p[6], p[8], p.lineno(1))
-        if VERBOSE: print(f"if: {p[2]} else fi: {p[8]}")
+    '''statement : IF condition opt_then opt_else FI condition'''
+    # `then` ed `else` sono facoltativi come in Janus: un ramo assente vale skip.
+    p[0] = ('if', p[2], p[3], p[4], p[6], p.lineno(1))
+    if VERBOSE: print(f"if: {p[2]} fi: {p[6]}")
 
 # ── PAR ─────────────────────────────────────────────────────────────────────
 def p_par_branch_list(p):
@@ -302,10 +364,30 @@ def p_error(p):
     else:
         raise KairosCompileError("PARSER", "errore sintattico: fine file inattesa")
 
+def _lv_base(lv):
+    """Nome della variabile bersaglio: `x` per `x`, `a` per la cella `a[e]`."""
+    return lv[1] if isinstance(lv, tuple) else lv
+
+
+def _lv_text(lv):
+    """Il bersaglio come lo ha scritto il programmatore: `x` oppure `a[...]`."""
+    return f"{lv[1]}[...]" if isinstance(lv, tuple) else lv
+
+
+def _intlike(t):
+    """Tipi che si comportano come int per i controlli di race e di mutazione."""
+    return t == 'int' or (isinstance(t, str) and t.startswith('array'))
+
+
 def _expr_contains_var(expr, var_name):
-    if isinstance(expr, tuple) and len(expr) == 4 and expr[0] == 'binop':
+    """`var_name` compare in `expr`? Per una cella `a[e]` come bersaglio conta il
+    nome dell'array: `a[i] += a[j]` e' rifiutato come `x += x`."""
+    base = _lv_base(var_name)
+    if isinstance(expr, tuple) and expr and expr[0] == 'binop':
         return _expr_contains_var(expr[2], var_name) or _expr_contains_var(expr[3], var_name)
-    return isinstance(expr, str) and expr == var_name
+    if isinstance(expr, tuple) and expr and expr[0] == 'index':
+        return expr[1] == base or _expr_contains_var(expr[2], var_name)
+    return isinstance(expr, str) and expr == base
 
 
 def _is_number_literal(expr_atom):
@@ -325,6 +407,10 @@ def _collect_ids_in_expr(expr, out):
     if isinstance(expr, tuple) and expr and expr[0] == 'binop':
         _collect_ids_in_expr(expr[2], out)
         _collect_ids_in_expr(expr[3], out)
+        return
+    if isinstance(expr, tuple) and expr and expr[0] == 'index':
+        out.add(expr[1])
+        _collect_ids_in_expr(expr[2], out)
         return
     if isinstance(expr, str):
         if _is_number_literal(expr):
@@ -358,7 +444,10 @@ def _collect_par_branch_var_uses(stmt, out):
         return
     if tag == 'assign':
         _, var_name, _op, expr, _lineno = stmt
-        out.add(var_name)
+        if isinstance(var_name, tuple):
+            _collect_ids_in_expr(var_name, out)       # cella: array + variabili dell'indice
+        else:
+            out.add(var_name)
         _collect_ids_in_expr(expr, out)
         return
     if tag == 'local':
@@ -440,23 +529,25 @@ def _collect_par_branch_int_writes(
     tag = stmt[0]
     if tag == 'assign':
         _, var_name, op, expr, _lineno = stmt
+        var_name = _lv_base(var_name)
         if op == '<=>':
-            if declared_types.get(var_name) == 'int':
+            if _intlike(declared_types.get(var_name)):
                 out.add(var_name)
-            if isinstance(expr, str) and declared_types.get(expr) == 'int':
-                out.add(expr)
+            other = _lv_base(expr) if isinstance(expr, (str, tuple)) else None
+            if isinstance(other, str) and _intlike(declared_types.get(other)):
+                out.add(other)
             return
-        if declared_types.get(var_name) == 'int':
+        if _intlike(declared_types.get(var_name)):
             out.add(var_name)
         return
     if tag == 'local':
         _, tipo, name, _val, _lineno = stmt
-        if tipo == 'int':
+        if _intlike(tipo):
             out.add(name)
         return
     if tag == 'delocal':
         _, tipo, name, _val, _lineno = stmt
-        if tipo == 'int':
+        if _intlike(tipo):
             out.add(name)
         return
     if tag == 'call_direct':
@@ -464,14 +555,14 @@ def _collect_par_branch_int_writes(
         lname = name.lower()
         if lname == 'swap' and isinstance(args, list) and len(args) >= 2:
             for vid in args[:2]:
-                if isinstance(vid, str) and declared_types.get(vid) == 'int':
+                if isinstance(vid, str) and _intlike(declared_types.get(vid)):
                     out.add(vid)
             return
         # Builtin che scrivono i propri argomenti (pop, srecv, push, ...): sono
         # scritture quanto un 'assign', anche se nell'AST sono un 'call_direct'.
         if lname in _BUILTIN_WRITTEN_ARGS:
             for vid in _builtin_written_arg_names(name, args):
-                if declared_types.get(vid) == 'int':
+                if _intlike(declared_types.get(vid)):
                     out.add(vid)
             return
         if lname in _BUILTIN_CALL_OPCODES:
@@ -485,9 +576,9 @@ def _collect_par_branch_int_writes(
                 if i >= len(pl):
                     break
                 ptype, formal = pl[i]
-                if ptype != 'int' or formal not in mf:
+                if not _intlike(ptype) or formal not in mf:
                     continue
-                if isinstance(actual, str) and declared_types.get(actual) == 'int':
+                if isinstance(actual, str) and _intlike(declared_types.get(actual)):
                     out.add(actual)
         return
     if tag in ('call', 'uncall'):
@@ -501,9 +592,9 @@ def _collect_par_branch_int_writes(
                 if i >= len(pl):
                     break
                 ptype, formal = pl[i]
-                if ptype != 'int' or formal not in mf:
+                if not _intlike(ptype) or formal not in mf:
                     continue
-                if isinstance(actual, str) and declared_types.get(actual) == 'int':
+                if isinstance(actual, str) and _intlike(declared_types.get(actual)):
                     out.add(actual)
         return
     if tag == 'if':
@@ -541,6 +632,7 @@ def _walk_proc_int_param_mutations_and_calls(stmt, int_formal_set, mutated_out, 
     tag = stmt[0]
     if tag == 'assign':
         _, var_name, _op, _expr, _lineno = stmt
+        var_name = _lv_base(var_name)
         if var_name in int_formal_set:
             mutated_out.add(var_name)
         return
@@ -601,7 +693,7 @@ def _compute_proc_int_mutated_formals(program_procedures):
 
     param_lists = {name: (proc_by_name[name][2] or []) for name in proc_by_name}
     int_formals = {
-        name: {pn for pt, pn in param_lists[name] if pt == 'int'}
+        name: {pn for pt, pn in param_lists[name] if _intlike(pt)}
         for name in param_lists
     }
 
@@ -630,7 +722,7 @@ def _compute_proc_int_mutated_formals(program_procedures):
                     if i >= len(pl):
                         break
                     pt, formal = pl[i]
-                    if pt != 'int' or formal not in callee_mut:
+                    if not _intlike(pt) or formal not in callee_mut:
                         continue
                     if not isinstance(actual, str):
                         continue
@@ -773,7 +865,7 @@ def _check_stmt_reversibility(
             raise KairosCompileError(
                 "STATIC",
                 (
-                    f"riga {lineno}: operazione non reversibile '{var_name} {op} ...' "
+                    f"riga {lineno}: operazione non reversibile '{_lv_text(var_name)} {op} ...' "
                     f"(la variabile a sinistra compare anche nell'espressione a destra)"
                 ),
             )
@@ -873,7 +965,7 @@ def _check_stmt_reversibility(
                 )
 
         int_access_sets = [
-            {v for v in acc if declared_types.get(v) == 'int'}
+            {v for v in acc if _intlike(declared_types.get(v))}
             for acc in branch_access
         ]
         if _ParStaticConfig.check_int_race:
@@ -1033,7 +1125,10 @@ def _try_collect_vars(stmts, used, bound):
             if s[3] is not None:
                 _collect_ids_in_expr(s[3], used)
         elif tag == 'assign':        # ('assign', var, op, expr, ln)
-            used.add(s[1])
+            if isinstance(s[1], tuple):
+                _collect_ids_in_expr(s[1], used)
+            else:
+                used.add(s[1])
             _collect_ids_in_expr(s[3], used)
         elif tag in ('call', 'uncall', 'call_direct'):  # (_, name, args, ln)
             for a in s[2]:

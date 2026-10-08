@@ -233,7 +233,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
+        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
         lb[sizeof(lb)-1] = '\0';
         char *fw = strtok(skip_lineno(lb), " \t");
 
@@ -830,8 +830,9 @@ static void vm_dump_frame(Frame *f)
             vm_printf("%lld", (long long)*(v->value));
         } else {
             vm_printf("[");
-            size_t n = (v->T == TYPE_STACK) ? v->stack_len : v->channel->buf_len;
-            int64_t *arr = (v->T == TYPE_STACK) ? v->value : v->channel->buf;
+            int seq = (v->T == TYPE_STACK || v->T == TYPE_ARRAY);
+            size_t n = seq ? v->stack_len : v->channel->buf_len;
+            int64_t *arr = seq ? v->value : v->channel->buf;
             for (size_t k = 0; k < n; k++) {
                 vm_printf("%lld", (long long)arr[k]);
                 if (k + 1 < n) vm_printf(", ");
@@ -894,7 +895,7 @@ static uint64_t vm_count_live_cells(VM *vm)
         for (int j = 0; j < f->var_count; j++) {
             Var *v = f->vars[j]; if (!v) continue;
             if (v->T == TYPE_INT) count++;
-            else if (v->T == TYPE_STACK) count += (uint64_t)v->stack_len;
+            else if (v->T == TYPE_STACK || v->T == TYPE_ARRAY) count += (uint64_t)v->stack_len;
         }
     }
     return count;

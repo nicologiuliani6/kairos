@@ -607,8 +607,13 @@ static inline int lp_row_first_eval_at_line(uint line, char **lp, uint *ln, int 
 static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
                            const char *val)
 {
-    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, id);
-    int64_t lval = *(vm->frames[fi]->vars[vi]->value);
+    int64_t lval;
+    if (strchr(id, '[') || id[0] == '(') {
+        lval = resolve_expr(vm, fi, id);         /* cella di array o espressione */
+    } else {
+        uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, id);
+        lval = *(vm->frames[fi]->vars[vi]->value);
+    }
     int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
 }
@@ -652,6 +657,8 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
     int64_t lval;
     if (id && (id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))) {
         lval = (int64_t)strtoll(id, NULL, 10);
+    } else if (id && (strchr(id, '[') || id[0] == '(')) {
+        lval = resolve_expr(vm, fi, id);         /* cella di array o espressione */
     } else {
         /* Var fuori scope (slot delocal'd ma ancora nell'indexer) → lval=0
          * invece di NULL-deref. Succede invertendo la guardia di un IF il cui
@@ -756,6 +763,7 @@ static inline int line_inside_loop_body(uint line, const LoopDescriptor *L, int 
 static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
 {
     const char *eid = L[li].eval_entry_id;
+    if (strchr(eid, '[') || eid[0] == '(') return resolve_value(vm, fi, eid);
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, eid)) return 0;
     uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, eid);
     return *(vm->frames[fi]->vars[vi]->value);
@@ -1691,8 +1699,7 @@ static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_l
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
-        lb[sizeof(lb) - 1] = '\0';
+        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
             char *a1 = strtok(NULL, " \t");
@@ -1718,8 +1725,7 @@ static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_l
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
-        lb[sizeof(lb) - 1] = '\0';
+        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
             char *a1 = strtok(NULL, " \t");
@@ -1740,8 +1746,7 @@ static inline int branch_span_has_call(char *buf, uint from_line, uint to_line)
         char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
         uint cur = (uint)atoi(ptr);
         if (cur >= to_line) { *nl = '\n'; break; }
-        char lb[16384]; strncpy(lb, ptr, sizeof(lb) - 1);
-        lb[sizeof(lb) - 1] = '\0';
+        char lb[16384]; vm_copy_line(lb, ptr, sizeof(lb));
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) {
             *nl = '\n'; return 1;

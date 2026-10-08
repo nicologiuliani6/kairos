@@ -1,6 +1,8 @@
-// PAR / RAP annidati + channel SSEND/SRECV
+// PAR / RAP annidati + channel SSEND/SRECV.
+// Ogni canale ha esattamente due titolari: c fra i due rami esterni, d fra i due interni.
 procedure main()
     channel c
+    channel d
     int x11
     x11+=11
     int x12
@@ -14,15 +16,16 @@ procedure main()
     and
         par
             show(x12)
-            ssend(<x12>, c)
+            ssend(<x12>, d)
             show(x12)
         and
             show(x21)
-            srecv(<x21>, c)
+            srecv(<x21>, d)
             show(x21)
-            show(x22)
-            srecv(<x22>, c)
-            show(x22)
         rap
+        show(x22)
+        srecv(<x22>, c)
+        show(x22)
     rap
     show(c)
+    show(d)

@@ -1,0 +1,40 @@
+// Clausole facoltative come in Janus: if senza then o senza else, from senza do o senza loop, skip.
+// La stessa procedura gira in avanti (call) e all'indietro (uncall).
+procedure forme(int x, int y, int i)
+    if x == 3 else
+        skip
+    fi x == 3
+    if x == 3 then
+        y += 1
+    fi y == 1
+    if x == 3 then
+        y += 1
+    else
+        y -= 1
+    fi y == 2
+    from i == 0 do
+        i += 1
+    until i == 3
+    from i == 3 loop
+        i -= 1
+    until i == 0
+    from i == 0 until i == 0
+    from i == 0 do
+        i += 1
+    loop
+        skip
+    until i == 2
+
+procedure main()
+    local int x = 0
+    local int y = 0
+    local int i = 0
+    x += 3
+    call forme(x, y, i)
+    show(y)
+    show(i)
+    uncall forme(x, y, i)
+    x -= 3
+    delocal int i = 0
+    delocal int y = 0
+    delocal int x = 0

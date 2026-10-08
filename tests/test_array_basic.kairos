@@ -1,0 +1,41 @@
+// Array: celle come luoghi, indice-espressione, * / % nelle espressioni, call + uncall.
+procedure riempi(int a[], int n)
+    local int i = 0
+    from i == 0 do
+        a[i] += (i * 2 + 1)
+        i += 1
+    loop until i == n
+    delocal int i = n
+
+procedure somme(int a[], int b[], int n)
+    local int j = 1
+    from j == 1 do
+        b[j] += a[(j - 1)]
+        j += 1
+    loop until j == n
+    delocal int j = n
+
+procedure main()
+    local int v[4] = 0
+    local int w[4] = 0
+    local int n = 4
+    local int q = 0
+    local int r = 0
+    call riempi(v, n)
+    show(v)
+    call somme(v, w, n)
+    show(w)
+    q += (w[3] / 5)
+    r += (w[3] % 5)
+    show(q)
+    show(r)
+    r -= (w[3] % 5)
+    q -= (w[3] / 5)
+    uncall somme(v, w, n)
+    show(v)
+    uncall riempi(v, n)
+    delocal int r = 0
+    delocal int q = 0
+    delocal int n = 4
+    delocal int w[4] = 0
+    delocal int v[4] = 0
