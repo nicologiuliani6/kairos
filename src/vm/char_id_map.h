@@ -50,19 +50,10 @@ typedef struct CharIdTab {
     int32_t  *slot;           /* 0 = libero, altrimenti id + 1 */
 } CharIdTab;
 
-/* Nomi sostituiti in una voce riusata dopo char_id_map_truncate: un lettore
-   in ritardo potrebbe ancora confrontarli, quindi si liberano solo a destroy. */
-typedef struct CharIdOld {
-    struct CharIdOld *next;
-    char *s;
-} CharIdOld;
-
 typedef struct {
     CharIdVec *vec;
     CharIdTab *tab;
     int        count;   /* voci visibili */
-    int        hwm;     /* voci mai scritte nel vettore (>= count dopo un truncate) */
-    CharIdOld *old;
 } CharIdMap;
 
 extern pthread_mutex_t char_id_map_ins_mtx;
@@ -135,11 +126,10 @@ static inline CharIdTab *char_id_tab_build(const CharIdVec *v, int n, uint32_t s
 static inline void char_id_map_destroy(CharIdMap *m)
 {
     if (m->vec) {
-        for (int i = 0; i < m->hwm; i++) free(m->vec->name[i]);
+        for (int i = 0; i < m->count; i++) free(m->vec->name[i]);
     }
     for (CharIdVec *v = m->vec; v; ) { CharIdVec *p = v->prev; free(v); v = p; }
     for (CharIdTab *t = m->tab; t; ) { CharIdTab *p = t->prev; free(t); t = p; }
-    for (CharIdOld *o = m->old; o; ) { CharIdOld *n = o->next; free(o->s); free(o); o = n; }
     memset(m, 0, sizeof(*m));
 }
 
@@ -184,27 +174,14 @@ static inline int char_id_map_insert_locked(CharIdMap *m, const char *name, uint
     if (!v || id >= v->cap) {
         CharIdVec *nv = char_id_vec_new(v ? v->cap * 2 : 16);
         if (v) {
-            memcpy(nv->name, v->name, sizeof(char *)   * (size_t)m->hwm);
-            memcpy(nv->hash, v->hash, sizeof(uint32_t) * (size_t)m->hwm);
+            memcpy(nv->name, v->name, sizeof(char *)   * (size_t)id);
+            memcpy(nv->hash, v->hash, sizeof(uint32_t) * (size_t)id);
         }
         nv->prev = v;
         __atomic_store_n(&m->vec, nv, __ATOMIC_RELEASE);
         v = nv;
     }
-    if (id < m->hwm) {
-        /* Voce gia' scritta prima di un truncate: se il nome e' lo stesso (il
-           caso tipico, lo stesso schema di chiamate che si ripete) la si riusa
-           cosi' com'e', altrimenti il nome vecchio va fra quelli ritirati. */
-        if (strcmp(v->name[id], name) != 0) {
-            CharIdOld *o = (CharIdOld *)malloc(sizeof(CharIdOld));
-            if (!o) { fprintf(stderr, "[VM] CharIdMap: memoria esaurita\n"); exit(1); }
-            o->s = v->name[id]; o->next = m->old; m->old = o;
-            __atomic_store_n(&v->name[id], char_id_strdup(name), __ATOMIC_RELEASE);
-        }
-    } else {
-        v->name[id] = char_id_strdup(name);
-        m->hwm = id + 1;
-    }
+    v->name[id] = char_id_strdup(name);
     __atomic_store_n(&v->hash[id], h, __ATOMIC_RELEASE);
 
     CharIdTab *t = m->tab;
@@ -242,22 +219,6 @@ static inline int char_id_map_exists(CharIdMap *m, const char *name)
     return char_id_map_lookup(m, name) >= 0;
 }
 
-/* Riporta la mappa alle prime `n` voci (pattern opt-uncall di Mnemo, che
-   ricicla gli indici dei frame). Le voci oltre `n` smettono di esistere per i
-   lettori: si abbassa il conteggio e si ricostruisce la tabella senza di loro. */
-static inline void char_id_map_truncate(CharIdMap *m, int n)
-{
-    pthread_mutex_lock(&char_id_map_ins_mtx);
-    if (n >= 0 && n < m->count) {
-        __atomic_store_n(&m->count, n, __ATOMIC_RELEASE);
-        CharIdTab *t  = m->tab;
-        CharIdTab *nt = char_id_tab_build(m->vec, n, t ? t->mask + 1 : 32);
-        nt->prev = t;
-        __atomic_store_n(&m->tab, nt, __ATOMIC_RELEASE);
-    }
-    pthread_mutex_unlock(&char_id_map_ins_mtx);
-}
-
 /* Copia profonda: la copia ha vettore, tabella e nomi suoi, e da qui in poi
    cresce per conto proprio (un frame clonato inserisce i suoi LOCAL senza
    toccare il frame base). La sorgente si legge col protocollo dei lettori,
@@ -276,7 +237,6 @@ static inline void char_id_map_copy(CharIdMap *dst, CharIdMap *src)
         v->hash[i] = sv->hash[i];
     }
     dst->vec   = v;
-    dst->hwm   = n;
     dst->tab   = char_id_tab_build(v, n, 32);
     dst->count = n;
 }

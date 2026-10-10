@@ -10,14 +10,9 @@ void vm_debug_panic(const char *fmt, ...);
 
 /* Profondità di ricorsione: nessun massimo. Ogni livello è un frame clonato
  * ("proc@<depth>") che costa poche centinaia di byte più le variabili della
- * procedura. Il vecchio tetto (512) serviva a trasformare in errore la
- * ricorsione inversa non terminante del replay per recursion_depth sulle
- * primitive di stampa Mnemo (__mn_putd_uint sotto --check-invertibility):
- * quel caso oggi non arriva più qui, perché l'inverso delle CALL __mn_put*
- * è saltato in invert_op_to_line (identità sullo stato), e la ricorsione
- * delle procedure utente gira in avanti sul corpo inverso compilato
- * (<proc>__inv, src/frontend/inverse.py). Una ricorsione davvero infinita si
- * comporta come in qualunque linguaggio: consuma memoria finché c'è. */
+ * procedura. La ricorsione delle procedure gira in avanti sul corpo inverso
+ * compilato (<proc>__inv, src/frontend/inverse.py). Una ricorsione davvero
+ * infinita si comporta come in qualunque linguaggio: consuma memoria finché c'è. */
 
 /* ======================================================================
  *  Frames dynamic capacity
@@ -62,8 +57,7 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     Frame *base  = vm->frames[base_fi];
     Frame *clone = vm->frames[clone_fi];
 
-    /* Slot riusato (indici dei frame riciclati dal pattern opt-uncall di
-     * Mnemo): le mappe e il nome del clone precedente sono sull'heap. */
+    /* Slot riusato: le mappe e il nome del clone precedente sono sull'heap. */
     char_id_map_destroy(&clone->VarIndexer);
     char_id_map_destroy(&clone->LabelIndexer);
     free(clone->name);
@@ -120,7 +114,7 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     /*
      * vm_run_BT salta DECL: gli stack (e channel) dichiarati a livello di procedura
      * vengono allocati solo in vm_exec sul frame base. Un clone ricorsivo eredita
-     * VarIndexer ma non le Var: la prima push su __mn_hist in una call annidata
+     * VarIndexer ma non le Var: la prima push su uno stack in una call annidata
      * andava in NULL → SIGSEGV in op_push. Duplichiamo slot DECL del base frame.
      * Gli int introdotti da LOCAL restano NULL finché non gira op_local sul clone.
      */
@@ -145,10 +139,10 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
             alloc_var(clone->vars[vi], typ, bv->name);
             clone->vars[vi]->is_local = 0;
         } else if (bv->T == TYPE_INT) {
-            /* Mnemo emit `int __mn_e<N> = 0` a livello procedura (DECL). Forward su
-             * clone ricorsivo non re-esegue DECL → opt-uncall XOREQ su __mn_e<N>
-             * andava in Var* NULL. Duplichiamo anche slot int DECL (LOCAL-allocati
-             * sovrascriveranno via op_local). */
+            /* Int dichiarati a livello procedura (DECL): il clone ricorsivo non
+             * ri-esegue DECL, quindi senza copia l'int sarebbe Var* NULL.
+             * Duplichiamo anche gli slot int DECL (LOCAL-allocati sovrascriveranno
+             * via op_local). */
             clone->vars[vi] = malloc(sizeof(Var));
             if (!clone->vars[vi])
                 vm_debug_panic("[VM] init_clone_frame: malloc Var int fallita\n");

@@ -265,7 +265,7 @@ static inline void op_push(VM *vm, const char *frame_name)
         if (!sv->channel->buf) vm_debug_panic("realloc failed\n");
         sv->channel->buf[sv->channel->buf_len++] = val;
         pthread_mutex_unlock(&sv->channel->mtx);
-        int w = op_wait(sv->channel, 1, 0);
+        int w = op_wait(sv->channel, 1);
         if (w == 1)
             wait_for_turn_done(current_thread_args);
     }
@@ -284,9 +284,6 @@ static inline void op_pop(VM *vm, const char *frame_name)
     uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
     Var  *sv = vm->frames[fi]->vars[si];
 
-    if (vm->inversion_depth > 0)
-        vm->mn_hist_floor_pop_guard_cur_inv_fi1 = (int)fi + 1;   /* fi = indice di frame_name */
-
     if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL) vm_debug_panic("[VM] POP: sorgente non è stack/channel!\n");
     if (sv->T == TYPE_STACK && sv->stack_len == 0)
         vm_debug_panic("[VM] POP: stack vuoto! (frame=%s dest=%s stack=%s inv=%d)\n",
@@ -303,7 +300,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
            Leggere sender_args e fare il pop FIFO sotto lo stesso mtx: altrimenti
            un altro SSEND può intercalare tra le due e far leggere una cella
            non ancora valorizzata (buffer malloc non azzerato). */
-        op_wait(sv->channel, 0, 0);
+        op_wait(sv->channel, 0);
         pthread_mutex_lock(&sv->channel->mtx);
         sender_to_wake = sv->channel->sender_args;
         sv->channel->sender_args = NULL;
@@ -323,38 +320,24 @@ static inline void op_pop(VM *vm, const char *frame_name)
             sv->channel->buf = realloc(sv->channel->buf, sv->channel->buf_len * sizeof(int64_t));
         pthread_mutex_unlock(&sv->channel->mtx);
     } else {
-        if (vm->invert_hist_guard_var && sv == vm->invert_hist_guard_var &&
-            vm->inversion_depth > 0 && sv->stack_len <= vm->invert_hist_floor_min &&
-            vm->mn_hist_floor_pop_guard_anchor_fi1 != 0 &&
-            vm->mn_hist_floor_pop_guard_cur_inv_fi1 == vm->mn_hist_floor_pop_guard_anchor_fi1)
-            vm_debug_panic(
-                "[VM] POP: __mn_hist sotto il pavimento mnemo (manca __mn_hist_floor_snap?)\n");
         popped = sv->value[--sv->stack_len];   /* la capacità resta per i push */
     }
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
     var_par_mut_acquire(dest);
-    /* In UNCALL invert_op_to_line, POP è l'inverso di PUSH su stack: PUSH azzera
-       l'INT sorgente; ripristinarlo è assegnazione, non +=. += fallisce se nel
-       percorso d'inversione l'INT non è stato riportato esattamente a 0 prima
-       del pop (IF/LOOP annidati, procedure Mnemo → stack residui dopo uncall). */
-    if (vm->inversion_depth > 0 && dest->T == TYPE_INT && sv->T == TYPE_STACK) {
-        *(dest->value) = popped;
-    } else {
-        /* Pop-Err2 (convenzione zero-cleared): pop(v, s) richiede v == 0 prima
-           dell'operazione — è l'esatto invariante che push(v, s) garantisce
-           azzerando la sorgente al momento del push. Se v != 0 qui, += perderebbe
-           silenziosamente il vecchio valore di v: l'operazione smetterebbe di
-           essere invertibile (push, l'inverso di pop, non potrebbe più
-           ricostruirlo). Pop-Err (stack vuoto) resta il controllo sopra, invariato. */
-        if (dest->T == TYPE_INT && *(dest->value) != 0) {
-            var_par_mut_release(dest);
-            vm_debug_panic(
-                "[VM] POP: destinazione '%s' non è zero prima del pop (Pop-Err2, valore attuale=%lld) frame=%s\n",
-                C_dest, (long long)*(dest->value), frame_name);
-        }
-        *(dest->value) += popped;
+    /* Pop-Err2 (convenzione zero-cleared): pop(v, s) richiede v == 0 prima
+       dell'operazione — è l'esatto invariante che push(v, s) garantisce
+       azzerando la sorgente al momento del push. Se v != 0 qui, += perderebbe
+       silenziosamente il vecchio valore di v: l'operazione smetterebbe di
+       essere invertibile (push, l'inverso di pop, non potrebbe più
+       ricostruirlo). Vale anche dentro un'inversione. */
+    if (dest->T == TYPE_INT && *(dest->value) != 0) {
+        var_par_mut_release(dest);
+        vm_debug_panic(
+            "[VM] POP: destinazione '%s' non è zero prima del pop (Pop-Err2, valore attuale=%lld) frame=%s\n",
+            C_dest, (long long)*(dest->value), frame_name);
     }
+    *(dest->value) += popped;
     var_par_mut_release(dest);
 
     if (sv->T == TYPE_CHANNEL && sender_to_wake)
@@ -455,13 +438,6 @@ static inline void op_ssend(VM *vm, const char *frame_name)
         }
     }
 
-    /* Solo canali mutex Mnemo (`__mn_mtx*` es. `__mn_mtx_g_cs`, `__mn_mtx_g_xfer`): mailbox;
-     * prefisso 8 char `__mn_mtx` — non `__mn_mtx_` (9) perché dopo `__mn_mtx` c'è `g_`. */
-    int mailbox_eligible = (
-        encoded_len == 2 && encoded[0] == (int)TYPE_INT
-        && strncmp(ch_name, "__mn_mtx", (size_t)8) == 0
-    );
-
     pthread_mutex_lock(&chv->channel->mtx);
     if (encoded_len > 0) {
         chv->channel->buf = realloc(chv->channel->buf, (chv->channel->buf_len + (size_t)encoded_len) * sizeof(int64_t));
@@ -473,59 +449,15 @@ static inline void op_ssend(VM *vm, const char *frame_name)
         memcpy(chv->channel->buf + chv->channel->buf_len, encoded, (size_t)encoded_len * sizeof(int64_t));
         chv->channel->buf_len += (size_t)encoded_len;
     }
-    /* Un SRECV su __mn_mtx_* può essere già in op_wait(recv) con buffer vuoto; dopo
-       l’append del token svegliamo il primo in coda (handshake PAR / Mnemo). */
-    if (mailbox_eligible && chv->channel->recv_q_head) {
-        Waiter *w = chv->channel->recv_q_head;
-        chv->channel->recv_q_head = w->next;
-        if (!chv->channel->recv_q_head) chv->channel->recv_q_tail = NULL;
-        w->ready = 1;
-        pthread_cond_signal(&w->cond);
-    }
     pthread_mutex_unlock(&chv->channel->mtx);
     free(encoded);
     VM_TOKV_FREE(tokv);
 
 #undef ENC_PUSH
 
-    int w = op_wait(chv->channel, 1, mailbox_eligible);
+    int w = op_wait(chv->channel, 1);
     if (w == 1)
         wait_for_turn_done(current_thread_args);
-}
-
-/*
- * Verifica se buf contiene un messaggio ssend completo per recv_count destinazioni.
- * Ritorna la lunghezza in parole int consumate, o 0 se incompleto.
- */
-static inline size_t peek_ssend_payload_words(Channel *ch, int recv_count)
-{
-    size_t read_idx = 0;
-    size_t buf_len = ch->buf_len;
-
-    for (int i = 0; i < recv_count; i++) {
-        if (read_idx >= buf_len)
-            return 0;
-        int marker = ch->buf[read_idx++];
-        if (marker == (int)TYPE_INT) {
-            if (read_idx >= buf_len)
-                return 0;
-            read_idx++;
-        } else if (marker == CHANNEL_REF_MARKER) {
-            if (read_idx + 1 >= buf_len)
-                return 0;
-            read_idx += 2;
-        } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
-            if (read_idx >= buf_len)
-                return 0;
-            int64_t n = ch->buf[read_idx++];
-            if (n < 0 || read_idx + (size_t)n > buf_len)
-                return 0;
-            read_idx += (size_t)n;
-        } else {
-            return 0;
-        }
-    }
-    return read_idx;
 }
 
 static inline void op_srecv(VM *vm, const char *frame_name)
@@ -547,136 +479,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
         vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
     session_acquire(chv->channel, ch_name);
 
-mutex_mailbox_retry:
-    pthread_mutex_lock(&chv->channel->mtx);
-    size_t msg_words = 0;
-    if (strncmp(ch_name, "__mn_mtx", (size_t)8) == 0)
-        msg_words = peek_ssend_payload_words(chv->channel, recv_count);
-    if (msg_words > 0) {
-        size_t read_idx = 0;
-        for (int i = 0; i < recv_count; i++) {
-            Var *dest = get_var(vm, fi, tokv[i], "SRECV");
-            if (read_idx >= chv->channel->buf_len) {
-                pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload insufficiente sul channel\n");
-            }
-            int64_t marker = chv->channel->buf[read_idx++];
-            if (marker == (int)TYPE_INT) {
-                if (read_idx >= chv->channel->buf_len) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: payload int incompleto\n");
-                }
-                int64_t popped = chv->channel->buf[read_idx++];
-                if (dest->T != TYPE_INT) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
-                }
-                var_par_mut_acquire(dest);
-                /* Srecv-Err (convenzione zero-cleared): srecv(<w...>, ch) richiede
-                   ogni w già a 0 prima della ricezione — è l'invariante che ssend
-                   garantisce azzerando la sorgente al momento dell'invio. Se w != 0
-                   qui, += perderebbe silenziosamente il vecchio valore: l'operazione
-                   smetterebbe di essere invertibile (ssend, l'inverso di srecv, non
-                   potrebbe più ricostruirlo). */
-                if (*(dest->value) != 0) {
-                    var_par_mut_release(dest);
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic(
-                        "[VM] SRECV: destinazione '%s' non è zero prima della ricezione (Srecv-Err, valore attuale=%lld)\n",
-                        tokv[i], (long long)*(dest->value));
-                }
-                *(dest->value) += popped;
-                var_par_mut_release(dest);
-            } else if (marker == CHANNEL_REF_MARKER) {
-                if (read_idx + 1 >= chv->channel->buf_len) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: payload channel-ref incompleto\n");
-                }
-                uint32_t lo = (uint32_t)chv->channel->buf[read_idx++];
-                uint32_t hi = (uint32_t)chv->channel->buf[read_idx++];
-                uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
-                Channel *shared = (Channel *)p;
-                if (dest->T != TYPE_CHANNEL || !shared) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
-                }
-                session_delegate_acquire(shared, tokv[i]);
-                if (dest->channel != shared) {
-                    Channel *old = dest->channel;
-                    lock_channel_pair(old, shared);
-                    if (old) old->refcount--;
-                    shared->refcount++;
-                    unlock_channel_pair(old, shared);
-                    dest->channel = shared;
-                    if (old) {
-                        int do_free = 0;
-                        pthread_mutex_lock(&old->mtx);
-                        do_free = (old->refcount <= 0);
-                        pthread_mutex_unlock(&old->mtx);
-                        if (do_free) {
-                            pthread_mutex_destroy(&old->mtx);
-                            free(old->buf);
-                            free(old);
-                        }
-                    }
-                }
-            } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
-                if (read_idx >= chv->channel->buf_len) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
-                }
-                int64_t n = chv->channel->buf[read_idx++];
-                if (n < 0 || read_idx + (size_t)n > chv->channel->buf_len) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
-                }
-                if (dest->T != TYPE_STACK && dest->T != TYPE_CHANNEL) {
-                    pthread_mutex_unlock(&chv->channel->mtx);
-                    vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
-                }
-                if (n > 0) {
-                    var_stack_reserve(dest, dest->stack_len + (size_t)n);
-                    memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int64_t));
-                    dest->stack_len += (size_t)n;
-                }
-                read_idx += (size_t)n;
-            } else {
-                pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: marker payload sconosciuto\n");
-            }
-        }
-        /* Se SSEND non era mailbox-eligible, il sender può aver fatto rendezvous in
-         * op_wait(send) e attendere turn_done; il consumo dal buffer qui equivale al
-         * path rendezvous (notify in coda). */
-        ThreadArgs *sender_to_wake = NULL;
-        if (strncmp(ch_name, "__mn_mtx", (size_t)8) == 0) {
-            sender_to_wake = chv->channel->sender_args;
-            chv->channel->sender_args = NULL;
-        }
-        size_t remaining = chv->channel->buf_len - read_idx;
-        if (remaining > 0)
-            memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int64_t));
-        chv->channel->buf_len = remaining;
-        if (remaining > 0) {
-            chv->channel->buf = realloc(chv->channel->buf, remaining * sizeof(int64_t));
-            if (!chv->channel->buf) {
-                pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("realloc failed\n");
-            }
-        }
-        pthread_mutex_unlock(&chv->channel->mtx);
-        notify_sender_turn_done(sender_to_wake);
-        VM_TOKV_FREE(tokv);
-        return;
-    }
-    pthread_mutex_unlock(&chv->channel->mtx);
-
-    if (strncmp(ch_name, "__mn_mtx", (size_t)8) == 0) {
-        op_wait(chv->channel, 0, 0);
-        goto mutex_mailbox_retry;
-    }
-
-    op_wait(chv->channel, 0, 0);
+    op_wait(chv->channel, 0);
 
     pthread_mutex_lock(&chv->channel->mtx);
     ThreadArgs *sender_to_wake = chv->channel->sender_args;
@@ -704,8 +507,12 @@ mutex_mailbox_retry:
                 vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
             }
             var_par_mut_acquire(dest);
-            /* Srecv-Err (convenzione zero-cleared): vedi commento nel path mailbox
-               sopra — stesso invariante, stesso controllo, path rendezvous. */
+            /* Srecv-Err (convenzione zero-cleared): srecv(<w...>, ch) richiede
+               ogni w già a 0 prima della ricezione — è l'invariante che ssend
+               garantisce azzerando la sorgente al momento dell'invio. Se w != 0
+               qui, += perderebbe silenziosamente il vecchio valore: l'operazione
+               smetterebbe di essere invertibile (ssend, l'inverso di srecv, non
+               potrebbe più ricostruirlo). */
             if (*(dest->value) != 0) {
                 var_par_mut_release(dest);
                 pthread_mutex_unlock(&chv->channel->mtx);
@@ -977,7 +784,7 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
     return newptr;
 }
 
-static inline char *op_jmpf(VM *vm, const char *fname, char *buf, int cur_line)
+static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
 {
     char *lbl = strtok(NULL, " \t");
 
@@ -985,34 +792,6 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf, int cur_line)
        Memorizziamo il ramo scelto per validare poi la condizione FI in ASSERT. */
     if (lbl && !strncmp(lbl, "ELSE_", 5)) {
         vm_if_push_branch(thread_val_IF ? 1 : 0);
-        /* Fix P3 trace push solo se siamo dentro opt-uncall pattern
-         * Mnemo (delimitato da __mn_hist_floor_snap…UNCALL match) E
-         * proc corrente base matches branch_trace_proc. Procs diverse
-         * non interferiscono (loro inverse usa legacy depth path). */
-        if (vm->branch_trace_active > 0) {
-            int same_proc = vm_base_eq(fname, vm_name_get(vm->branch_trace_proc));
-            /* IF dentro un from-loop del callee: NON pushare (l'inverse li
-             * recomputa via line_inside_loop_body, non consuma il cursor della
-             * window → pusharli disallineerebbe la LIFO degli IF top-level). */
-            int inside_loop = 0;
-            if (same_proc) {
-                const uint *lohi = vm->bt_loop_lohi;
-                for (int _li = 0; _li < vm->bt_loop_n; _li++) {
-                    if ((uint)cur_line > lohi[2 * _li] &&
-                        (uint)cur_line < lohi[2 * _li + 1]) { inside_loop = 1; break; }
-                }
-            }
-            if (same_proc && !inside_loop) {
-                if ((uint)vm->branch_trace_top >= vm->branch_trace_cap) {
-                    uint new_cap = vm->branch_trace_cap ? vm->branch_trace_cap * 2 : VM_BRANCH_TRACE_INIT_CAP;
-                    int *nb = (int *)realloc(vm->branch_trace, sizeof(int) * new_cap);
-                    if (!nb) vm_debug_panic("[VM] branch_trace realloc(%u) fallita\n", new_cap);
-                    vm->branch_trace = nb;
-                    vm->branch_trace_cap = new_cap;
-                }
-                vm->branch_trace[vm->branch_trace_top++] = thread_val_IF ? 1 : 0;
-            }
-        }
     }
 
     if (thread_val_IF) return NULL;
@@ -1160,34 +939,6 @@ static inline void op_delocal(VM *vm, const char *frame_name)
                 actual_type, Vtype);
     }
 
-    /*
-     * Mutex Mnemo (`__mn_mtx_*`): SSEND accoda token nella mailbox; con PAR reale
-     * più ssend possono precedere una srecv — il buffer può contenere più messaggi
-     * compatibile-int dopo pthread_mutex_destroy (Mnemo emette un solo SRECV).
-     * Svuotiamo tutti i token INT codificati come in SSEND prima di validare empty.
-     */
-    if (V->T == TYPE_CHANNEL && V->channel && strncmp(Vname, "__mn_mtx", (size_t)8) == 0
-        && vm->inversion_depth == 0 && c_val && strcmp(c_val, "empty") == 0) {
-        pthread_mutex_lock(&V->channel->mtx);
-        size_t ri = 0;
-        while (ri + 2 <= V->channel->buf_len && V->channel->buf[ri] == (int)TYPE_INT)
-            ri += 2;
-        if (ri != V->channel->buf_len) {
-            size_t bl = V->channel->buf_len;
-            pthread_mutex_unlock(&V->channel->mtx);
-            vm_debug_panic(
-                "[VM] DELOCAL: mutex %s mailbox malformato (buf_len=%zu, aligned=%zu)\n",
-                Vname, bl, ri
-            );
-        }
-        if (V->channel->buf) {
-            free(V->channel->buf);
-            V->channel->buf = NULL;
-        }
-        V->channel->buf_len = 0;
-        pthread_mutex_unlock(&V->channel->mtx);
-    }
-
     /* ── 5. Valore finale ── */
     int ok = 0;
     if (V->T == TYPE_ARRAY) {
@@ -1240,33 +991,5 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
 }
 
-/* Inverse del native pool_load (uncall, dentro invert_op_to_line). Il forward ha
- * spinto [old_out, mem[slot]] su __mn_hist; l'inverse è self-contained: pop(t) →
- * out -= t (out: mem[slot]→0) → pop(out)=old_out. Non rilegge mem[slot]. Definito
- * qui (vm_ops.h, incluso prima di vm_invert.h) così il CALL-inverse può chiamarlo.
- * `cfi_cur` = frame in cui vivono out/__mn_hist. */
-static inline void mn_native_pool_load_inv(VM *vm, uint cfi_cur)
-{
-    Frame *f = vm->frames[cfi_cur];
-    /* Gli ultimi tre argomenti: puntatori nella riga corrente, viva per tutta
-     * l'istruzione, invece di copie a lunghezza fissa. */
-    char *a; const char *w0 = "", *w1 = "", *w2 = "";
-    int n = 0;
-    while ((a = strtok(NULL, " \t"))) {
-        w0 = w1; w1 = w2; w2 = a;
-        n++;
-    }
-    if (n < 4) vm_debug_panic("[VM] native __mn_pool_load inv: pochi arg (%d)\n", n);
-    int oi = char_id_map_lookup(&f->VarIndexer, w0);   /* out */
-    int hi = char_id_map_lookup(&f->VarIndexer, w1);   /* __mn_hist */
-    if (oi < 0 || hi < 0 || !f->vars[oi] || !f->vars[hi] || f->vars[hi]->T != TYPE_STACK)
-        vm_debug_panic("[VM] native __mn_pool_load inv: out/hist non risolti\n");
-    Var *hv = f->vars[hi];
-    int64_t *outp = f->vars[oi]->value;
-    if (hv->stack_len < 2) vm_debug_panic("[VM] native __mn_pool_load inv: hist < 2\n");
-    int64_t t = hv->value[--hv->stack_len];   /* pop(t) = mem[slot] */
-    *outp -= t;                               /* out → 0 */
-    *outp = hv->value[--hv->stack_len];        /* pop(out) = old_out */
-}
 
 #endif /* VM_OPS_H */

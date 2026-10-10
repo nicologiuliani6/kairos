@@ -8,16 +8,6 @@ from src.frontend.parser import (
     _BUILTIN_CALL_OPCODES,
 )
 
-_KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
-
-
-def _strip_mnemo_par_shared_pragma(source: str) -> tuple[str, bool]:
-    lines = source.splitlines()
-    if lines and lines[0].strip() == _KAIROS_ALLOW_PAR_SHARED_INT:
-        body = lines[1:]
-        return ("\n".join(body) + ("\n" if body else ""), True)
-    return source, False
-
 # Operatori di due caratteri dentro un'espressione: la VM li legge come un carattere.
 _EXPR_OP_CODE = {'==': '=', '!=': '#', '>=': '}', '<=': '{', '&&': '&', '||': '|'}
 
@@ -238,14 +228,12 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         source = f.read()
 
-    source, skip_par_int_race = _strip_mnemo_par_shared_pragma(source)
-
     try:
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
             raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
         ast = desugar_try(ast)
-        run_static_checks(ast, check_par_int_race=not skip_par_int_race)
+        run_static_checks(ast)
         compiler = ByteCode_Compiler()
         compiler.process(ast)
     except KairosCompileError as exc:

@@ -12,7 +12,6 @@ VERBOSE = False
 class _ParStaticConfig:
     """Controlli statici su `par` (modificato da `run_static_checks`)."""
 
-    check_int_race: bool = True
     # Procedure del programma, per l'inferenza dei tipi di sessione: una
     # chiamata dentro un ramo di `par` contribuisce il protocollo del corpo
     # della callee, quindi serve poterla risolvere dal punto in cui si controlla.
@@ -22,8 +21,7 @@ class _ParStaticConfig:
 # ── Builtin ─────────────────────────────────────────────────────────────────
 # Chiamate tipo foo(x) senza `call`: opcode VM diretto, non CALL nome_proc.
 # (Usato anche da bytecode.py, che importa questo nome da qui.)
-_BUILTIN_CALL_OPCODES = frozenset({'show', 'push', 'pop', 'ssend', 'srecv', 'mnhalve', 'mnsplit32', 'dump',
-                                   'pooladd', 'poolsub', 'poolget', 'poolgetneg', 'poolpush', 'poolpop'})
+_BUILTIN_CALL_OPCODES = frozenset({'show', 'push', 'pop', 'ssend', 'srecv'})
 
 # Marcatore per le builtin variadiche ssend/srecv: `nome(<a1 ... ak>, c)` arriva
 # come lista di argomenti `[a1, ..., ak, c]`, l'ultimo è il channel e tutti gli
@@ -38,15 +36,8 @@ _BUILTIN_ARGS_ALL_BUT_LAST = object()
 #   pop        src/vm/vm_ops.h op_pop        — `*(dest->value) += popped` / `= popped`
 #   ssend      src/vm/vm_ops.h op_ssend      — per ogni payload int `*(src->value) = 0`
 #   srecv      src/vm/vm_ops.h op_srecv      — per ogni destinazione `*(dest->value) += popped`
-#   mnhalve    src/vm/ops_arith.h op_mnhalve   — `*(vq) += q; *(vp) += par; *(vs) = 0` (tutti e 3)
-#   mnsplit32  src/vm/ops_arith.h op_mnsplit32 — `*(vh) += hi; *(vl) += lo; *(vs) = 0` (tutti e 3)
-#   poolget    src/vm/ops_arith.h op_poolget    — `*(dst->value) += pool[idx]` (2° arg)
-#   poolgetneg src/vm/ops_arith.h op_poolgetneg — `*(dst->value) -= pool[idx]` (2° arg)
 # Volutamente assenti:
-#   show, dump                — sola lettura;
-#   pooladd, poolsub          — scrivono la cella del pool, non una variabile int;
-#   poolpush, poolpop         — scrivono lo stack (2° arg), coperto dal controllo
-#                               separato sugli stack condivisi nel `par`;
+#   show                      — sola lettura;
 #   swap                      — gestito a parte e deliberatamente escluso dal
 #                               fixpoint (vedi _walk_proc_int_param_mutations_and_calls).
 _BUILTIN_WRITTEN_ARGS = {
@@ -54,10 +45,6 @@ _BUILTIN_WRITTEN_ARGS = {
     'pop':        (0,),
     'ssend':      _BUILTIN_ARGS_ALL_BUT_LAST,
     'srecv':      _BUILTIN_ARGS_ALL_BUT_LAST,
-    'mnhalve':    (0, 1, 2),
-    'mnsplit32':  (0, 1, 2),
-    'poolget':    (1,),
-    'poolgetneg': (1,),
 }
 
 
@@ -985,23 +972,22 @@ def _check_stmt_reversibility(
             {v for v in acc if _intlike(declared_types.get(v))}
             for acc in branch_access
         ]
-        if _ParStaticConfig.check_int_race:
-            for i in range(len(branch_direct_int_writes)):
-                for j in range(i + 1, len(branch_direct_int_writes)):
-                    w_i = branch_direct_int_writes[i]
-                    w_j = branch_direct_int_writes[j]
-                    acc_i = int_access_sets[i]
-                    acc_j = int_access_sets[j]
-                    shared = (w_i & acc_j) | (w_j & acc_i)
-                    if shared:
-                        names = ", ".join(sorted(shared))
-                        raise KairosCompileError(
-                            "STATIC",
-                            (
-                                f"riga {lineno}: race su int nel PAR (scrittura vs accesso, anche tramite call): "
-                                f"{names} (usa channel/ssend/srecv o variabili distinte per branch)"
-                            ),
-                        )
+        for i in range(len(branch_direct_int_writes)):
+            for j in range(i + 1, len(branch_direct_int_writes)):
+                w_i = branch_direct_int_writes[i]
+                w_j = branch_direct_int_writes[j]
+                acc_i = int_access_sets[i]
+                acc_j = int_access_sets[j]
+                shared = (w_i & acc_j) | (w_j & acc_i)
+                if shared:
+                    names = ", ".join(sorted(shared))
+                    raise KairosCompileError(
+                        "STATIC",
+                        (
+                            f"riga {lineno}: race su int nel PAR (scrittura vs accesso, anche tramite call): "
+                            f"{names} (usa channel/ssend/srecv o variabili distinte per branch)"
+                        ),
+                    )
 
         # La disciplina di sessione sui canali sta tutta altrove: la garanzia
         # (al più due titolari per canale, in ogni istante) la dà il controllo
@@ -1012,18 +998,15 @@ def _check_stmt_reversibility(
             branches, proc_signatures, _ParStaticConfig.program_procedures, lineno
         )
 
-def run_static_checks(program_ast, *, check_par_int_race: bool = True):
+def run_static_checks(program_ast):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
         raise KairosCompileError("PARSER", "AST del programma non valido")
 
-    prev_race = _ParStaticConfig.check_int_race
     prev_procs = _ParStaticConfig.program_procedures
-    _ParStaticConfig.check_int_race = check_par_int_race
     _ParStaticConfig.program_procedures = tuple(program_ast[1] or [])
     try:
         _run_static_checks_body(program_ast)
     finally:
-        _ParStaticConfig.check_int_race = prev_race
         _ParStaticConfig.program_procedures = prev_procs
 
 

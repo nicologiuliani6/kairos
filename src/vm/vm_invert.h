@@ -9,7 +9,6 @@
 #include "vm_helpers.h"
 #include "vm_ops.h"
 #include "vm_debug.h"
-#include "mn_native_arith.h"
 
 /* Forward — vm_run_BT è definita in Kairos.c */
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init);
@@ -90,11 +89,9 @@ typedef enum {
 
 enum InvOpTag {
     INVOP_UNKNOWN = 0,
-    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP, INVOP_MNHALVE, INVOP_MNSPLIT32,
+    INVOP_PUSHEQ, INVOP_MINEQ, INVOP_XOREQ, INVOP_SWAP,
     INVOP_PUSH, INVOP_POP, INVOP_SSEND, INVOP_SRECV,
-    INVOP_POOLADD, INVOP_POOLSUB, INVOP_POOLGET, INVOP_POOLGETNEG,
-    INVOP_POOLPUSH, INVOP_POOLPOP,
-    INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW, INVOP_DUMP,
+    INVOP_LOCAL, INVOP_DELOCAL, INVOP_SHOW,
     INVOP_CALL, INVOP_UNCALL,
     INVOP_PAR_START, INVOP_PAR_END,
     INVOP_JMP, INVOP_JMPF, INVOP_EVAL, INVOP_LABEL, INVOP_ASSERT, INVOP_DECL,
@@ -112,17 +109,9 @@ static inline uint8_t classify_op(const char *fw)
             if (!strcmp(fw, "PARAM"))     return INVOP_PARAM;
             if (!strcmp(fw, "PAR_START")) return INVOP_PAR_START;
             if (!strcmp(fw, "PAR_END"))   return INVOP_PAR_END;
-            if (!strcmp(fw, "POOLADD"))     return INVOP_POOLADD;
-            if (!strcmp(fw, "POOLSUB"))     return INVOP_POOLSUB;
-            if (!strcmp(fw, "POOLGETNEG"))  return INVOP_POOLGETNEG;
-            if (!strcmp(fw, "POOLGET"))     return INVOP_POOLGET;
-            if (!strcmp(fw, "POOLPUSH"))    return INVOP_POOLPUSH;
-            if (!strcmp(fw, "POOLPOP"))     return INVOP_POOLPOP;
             break;
         case 'M':
             if (!strcmp(fw, "MINEQ")) return INVOP_MINEQ;
-            if (!strcmp(fw, "MNHALVE")) return INVOP_MNHALVE;
-            if (!strcmp(fw, "MNSPLIT32")) return INVOP_MNSPLIT32;
             break;
         case 'X': if (!strcmp(fw, "XOREQ")) return INVOP_XOREQ; break;
         case 'S':
@@ -139,7 +128,6 @@ static inline uint8_t classify_op(const char *fw)
         case 'D':
             if (!strcmp(fw, "DELOCAL")) return INVOP_DELOCAL;
             if (!strcmp(fw, "DECL"))    return INVOP_DECL;
-            if (!strcmp(fw, "DUMP"))    return INVOP_DUMP;
             break;
         case 'C': if (!strcmp(fw, "CALL"))   return INVOP_CALL;   break;
         case 'U': if (!strcmp(fw, "UNCALL")) return INVOP_UNCALL; break;
@@ -349,15 +337,14 @@ static inline int collect_ifs(VM *vm, const char *frame_name, char *buf,
     int n = 0;
 
     /* Stack di IF aperti — match label per uid (ELSE_<uid>, FI_<uid>) per gestire
-     * nested IF (es. Mnemo loop con IF di guard dentro body). Top dello stack =
+     * nested IF (es. loop con IF di guard dentro body). Top dello stack =
      * IF correntemente in costruzione; chiuso da ASSERT (con sentinel handling
      * per EVAL-FI seguita o no da ASSERT).
      *
      * Heap-alloc a capacità `max`: la profondità di annidamento di una else-if
-     * chain (`if i==0 else if i==1 …`) generata da Mnemo per uno store a indice
-     * runtime su un array di N elementi è ~N. Con stack fissi [64] un array > 64
-     * elementi sotto --check-invertibility scriveva OOB → corruzione → NULL deref
-     * in resolve_atom. depth ≤ #IF aperti ≤ n < max, quindi `max` slot bastano. */
+     * chain (`if i==0 else if i==1 …`) può essere lunga quanto il programma:
+     * con stack fissi [64] una catena più lunga scriveva OOB → corruzione → NULL
+     * deref in resolve_atom. depth ≤ #IF aperti ≤ n < max, quindi `max` slot bastano. */
     int    stack_cap          = max > 0 ? max : 1;
     int   *stack_idx          = malloc(sizeof(*stack_idx) * (size_t)stack_cap);
     char **stack_uid          = calloc((size_t)stack_cap, sizeof(char *));
@@ -695,8 +682,8 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
         /* Var fuori scope (slot delocal'd ma ancora nell'indexer) → lval=0
          * invece di NULL-deref. Succede invertendo la guardia di un IF il cui
          * id è un local già delocal'd a questo punto della reverse-walk (es.
-         * `if __mn_lc1 != 0` wrapper di un loop, con disj-chain profonda che
-         * sfasa l'ordine). Meglio un eval prudente (→ eventuale DELOCAL mismatch
+         * `if lc != 0` wrapper di un loop, con disj-chain profonda che sfasa
+         * l'ordine). Meglio un eval prudente (→ eventuale DELOCAL mismatch
          * pulito) che un SIGSEGV. */
         int vil = char_id_map_lookup(&vm->frames[fi]->VarIndexer, id);
         Var *gv = (vil >= 0) ? vm->frames[fi]->vars[vil] : NULL;
@@ -772,26 +759,6 @@ static inline int loop_entry_eq_zero_guard(const LoopDescriptor *L, int li)
     return !strcmp(L[li].eval_entry_op, "==") && !strcmp(vm_name_get(L[li].eval_entry_val), "0");
 }
 
-/* True se `line` cade nel corpo di un from-loop (tra FROM_START e l'EVAL until).
- * Gli IF dentro un loop NON possono usare la branch_trace globale: il trace è
- * FIFO per-window mentre l'inverse peela le iterazioni in ordine inverso, e la
- * forward op_jmpf pusha una entry per OGNI livello di IF eseguito mentre
- * l'inverse consuma una sola entry per IF outer (i nested vanno via
- * exec_branch_inverse → do_eval_if_entry). Le due cose si disallineano su loop
- * con IF data-dipendente a footprint variabile per iterazione. Dentro al loop il
- * recompute (do_eval_if_entry) è invece affidabile: le var lette dalla guardia
- * sono ripristinate dal peel prima che l'IF venga invertito. */
-static inline int line_inside_loop_body(uint line, const LoopDescriptor *L, int n)
-{
-    for (int i = 0; i < n; i++) {
-        /* Due corpi: la finestra parte da FROM_BACK, così copre anche c2. */
-        uint lo = L[i].from_start_line;
-        if (L[i].from_back_line && L[i].from_back_line < lo) lo = L[i].from_back_line;
-        if (line > lo && line < L[i].eval_exit_line) return 1;
-    }
-    return 0;
-}
-
 static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescriptor *L, int li)
 {
     const char *eid = vm_name_get(L[li].eval_entry_id);
@@ -799,42 +766,6 @@ static inline int64_t loop_entry_counter_val(VM *vm, uint fi, const LoopDescript
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, eid)) return 0;
     uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, eid);
     return *(vm->frames[fi]->vars[vi]->value);
-}
-
-/* __mn_divmod_nonneg: IF saved_r >= b — se forward non entrò nel loop, non invertire il corpo. */
-static inline int divmod_saved_r_loop_skipped_forward(VM *vm, uint fi)
-{
-    int64_t sr = 0;
-    if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "saved_r")) {
-        uint si = char_id_map_get(&vm->frames[fi]->VarIndexer, "saved_r");
-        Var *sv = vm->frames[fi]->vars[si];
-        if (sv)
-            sr = *(sv->value);
-    } else if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "a")) {
-        uint ai = char_id_map_get(&vm->frames[fi]->VarIndexer, "a");
-        sr = *(vm->frames[fi]->vars[ai]->value);
-    } else {
-        return 0;
-    }
-    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, "b"))
-        return 0;
-    uint bi = char_id_map_get(&vm->frames[fi]->VarIndexer, "b");
-    Var *bv = vm->frames[fi]->vars[bi];
-    if (!bv || !bv->value)
-        return 0;
-    return sr < *(bv->value);
-}
-
-/* __mn_bit_k_signed: if k == 0 il from i==0 non gira in avanti. */
-static inline int bit_k_loop_skipped_forward(VM *vm, uint fi)
-{
-    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, "k"))
-        return 0;
-    uint ki = char_id_map_get(&vm->frames[fi]->VarIndexer, "k");
-    Var *kv = vm->frames[fi]->vars[ki];
-    if (!kv || !kv->value)
-        return 0;
-    return *(kv->value) == 0;
 }
 
 static inline int loop_peel_more_at_until(VM *vm, uint fi, LoopDescriptor *L, int li,
@@ -845,33 +776,6 @@ static inline int loop_peel_more_at_until(VM *vm, uint fi, LoopDescriptor *L, in
     return exit_cond_true;
 }
 
-#ifdef MNEMO_AGENT_LOG
-static inline int mn_dbg_read_int(VM *vm, uint fi, const char *name)
-{
-    if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, name)) return -9999;
-    uint vi = char_id_map_get(&vm->frames[fi]->VarIndexer, name);
-    Var *v = vm->frames[fi]->vars[vi];
-    if (!v || v->T != TYPE_INT) return -9998;
-    return *(v->value);
-}
-
-static inline void mn_dbg_log_loop(const char *hypothesisId, const char *zone,
-                                   const char *frame, long long iter, int i, int nl,
-                                   int tif, int q, int r, int b, int peel_more)
-{
-    if (!strstr(frame, "divmod_nonneg")) return;
-    if (iter > 500 && iter % 100000 != 0) return;
-    FILE *f = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
-    if (!f) return;
-    fprintf(f,
-            "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"%s\",\"location\":\"vm_invert.h:loop\","
-            "\"message\":\"%s\",\"data\":{\"frame\":\"%s\",\"iter\":%lld,\"i\":%d,\"nl\":%d,"
-            "\"tif\":%d,\"q\":%d,\"r\":%d,\"b\":%d,\"peel_more\":%d},\"timestamp\":%lld}\n",
-            hypothesisId, zone, frame, iter, i, nl, tif, q, r, b, peel_more,
-            (long long)time(NULL) * 1000);
-    fclose(f);
-}
-#endif
 
 
 static inline int line_is_inside_if(uint line, IfDescriptor *ifs, int nifs)
@@ -1007,7 +911,7 @@ typedef struct {
 } FrameAnalysisCache;
 /* Thread-local: due thread par (es. fib_left/fib_right) chiamano
    invert_op_to_line in parallelo; senza __thread la cache (n++ + array
-   writes) è una race → descriptor partial-write → DELOCAL `__mn_e<N>`
+   writes) è una race → descriptor partial-write → DELOCAL con
    value errato a fine inverse. Una voce per procedura base, in un vettore
    che cresce: le voci non si spostano mai fuori da una chiamata in corso,
    perché loops/ifs/pars sono blocchi propri, non dentro il vettore. */
@@ -1044,29 +948,12 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     vm->inversion_depth++;   
     VM_FRAME_BASE(base, frame_name);
     uint fi_reset = char_id_map_get(&FrameIndexer, base);
-    #ifdef MNEMO_AGENT_LOG
-    if (strstr(frame_name, "divmod_nonneg")) {
-        FILE *_df = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
-        if (_df) {
-            fprintf(_df,
-                    "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"C\",\"location\":\"invert_entry\","
-                    "\"message\":\"invert_op_to_line\",\"data\":{\"frame\":\"%s\",\"a\":%d,\"b\":%d,"
-                    "\"q\":%d,\"r\":%d,\"depth\":%d},\"timestamp\":%lld}\n",
-                    frame_name, mn_dbg_read_int(vm, fi_reset, "a"),
-                    mn_dbg_read_int(vm, fi_reset, "b"), mn_dbg_read_int(vm, fi_reset, "q"),
-                    mn_dbg_read_int(vm, fi_reset, "r"), vm->inversion_depth,
-                    (long long)time(NULL) * 1000);
-            fclose(_df);
-        }
-    }
-    #endif
     /* Svuota tenendo il buffer: lo stack non è stato salvato da nessuno qui. */
     stack_clear(&vm->frames[fi_reset]->LocalVariables);
 
     /* Per-frame analysis cache. collect_loops/ifs/par_ranges scan ~50KB
-       bytecode per invocation. Encrypt opt-uncall fa molte UNCALL su
-       stesse procedure (divmod, putd, bit_k_signed, …) → cache per
-       base name evita N rescan. */
+       bytecode per invocation. Molte UNCALL sulle stesse procedure →
+       cache per base name evita N rescan. */
     /* `ifs` heap-allocato a capacità = righe del frame: una else-if chain
      * (store a indice runtime su array di N elementi) ha ~N IF annidati.
      * nifs ≤ righe del frame, quindi la capacità per-frame è un bound esatto e
@@ -1112,14 +999,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     uint fi       = get_findex(cur_frame);
     uint start_ln = vm->frames[fi_reset]->addr + 1;
     (void)start_ln;
-    /* Cache: strstr(frame_name, X) chiamato in più punti dell'hot loop interno.
-       frame_name è invariante per chiamata di invert_op_to_line. */
-    /* Match esatto: NON `divmod_nonneg_fast` (struttura diversa, no saved_r,
-     * usa MNHALVE invece di sottrazione lineare). */
-    int _is_divmod_nonneg = (!strncmp(frame_name, "__mn_divmod_nonneg", 18) &&
-                             strncmp(frame_name, "__mn_divmod_nonneg_fast", 23) != 0);
-    int _is_bit_k_signed  = (strstr(frame_name, "bit_k_signed")  != NULL);
-
     /* Heap, dimensionato allo span del proc: con un [1024] fisso una
      * procedura > 1024 righe (es. fill con store a indice runtime su array di
      * ~95+ elementi: disj-chain profonda) veniva troncata in coda → push/delocal
@@ -1166,41 +1045,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
         *newline = '\n'; ptr = newline + 1;
     }
-    #ifdef MNEMO_AGENT_LOG
-    if (strstr(frame_name, "move_int")) {
-        FILE *_mf = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
-        if (_mf) {
-            fprintf(_mf,
-                    "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"F\",\"location\":\"invert_lp\","
-                    "\"message\":\"lp_collect\",\"data\":{\"frame\":\"%s\",\"nl\":%d,\"start\":%u,"
-                    "\"stop\":%u,\"depth\":%d},\"timestamp\":%lld}\n",
-                    frame_name, nl, start, stop, vm->inversion_depth,
-                    (long long)time(NULL) * 1000);
-            for (int _j = 0; _j < nl && _j < 16; _j++) {
-                char _ob[256];
-                strncpy(_ob, lp[_j], sizeof(_ob) - 1);
-                _ob[sizeof(_ob) - 1] = '\0';
-                char *_fw = strtok(skip_lineno(_ob), " \t");
-                fprintf(_mf,
-                        "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"F\",\"location\":\"invert_lp_line\","
-                        "\"message\":\"lp_row\",\"data\":{\"ln\":%u,\"op\":\"%s\"},\"timestamp\":%lld}\n",
-                        ln[_j], _fw ? _fw : "?", (long long)time(NULL) * 1000);
-            }
-            fclose(_mf);
-        }
-    }
-    #endif
 
     int i = nl - 1;
-#ifdef MNEMO_AGENT_LOG
-    long long _iter_count = 0;
-#endif
     while (i >= 0) {
-#ifdef MNEMO_AGENT_LOG
-        if (++_iter_count % 100000 == 0)
-            fprintf(stderr, "[INVERT_LOOP] frame='%s' iter=%lld i=%d nl=%d\n",
-                    frame_name, _iter_count, i, nl);
-#endif
         uint  cur   = ln[i];
         /* skip_lineno è puro arithmetic, può operare su lp[i] direttamente (immutato). */
         char *clean = skip_lineno(lp[i]);
@@ -1215,8 +1062,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         char *arg1_cls = strtok(NULL, " \t");
         if (!fw_cls) { i--; continue; }
         uint8_t op_tag = lp_op[i];
-        if (!strcmp(frame_name, "__mn_divmod_nonneg"))
-            VMLOG("[INV_LOOP] frame='%s' i=%d cur=%u fw='%s'\n", frame_name, i, cur, fw_cls ? fw_cls : "NULL");
         /* Nel ramo THEN già invertito da exec_branch_inverse (honor_if_line_skip=0 lì).
          * Con range globals attivi (FROM-loop fallback su sub-range), filtra IFs
          * annidate dentro (g_from, g_to) ANCHE quando honor=0. */
@@ -1267,29 +1112,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             lz == LOOP_ZONE_ERR_LABEL)  { i--; continue; }
 
         if (lz == LOOP_ZONE_JMPF_ERR) {
-            if (_is_divmod_nonneg &&
-                loop_entry_eq_zero_guard(loops, li) &&
-                divmod_saved_r_loop_skipped_forward(vm, fi)) {
-                i--;
-                continue;
-            }
-            if (_is_bit_k_signed &&
-                loop_entry_eq_zero_guard(loops, li) &&
-                !strcmp(vm_name_get(loops[li].eval_entry_id), "i") &&
-                bit_k_loop_skipped_forward(vm, fi)) {
-                i--;
-                continue;
-            }
             do_eval(vm, fi, vm_name_get(loops[li].eval_entry_id), loops[li].eval_entry_op,
                     vm_name_get(loops[li].eval_entry_val));
-            #ifdef MNEMO_AGENT_LOG
-            mn_dbg_log_loop("B", "JMPF_ERR", frame_name, _iter_count, i, nl,
-                            (int)thread_val_IF,
-                            loop_entry_eq_zero_guard(loops, li)
-                                ? loop_entry_counter_val(vm, fi, loops, li)
-                                : mn_dbg_read_int(vm, fi, "q"),
-                            mn_dbg_read_int(vm, fi, "r"), mn_dbg_read_int(vm, fi, "b"), -1);
-            #endif
             if (loop_entry_eq_zero_guard(loops, li)) {
                 if (loop_entry_counter_val(vm, fi, loops, li) <= 0) {
                     i--;
@@ -1310,19 +1134,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             continue;
         }
         if (lz == LOOP_ZONE_JMPF_START) {
-            if (_is_divmod_nonneg &&
-                loop_entry_eq_zero_guard(loops, li) &&
-                divmod_saved_r_loop_skipped_forward(vm, fi)) {
-                i--;
-                continue;
-            }
-            if (_is_bit_k_signed &&
-                loop_entry_eq_zero_guard(loops, li) &&
-                !strcmp(vm_name_get(loops[li].eval_entry_id), "i") &&
-                bit_k_loop_skipped_forward(vm, fi)) {
-                i--;
-                continue;
-            }
             do_eval(vm, fi, vm_name_get(loops[li].eval_exit_id), loops[li].eval_exit_op,
                     vm_name_get(loops[li].eval_exit_val));
             /* Forward: exit loop se exit-cond vera (senza jmp). Inverse: mentre il corpo da
@@ -1330,12 +1141,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                dell'EVAL until; quando la guardia coincide con uscita inversa, solo i--.
                I ramif erano scambiati: con e0==0 al primo incontr prendevamo i-- e mai il corpo. */
             int peel_more = loop_peel_more_at_until(vm, fi, loops, li, thread_val_IF);
-            #ifdef MNEMO_AGENT_LOG
-            mn_dbg_log_loop("A", "JMPF_START", frame_name, _iter_count, i, nl,
-                            (int)thread_val_IF, mn_dbg_read_int(vm, fi, "q"),
-                            mn_dbg_read_int(vm, fi, "r"), mn_dbg_read_int(vm, fi, "b"),
-                            peel_more);
-            #endif
             if (!peel_more) { i--; }
             else {
                 int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
@@ -1357,50 +1162,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             { i--; continue; }
 
         if (iz == IF_ZONE_JMPF_ELSE) {
-            /* Fix P3 trace: legge branch dal clone frame trace window.
-             * Forward CALL salva trace_window_start sul clone. Inverse
-             * JMPF_ELSE legge window-relative (start+cursor) ed avanza
-             * cursor. Attivo solo se proc base matches trace_proc. */
-            int trace_path_active = 0;
-            if (vm->branch_trace_active > 0) {
-                if (vm_base_eq(cur_frame, vm_name_get(vm->branch_trace_proc))) trace_path_active = 1;
-            }
-            /* IF dentro un loop body: la branch_trace FIFO non si allinea al peel
-             * inverso; usa recompute (do_eval_if_entry), affidabile qui. */
-            if (trace_path_active &&
-                line_inside_loop_body(ifs[ii].jmpf_else_line, loops, nloops))
-                trace_path_active = 0;
-            if (trace_path_active) {
-                int win_start = vm->frames[fi]->trace_window_start;
-                int win_cursor = vm->frames[fi]->trace_window_cursor;
-                /* Consume LIFO: gli IF si invertono in ordine inverso rispetto
-                 * alla registrazione forward, quindi leggi dal top della finestra
-                 * verso il basso (top-1-cursor), non win_start+cursor (FIFO, che
-                 * disallineava i branch misti negli IF top-level non-loop). */
-                int trace_idx = vm->branch_trace_top - 1 - win_cursor;
-                if (trace_idx >= win_start && trace_idx < vm->branch_trace_top) {
-                    int branch_was_then = vm->branch_trace[trace_idx];
-                    vm->frames[fi]->trace_window_cursor = win_cursor + 1;
-                    uint branch_from = 0, branch_to = 0;
-                    if (branch_was_then) {
-                        branch_from = ifs[ii].jmpf_else_line + 1;
-                        branch_to   = ifs[ii].jmp_fi_line;
-                    } else {
-                        branch_from = ifs[ii].else_label_line + 1;
-                        branch_to   = ifs[ii].fi_label_line;
-                    }
-                    if (branch_from < branch_to) {
-                        Stack sv = vm->frames[fi]->LocalVariables;
-                        stack_init(&vm->frames[fi]->LocalVariables);
-                        exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
-                        stack_restore(&vm->frames[fi]->LocalVariables, sv);
-                    }
-                    int t = -1;
-                    for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
-                    i = (t >= 0) ? t - 1 : i - 1;
-                    continue;
-                }
-            }
             int depth = vm->frames[fi_reset]->recursion_depth;
             if (depth > 0) {
                 /* Recursive procedure: the entry guard can be overwritten by nested calls.
@@ -1460,39 +1221,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
         if (op_tag == INVOP_PAR_END) { i--; continue; }
 
-        if (_is_divmod_nonneg &&
-            divmod_saved_r_loop_skipped_forward(vm, fi) && arg1_cls &&
-            ((op_tag == INVOP_MINEQ  && !strcmp(arg1_cls, "r")) ||
-             (op_tag == INVOP_PUSHEQ && !strcmp(arg1_cls, "q")))) {
-            i--;
-            continue;
-        }
-        if (_is_bit_k_signed &&
-            bit_k_loop_skipped_forward(vm, fi) && arg1_cls &&
-            ((op_tag == INVOP_MINEQ  && !strcmp(arg1_cls, "i")) ||
-             (op_tag == INVOP_PUSHEQ && !strcmp(arg1_cls, "i")))) {
-            i--;
-            continue;
-        }
-
         if (op_tag == INVOP_CALL) {
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
-            /* Output-primitive `__mn_put*` (putd/putx/puto + varianti): identità
-             * sullo stato (divmod self-uncalled, show no-op, locali delocal'd →
-             * net __mn_hist = 0). L'inverse del CALL è quindi un no-op CORRETTO.
-             * Saltarlo evita la ricorsione inversa non-terminante (struttura
-             * "1×THEN poi base ELSE" che il recursion_depth-replay non gestisce)
-             * → --check-invertibility funziona su programmi con printf. */
-            if (pn && strncmp(pn, "__mn_put", 8) == 0) { i--; continue; }
-            /* Native inverse di pool_load: il forward era native (out=mem[slot] +
-             * 2 push hist); l'inverse è self-contained dall'hist (pop t, out-=t,
-             * pop out). Salta il replay del dispatch 917-IF. */
-            if (g_vm_native_arith && pn && !strcmp(pn, "__mn_pool_load")) {
-                mn_native_pool_load_inv(vm, get_findex(frame_name));
-                i--; continue;
-            }
             /* Ricorsiva se pn è il nome base del frame corrente. */
             int is_rec = vm_base_eq(frame_name, pn);
             int new_depth = 0;
@@ -1527,37 +1259,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 strncpy(target, pn, sizeof(target) - 1);
                 target[sizeof(target) - 1] = '\0';
             }
-            /* Fix P3 trace: pop callee clone trace_window stack, imposta
-             * window_start corrente per invert_op_to_line. Save/restore
-             * base frame window_state attorno all'invert ricorsivo per
-             * non sovrascrivere il context outer. */
-            int saved_base_win_start_x = 0;
-            int saved_base_win_cursor_x = 0;
-            int trace_did_pop_x = 0;
-            uint base_fi_x = 0;
-            if (vm->branch_trace_active > 0 && vm->frames[cfi]->trace_window_top > 0) {
-                if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
-                    int win = vm->frames[cfi]->trace_window_stack[--vm->frames[cfi]->trace_window_top];
-                    vm->frames[cfi]->trace_window_start = win;
-                    vm->frames[cfi]->trace_window_cursor = 0;
-                    base_fi_x = char_id_map_get(&FrameIndexer, pn);
-                    saved_base_win_start_x = vm->frames[base_fi_x]->trace_window_start;
-                    saved_base_win_cursor_x = vm->frames[base_fi_x]->trace_window_cursor;
-                    vm->frames[base_fi_x]->trace_window_start = win;
-                    vm->frames[base_fi_x]->trace_window_cursor = 0;
-                    trace_did_pop_x = 1;
-                }
-            }
-            /* Forward CALL may have used native O(1) (no __mn_hist pushes). Invert
-             * must use the matching native inverse, not full bytecode inversion. */
-            if (!mn_native_arith_uncall_inverse(vm, pn, cfi)) {
-                invert_op_to_line(vm, target, orig, vm->frames[cfi]->end_addr - 1,
-                                  vm->frames[cfi]->addr + 1, 1);
-            }
-            if (trace_did_pop_x) {
-                vm->frames[base_fi_x]->trace_window_start = saved_base_win_start_x;
-                vm->frames[base_fi_x]->trace_window_cursor = saved_base_win_cursor_x;
-            }
+            invert_op_to_line(vm, target, orig, vm->frames[cfi]->end_addr - 1,
+                              vm->frames[cfi]->addr + 1, 1);
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             VM_PARAM_SAVE_FREE(sv);
             i--; continue;
@@ -1602,29 +1305,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             }
             int saved_inv = vm->inversion_depth;
             int ss = vm->suppress_show;
-            Var *saved_g = vm->invert_hist_guard_var;
-            size_t saved_fm = vm->invert_hist_floor_min;
             vm->inversion_depth          = 0;
-            vm->invert_hist_guard_var    = NULL;
             vm->suppress_show = 1;
-            #ifdef MNEMO_AGENT_LOG
-            {
-                FILE *_uf = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
-                if (_uf) {
-                    fprintf(_uf,
-                            "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"G\",\"location\":\"invert_uncall_replay\","
-                            "\"message\":\"vm_run_BT\",\"data\":{\"parent\":\"%s\",\"callee\":\"%s\","
-                            "\"loc_sz\":%d},\"timestamp\":%lld}\n",
-                            frame_name, cn, stack_size(&vm->frames[cfi]->LocalVariables),
-                            (long long)time(NULL) * 1000);
-                    fclose(_uf);
-                }
-            }
-            #endif
             vm_run_BT(vm, orig, cn);
             vm->inversion_depth       = saved_inv;
-            vm->invert_hist_guard_var = saved_g;
-            vm->invert_hist_floor_min = saved_fm;
             vm->suppress_show = ss;
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             VM_PARAM_SAVE_FREE(sv);
@@ -1657,29 +1341,18 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             }
         }
 
-        if (!strcmp(frame_name, "__mn_divmod_nonneg"))
-            VMLOG("[INV_OP] frame='%s' cur=%u op='%s'\n", frame_name, cur, fw);
         switch (op_tag) {
             case INVOP_PUSHEQ:  op_pusheq_inv(vm, cur_frame); break;
             case INVOP_MINEQ:   op_mineq_inv (vm, cur_frame); break;
             case INVOP_XOREQ:   op_xoreq_inv (vm, cur_frame); break;
-            case INVOP_MNHALVE: op_mnhalve_inv(vm, cur_frame); break;
-            case INVOP_MNSPLIT32: op_mnsplit32_inv(vm, cur_frame); break;
             case INVOP_SWAP:    op_swap_inv  (vm, cur_frame); break;
             case INVOP_PUSH:    op_pop       (vm, cur_frame); break;
             case INVOP_POP:     op_push      (vm, cur_frame); break;
             case INVOP_SSEND:   op_srecv     (vm, cur_frame); break;
             case INVOP_SRECV:   op_ssend     (vm, cur_frame); break;
-            case INVOP_POOLADD:    op_poolsub    (vm, cur_frame); break;
-            case INVOP_POOLSUB:    op_pooladd    (vm, cur_frame); break;
-            case INVOP_POOLGET:    op_poolgetneg (vm, cur_frame); break;
-            case INVOP_POOLGETNEG: op_poolget    (vm, cur_frame); break;
-            case INVOP_POOLPUSH:   op_poolpop    (vm, cur_frame); break;
-            case INVOP_POOLPOP:    op_poolpush   (vm, cur_frame); break;
             case INVOP_LOCAL:   op_delocal   (vm, cur_frame); break;
             case INVOP_DELOCAL: op_local     (vm, cur_frame); break;
             case INVOP_SHOW:    /* no-op in inverse */ break;
-            case INVOP_DUMP:    /* no-op in inverse */ break;
             case INVOP_START: case INVOP_PARAM: case INVOP_LABEL:
             case INVOP_EVAL:  case INVOP_JMPF:  case INVOP_JMP:
             case INVOP_ASSERT: case INVOP_DECL: case INVOP_HALT:
@@ -1692,20 +1365,6 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     free(_arena);
     free(lp); free(ln); free(lp_op);
     /* orig non strduped → niente free(orig) */
-    #ifdef MNEMO_AGENT_LOG
-    if (strstr(frame_name, "move_int")) {
-        FILE *_df = fopen("/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log", "a");
-        if (_df) {
-            fprintf(_df,
-                    "{\"sessionId\":\"acb76d\",\"hypothesisId\":\"F\",\"location\":\"invert_done\","
-                    "\"message\":\"invert_exit\",\"data\":{\"frame\":\"%s\",\"loc_sz\":%d},"
-                    "\"timestamp\":%lld}\n",
-                    frame_name, stack_size(&vm->frames[fi_reset]->LocalVariables),
-                    (long long)time(NULL) * 1000);
-            fclose(_df);
-        }
-    }
-    #endif
     VMLOG("[INVERT] completata, righe processate=%d\n", nl);
     vm->inversion_depth--;
     /* orig = buffer (no strdup), niente free */
@@ -1820,22 +1479,16 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     }
 
     if (branch_span_has_from_loop(original_buffer, from_line, to_line)) {
-        if (!strncmp(frame_name, "__mn_divmod_nonneg", 18) &&
-            strncmp(frame_name, "__mn_divmod_nonneg_fast", 23) != 0 &&
-            divmod_saved_r_loop_skipped_forward(vm, cfi)) {
-            /* forward non entrò nel from q==0: il ramo THEN va saltato */
-        } else {
-            /* Attiva range-scoped IF skip: invert_op_to_line(honor=0) altrimenti
-             * processa linearmente sia il body del FROM-loop che i corpi degli
-             * IF annidati (gestiti via JMPF_ELSE dispatch) → double-processing. */
-            uint saved_ff = g_invert_nested_filter_from;
-            uint saved_ft = g_invert_nested_filter_to;
-            g_invert_nested_filter_from = from_line;
-            g_invert_nested_filter_to   = to_line;
-            invert_op_to_line(vm, frame_name, original_buffer, to_line - 1, from_line - 1, 0);
-            g_invert_nested_filter_from = saved_ff;
-            g_invert_nested_filter_to   = saved_ft;
-        }
+        /* Attiva range-scoped IF skip: invert_op_to_line(honor=0) altrimenti
+         * processa linearmente sia il body del FROM-loop che i corpi degli
+         * IF annidati (gestiti via JMPF_ELSE dispatch) → double-processing. */
+        uint saved_ff = g_invert_nested_filter_from;
+        uint saved_ft = g_invert_nested_filter_to;
+        g_invert_nested_filter_from = from_line;
+        g_invert_nested_filter_to   = to_line;
+        invert_op_to_line(vm, frame_name, original_buffer, to_line - 1, from_line - 1, 0);
+        g_invert_nested_filter_from = saved_ff;
+        g_invert_nested_filter_to   = saved_ft;
     } else if (branch_span_has_nested_if(original_buffer, from_line, to_line)) {
         /* Branch contiene nested IF: linear-reverse standard processerebbe entrambi
          * THEN+ELSE come atomic ops (non riconosce JMPF/LABEL/EVAL) corrompendo
@@ -1981,33 +1634,9 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 else if (is_rec_c) make_frame_key(pn, new_depth_c, target_c, sizeof(target_c));
                 else if (current_thread_args) make_thread_frame_key(pn, target_c, sizeof(target_c));
                 else { strncpy(target_c, pn, sizeof(target_c) - 1); target_c[sizeof(target_c) - 1] = '\0'; }
-                /* Fix P3 trace: pop callee clone trace_window stack, set
-                 * window_start corrente per invert_op_to_line. Save/restore
-                 * base attorno per non polluire outer context. */
-                int saved_bws_eb = 0, saved_bwc_eb = 0, popped_eb = 0;
-                uint base_fi_eb = 0;
-                if (vm->branch_trace_active > 0 &&
-                    vm->frames[callee_fi_c]->trace_window_top > 0) {
-                    if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
-                        int win = vm->frames[callee_fi_c]->trace_window_stack
-                                  [--vm->frames[callee_fi_c]->trace_window_top];
-                        vm->frames[callee_fi_c]->trace_window_start = win;
-                        vm->frames[callee_fi_c]->trace_window_cursor = 0;
-                        base_fi_eb = char_id_map_get(&FrameIndexer, pn);
-                        saved_bws_eb = vm->frames[base_fi_eb]->trace_window_start;
-                        saved_bwc_eb = vm->frames[base_fi_eb]->trace_window_cursor;
-                        vm->frames[base_fi_eb]->trace_window_start = win;
-                        vm->frames[base_fi_eb]->trace_window_cursor = 0;
-                        popped_eb = 1;
-                    }
-                }
                 invert_op_to_line(vm, target_c, original_buffer,
                                   vm->frames[callee_fi_c]->end_addr - 1,
                                   vm->frames[callee_fi_c]->addr + 1, 1);
-                if (popped_eb) {
-                    vm->frames[base_fi_eb]->trace_window_start = saved_bws_eb;
-                    vm->frames[base_fi_eb]->trace_window_cursor = saved_bwc_eb;
-                }
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c]->vars[pi_c[k]] = sv_c[k];
                 stack_restore(&vm->frames[callee_fi_c]->LocalVariables, slv_c);
                 VM_PARAM_SAVE_FREE(sv_c);
@@ -2016,18 +1645,10 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
             else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
-            else if (!strcmp(fw, "MNHALVE")) op_mnhalve_inv(vm, frame_name);
-            else if (!strcmp(fw, "MNSPLIT32")) op_mnsplit32_inv(vm, frame_name);
             else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
             else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
-            else if (!strcmp(fw, "POOLADD"))    op_poolsub   (vm, frame_name);
-            else if (!strcmp(fw, "POOLSUB"))    op_pooladd   (vm, frame_name);
-            else if (!strcmp(fw, "POOLGETNEG")) op_poolget   (vm, frame_name);
-            else if (!strcmp(fw, "POOLGET"))    op_poolgetneg(vm, frame_name);
-            else if (!strcmp(fw, "POOLPUSH"))   op_poolpop   (vm, frame_name);
-            else if (!strcmp(fw, "POOLPOP"))    op_poolpush  (vm, frame_name);
             else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
             else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
             else if (!strcmp(fw, "SHOW"))   { /* no-op */ }
@@ -2099,33 +1720,9 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     strncpy(target_c, pn, sizeof(target_c) - 1);
                     target_c[sizeof(target_c) - 1] = '\0';
                 }
-                /* Fix P3 trace: pop callee clone trace_window stack, set
-                 * window_start corrente per invert_op_to_line. Save/restore
-                 * base. */
-                int saved_bws_eb2 = 0, saved_bwc_eb2 = 0, popped_eb2 = 0;
-                uint base_fi_eb2 = 0;
-                if (vm->branch_trace_active > 0 &&
-                    vm->frames[callee_fi_c]->trace_window_top > 0) {
-                    if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
-                        int win = vm->frames[callee_fi_c]->trace_window_stack
-                                  [--vm->frames[callee_fi_c]->trace_window_top];
-                        vm->frames[callee_fi_c]->trace_window_start = win;
-                        vm->frames[callee_fi_c]->trace_window_cursor = 0;
-                        base_fi_eb2 = char_id_map_get(&FrameIndexer, pn);
-                        saved_bws_eb2 = vm->frames[base_fi_eb2]->trace_window_start;
-                        saved_bwc_eb2 = vm->frames[base_fi_eb2]->trace_window_cursor;
-                        vm->frames[base_fi_eb2]->trace_window_start = win;
-                        vm->frames[base_fi_eb2]->trace_window_cursor = 0;
-                        popped_eb2 = 1;
-                    }
-                }
                 invert_op_to_line(vm, target_c, original_buffer,
                                   vm->frames[callee_fi_c]->end_addr - 1,
                                   vm->frames[callee_fi_c]->addr + 1, 1);
-                if (popped_eb2) {
-                    vm->frames[base_fi_eb2]->trace_window_start = saved_bws_eb2;
-                    vm->frames[base_fi_eb2]->trace_window_cursor = saved_bwc_eb2;
-                }
                 for (int k = 0; k < pc_c; k++) vm->frames[callee_fi_c]->vars[pi_c[k]] = sv_c[k];
                 stack_restore(&vm->frames[callee_fi_c]->LocalVariables, slv_c);
                 VM_PARAM_SAVE_FREE(sv_c);
@@ -2172,15 +1769,10 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 }
                 int saved_inv = vm->inversion_depth;
                 int ss = vm->suppress_show;
-                Var *saved_g = vm->invert_hist_guard_var;
-                size_t saved_fm = vm->invert_hist_floor_min;
                 vm->inversion_depth       = 0;
-                vm->invert_hist_guard_var = NULL;
                 vm->suppress_show = 1;
                 vm_run_BT(vm, original_buffer, cn);
                 vm->inversion_depth       = saved_inv;
-                vm->invert_hist_guard_var = saved_g;
-                vm->invert_hist_floor_min = saved_fm;
                 vm->suppress_show = ss;
                 for (int k = 0; k < pc; k++) vm->frames[callee_fi]->vars[pi[k]] = sv[k];
                 stack_restore(&vm->frames[callee_fi]->LocalVariables, slv);
@@ -2192,18 +1784,10 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
             else if (!strcmp(fw, "SWAP"))   op_swap_inv  (vm, frame_name);
-            else if (!strcmp(fw, "MNHALVE")) op_mnhalve_inv(vm, frame_name);
-            else if (!strcmp(fw, "MNSPLIT32")) op_mnsplit32_inv(vm, frame_name);
             else if (!strcmp(fw, "PUSH"))   op_pop       (vm, frame_name);
             else if (!strcmp(fw, "POP"))    op_push      (vm, frame_name);
             else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, frame_name);
             else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, frame_name);
-            else if (!strcmp(fw, "POOLADD"))    op_poolsub   (vm, frame_name);
-            else if (!strcmp(fw, "POOLSUB"))    op_pooladd   (vm, frame_name);
-            else if (!strcmp(fw, "POOLGETNEG")) op_poolget   (vm, frame_name);
-            else if (!strcmp(fw, "POOLGET"))    op_poolgetneg(vm, frame_name);
-            else if (!strcmp(fw, "POOLPUSH"))   op_poolpop   (vm, frame_name);
-            else if (!strcmp(fw, "POOLPOP"))    op_poolpush  (vm, frame_name);
             else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, frame_name);
             else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
             else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }

@@ -5,10 +5,6 @@
 PYTHON      := ./venv/bin/python
 PYINSTALLER := $(abspath ./venv/bin/pyinstaller)
 
-# Mnemo accanto a questo repo (es. ~/Desktop/kairos e ~/Desktop/mnemo). Override: MNEMO_DIR=/path
-MNEMO_DIR   ?= $(abspath $(CURDIR)/../mnemo)
-MNEMO_PY    := $(MNEMO_DIR)/.venv/bin/python
-
 SRC_DIR     := src
 VM_DIR      := $(SRC_DIR)/vm
 LIBVM       := build/libvm.so
@@ -36,7 +32,7 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 RESET  := \033[0m
 
-.PHONY: all build build-release build-dap test-dap run test mnemo-test mnemo-run release release-app install-deps check-system check-deps check-pyinstaller clean help
+.PHONY: all build build-release build-dap test-dap run test release release-app install-deps check-system check-deps check-pyinstaller clean help
 
 # Default: release (massima ottimizzazione).
 all: release
@@ -84,7 +80,6 @@ $(VERSCRIPT): $(VM_SOURCES)
 	@for sym in \
 	    vm_run_from_string \
 	    vm_run_from_string_quiet \
-	    vm_set_native_arith \
 	    vm_debug_new \
 	    vm_debug_free \
 	    vm_debug_start \
@@ -147,24 +142,6 @@ test: build-release
 		printf "$$errors"; \
 		exit 1; \
 	fi
-	@if [ -x $(MNEMO_PY) ]; then \
-		echo ""; \
-		echo "$(CYAN)=== Mnemo (c_examples/*.c → .kairos) ===$(RESET)"; \
-		$(MAKE) mnemo-test || exit 1; \
-	else \
-		echo ""; \
-		echo "$(YELLOW)Mnemo: salto ($(MNEMO_PY) assente — cd $(MNEMO_DIR) && python3 -m venv .venv && pip install -e .)$(RESET)"; \
-	fi
-
-mnemo-test:
-	@$(MAKE) -C $(MNEMO_DIR) test KAIROS_ROOT=$(abspath $(CURDIR))
-
-# Esegue un singolo esempio Mnemo: FILE è relativo a mnemo/ (es. c_examples/ex01_mul_small.c)
-mnemo-run:
-ifndef FILE
-	$(error Usa: make mnemo-run FILE=c_examples/ex01_mul_small.c — path relativo a mnemo/, senza spazi attorno a =)
-endif
-	@$(MAKE) -C $(MNEMO_DIR) run FILE=$(FILE) KAIROS_ROOT=$(abspath $(CURDIR))
 
 # PyInstaller standalone app (rinominato da `release` per non confondersi con la build libvm).
 release-app: release check-pyinstaller
@@ -236,9 +213,7 @@ help:
 	@echo "  $(GREEN)make build-dap$(RESET)                Compila libvm_dap.so (debugger)"
 	@echo "  $(GREEN)make test-dap$(RESET)                 Test C debugger (pipe + loop lungo)"
 	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)       Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
-	@echo "  $(GREEN)make mnemo-run FILE=<path>$(RESET)      Un solo esempio Mnemo: FILE relativo a $(MNEMO_DIR)/"
-	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + Mnemo (se $(MNEMO_PY) esiste)"
-	@echo "  $(GREEN)make mnemo-test$(RESET)               Solo Mnemo (MNEMO_DIR=$(MNEMO_DIR))"
+	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + lossless/"
 	@echo "  $(GREEN)make release-app$(RESET)              Build KairosApp standalone con PyInstaller"
 	@echo "  $(GREEN)make check-system$(RESET)             Controlla i requisiti di sistema (gcc, make, python3-venv)"
 	@echo "  $(GREEN)make install-deps$(RESET)             Controlla i requisiti, crea il venv e installa le dipendenze"

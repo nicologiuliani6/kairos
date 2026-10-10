@@ -49,11 +49,10 @@ static inline void clear_blocked(ThreadArgs *ta)
 
 /* ======================================================================
  *  op_wait — rendez-vous su canale
- *  Ritorna 0 match immediato; 1 sender in coda (op_ssend deve wait_for_turn_done);
- *  2 (solo is_send) se allow_mailbox_idle: messaggio nel buffer, nessun rendezvous.
+ *  Ritorna 0 match immediato; 1 sender in coda (op_ssend deve wait_for_turn_done).
  * ====================================================================== */
 
-static inline int op_wait(Channel *ch, int is_send, int allow_mailbox_idle)
+static inline int op_wait(Channel *ch, int is_send)
 {
     /* Prima di bloccarci, svegliamo l'eventuale sender pendente */
     if (!is_send && current_thread_args && current_thread_args->sender_to_notify) {
@@ -83,12 +82,6 @@ static inline int op_wait(Channel *ch, int is_send, int allow_mailbox_idle)
             pthread_cond_destroy(&self->cond);
             free(self);
             return 0;
-        }
-        if (allow_mailbox_idle) {
-            pthread_mutex_unlock(&ch->mtx);
-            pthread_cond_destroy(&self->cond);
-            free(self);
-            return 2;
         }
         /* Nessun match → vai in coda e segnala blocked */
         if (ch->send_q_tail) ch->send_q_tail->next = self; else ch->send_q_head = self;

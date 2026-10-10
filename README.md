@@ -725,7 +725,7 @@ Per ogni branch si calcolano:
 
 - **Accessi** (`int`): tutti gli identificatori usati nel branch (assegnamenti, espressioni, argomenti di chiamate, condizioni, `show`, `push`/`pop`, `local`/`delocal`, ecc.), ristretti ai nomi dichiarati `int` nel frame corrente.
 - **Scritture** (`int`): oltre alle scritture **dirette** (`+=`/`-=`/`^=` su un `int`, `x <=> y` con tipi `int`, `local`/`delocal` su `int`), anche:
-  - gli `int` passati a una **builtin che scrive quell'argomento**: `pop(v, s)` e `srecv(<w1 … wk>, c)` scrivono le destinazioni, `push(v, s)` e `ssend(<v1 … vk>, c)` azzerano le sorgenti, `mnhalve`/`mnsplit32` scrivono tutti e tre gli argomenti, `poolget`/`poolgetneg` il secondo. `show` e `dump` sono in sola lettura; `swap` ha la sua eccezione documentata;
+  - gli `int` passati a una **builtin che scrive quell'argomento**: `pop(v, s)` e `srecv(<w1 … wk>, c)` scrivono le destinazioni, `push(v, s)` e `ssend(<v1 … vk>, c)` azzerano le sorgenti. `show` è in sola lettura; `swap` ha la sua eccezione documentata;
   - gli **`int` passati come argomenti** a procedure che **mutano** quel parametro (analisi per punto fisso sul grafo delle chiamate: assegnamento al parametro o builtin che lo scrive nel corpo della procedura, propagazione attraverso `call` / `uncall` / chiamata diretta).
 
   Così una `call` che scrive il proprio parametro `int` solo tramite `pop`/`srecv` conta come scrittura tanto quanto un `+=`. Esempi: `test_error/19_shared_int_par_pop.kairos`, `test_error/20_shared_int_par_srecv.kairos`.

@@ -14,23 +14,13 @@
 #include "vm_par.h"      /* deve venire prima: definisce ParBlock, scan_par_block, exec_par_threads */
 #include "vm_invert.h"   /* usa ParBlock e exec_par_threads definiti sopra */
 #include "vm_debug.h"    /* debug hook, dump JSON, breakpoint management  */
-#include "mn_native_arith.h"
 #include "Kairos_core.h"
 
 
 /* Puntatore alla VM corrente — usato da vm_printf in DAP_MODE */
 VM *g_current_vm = NULL;
-/* 1 = esegui procedure Mnemo mul/div/bitwise in C O(1) (KAIROS_NATIVE_ARITH=1 / vm_set_native_arith). */
-int g_vm_native_arith = 0;
-
-void vm_dump_active(VM *vm, const char *frame_name);  /* fwd: opcode DUMP (dump mid-run) */
 void vm_print_stats(VM *vm);          /* fwd: --vm-stats (def più sotto) */
 static int g_vm_stats_enabled;        /* tentative decl (def con =0 più sotto) */
-
-void vm_set_native_arith(int enabled)
-{
-    g_vm_native_arith = enabled ? 1 : 0;
-}
 /* ── thread-local state (dichiarate extern in vm_types.h) ── */
 __thread ThreadArgs *current_thread_args = NULL;
 __thread char       *strtok_saveptr      = NULL;
@@ -75,123 +65,11 @@ static inline int extract_srcline(const char *raw_line)
         }                                                                \
     } while(0)
 
-/* Dopo CALL __mn_hist_floor_snap il Mnemo emette subito CALL <proc> (coppia XOR+uncall). */
-static inline char *mn_skip_bytecode_lineno_prefix(char *line)
-{
-    char *p = line;
-    while (*p >= '0' && *p <= '9') p++;
-    while (*p == ' ' || *p == '\t') p++;
-    if (*p == '@') {
-        p++;
-        while (*p >= '0' && *p <= '9') p++;
-        while (*p == ' ' || *p == '\t') p++;
-    }
-    return p;
-}
-
-/* Prossimo token della riga: lo termina sul posto (la riga è una copia locale)
-   e ne ritorna l'inizio, NULL a fine riga. Nessuna lunghezza massima. */
-static char *mn_bytecode_next_token(char **scan)
-{
-    char *s = *scan;
-    while (*s == ' ' || *s == '\t' || *s == '\r') s++;
-    if (*s == '\0' || *s == '\n') {
-        *scan = s;
-        return NULL;
-    }
-    char *tok = s;
-    while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n') s++;
-    if (*s) *s++ = '\0';
-    *scan = s;
-    return tok;
-}
-
-/* Nome della procedura chiamata subito dopo lo snap, in una stringa sull'heap. */
-static char *mn_hist_floor_snap_peek_next_call_callee(char *cursor_after_snap_line_nl)
-{
-    for (; *cursor_after_snap_line_nl;) {
-        char *nline = strchr(cursor_after_snap_line_nl, '\n');
-        size_t L    = nline ? (size_t)(nline - cursor_after_snap_line_nl)
-                           : strlen(cursor_after_snap_line_nl);
-        char  linebuf[L + 1];
-        memcpy(linebuf, cursor_after_snap_line_nl, L);
-        linebuf[L] = '\0';
-
-        cursor_after_snap_line_nl = nline ? nline + 1 : cursor_after_snap_line_nl + L;
-
-        char *past = mn_skip_bytecode_lineno_prefix(linebuf);
-        if (*past == '\0')
-            continue;
-
-        char *wk     = past;
-        char *tok_op = mn_bytecode_next_token(&wk);
-        if (!tok_op)
-            continue;
-        if (strcmp(tok_op, "CALL") != 0) {
-            vm_debug_panic(
-                "[VM] __mn_hist_floor_snap: dopo lo snap attendevo CALL <proc>, trovato '%s'\n",
-                tok_op);
-        }
-        char *callee = mn_bytecode_next_token(&wk);
-        if (!callee)
-            vm_debug_panic("[VM] __mn_hist_floor_snap: CALL senza nome procedura\n");
-        if (!strcmp(callee, "__mn_hist_floor_snap"))
-            vm_debug_panic("[VM] __mn_hist_floor_snap: snapshot Mnemo duplicati consecutivi\n");
-        return char_id_strdup(callee);
-    }
-    vm_debug_panic("[VM] __mn_hist_floor_snap: nessuna CALL dopo snapshot\n");
-    return NULL;
-}
-
 /* ======================================================================
  *  vm_run_BT — loop principale di esecuzione
  * ====================================================================== */
 
 void vm_stats_sample(VM *vm);
-
-/* Native interception di `call __mn_pool_load(slot, __mn_mem0..N, out, __mn_hist,
- * __mn_scratch)` (dispatch statico binary-search delle celle nominate per
- * `tbl[i]` a indice runtime). Il bytecode lega 917 parametri e poi fa, sul leaf
- * `slot==k`: `t=mem[k]; push(out,hist); out=t; push(t,hist)`. Qui lo eseguiamo
- * in C sul frame CHIAMANTE — out = mem[slot] spingendo gli STESSI 2 valori su
- * __mn_hist (push old-out, push mem[slot]) → l'inverse bytecode (uncall) resta
- * coerente, niente interception inverse. Salta il binding dei 917 param (= il
- * collo: ~4x di des). Ritorna 1 se gestito, 0 = fallback al bytecode (NB: in tal
- * caso strtok è già consumato, quindi gestiamo o paniciamo — gli arg di
- * pool_load sono sempre ben formati). Solo `g_vm_native_arith`. */
-static int mn_native_pool_load_fwd(VM *vm, uint cfi_cur)
-{
-    Frame *f = vm->frames[cfi_cur];
-    /* Primo e ultimi tre argomenti: puntatori nella riga corrente, viva per
-       tutta l'istruzione, invece di copie a lunghezza fissa. */
-    char *a; const char *first = "";
-    const char *w0 = "", *w1 = "", *w2 = "";
-    int n = 0;
-    while ((a = strtok(NULL, " \t"))) {
-        if (n == 0) first = a;
-        w0 = w1; w1 = w2; w2 = a;
-        n++;
-    }
-    /* arg layout: slot=first, mem0..memK, out=w0, __mn_hist=w1, __mn_scratch=w2 */
-    if (n < 4) vm_debug_panic("[VM] native __mn_pool_load: troppi pochi arg (%d)\n", n);
-    int si = char_id_map_lookup(&f->VarIndexer, first);
-    if (si < 0 || !f->vars[si]) vm_debug_panic("[VM] native __mn_pool_load: slot '%s'\n", first);
-    int64_t slot = *(f->vars[si]->value);
-    char cell[40]; snprintf(cell, sizeof(cell), "__mn_mem%lld", (long long)slot);
-    int ci = char_id_map_lookup(&f->VarIndexer, cell);
-    int oi = char_id_map_lookup(&f->VarIndexer, w0);
-    int hi = char_id_map_lookup(&f->VarIndexer, w1);
-    if (ci < 0 || oi < 0 || hi < 0 || !f->vars[ci] || !f->vars[oi] || !f->vars[hi]
-        || f->vars[hi]->T != TYPE_STACK)
-        vm_debug_panic("[VM] native __mn_pool_load: cella/out/hist non risolti (slot=%lld)\n",
-                       (long long)slot);
-    int64_t cellval = *(f->vars[ci]->value);
-    int64_t *outp   = f->vars[oi]->value;
-    mn_hist_push(f->vars[hi], *outp);    /* push(out): vecchio out */
-    *outp = cellval;                     /* out := mem[slot] */
-    mn_hist_push(f->vars[hi], cellval);  /* push(t): t = mem[slot] */
-    return 1;
-}
 
 /* Nome del frame corrente di vm_run_BT, e nome del chiamante salvato in un
  * CallRecord: buffer che crescono solo quando il nome nuovo non ci sta. Nessuna
@@ -291,86 +169,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "CALL")) {
             vm_if_mark_call();
             char *pn      = strtok(NULL, " \t");
-            /* Mnemo: registra len(__mn_hist) prima di call ottimizzata + uncall. */
-            if (pn && !strcmp(pn, "__mn_hist_floor_snap")) {
-                char *hn = strtok(NULL, " \t");
-                if (!hn) vm_debug_panic("[VM] __mn_hist_floor_snap: manca stack\n");
-                uint  cfi_snap = get_findex(fname);
-                uint  si = char_id_map_get(&vm->frames[cfi_snap]->VarIndexer, hn);
-                Var  *hv = vm->frames[cfi_snap]->vars[si];
-                if (!hv || hv->T != TYPE_STACK)
-                    vm_debug_panic("[VM] __mn_hist_floor_snap: non stack\n");
-                if ((uint)vm->mn_hist_floor_snap_sp >= vm->mn_hist_floor_snaps_cap) {
-                    uint new_cap = vm->mn_hist_floor_snaps_cap
-                        ? vm->mn_hist_floor_snaps_cap * 2 : MNEMO_HIST_SNAP_INIT_CAP;
-                    MnemoHistFloorSnapEntry *ns = (MnemoHistFloorSnapEntry *)realloc(
-                        vm->mn_hist_floor_snaps, sizeof(MnemoHistFloorSnapEntry) * new_cap);
-                    if (!ns) vm_debug_panic("[VM] __mn_hist_floor_snap realloc %u fallita\n", new_cap);
-                    memset(ns + vm->mn_hist_floor_snaps_cap, 0,
-                           sizeof(MnemoHistFloorSnapEntry) * (new_cap - vm->mn_hist_floor_snaps_cap));
-                    vm->mn_hist_floor_snaps = ns;
-                    vm->mn_hist_floor_snaps_cap = new_cap;
-                }
-                MnemoHistFloorSnapEntry *ent =
-                    &vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp];
-                ent->hist_len_floor = hv->stack_len;
-                ent->frame_indexer_count_at_snap = FrameIndexer.count;
-                free(ent->opt_call_callee);     /* voce riusata */
-                ent->opt_call_callee = mn_hist_floor_snap_peek_next_call_callee(nl + 1);
-                vm->mn_hist_floor_snap_sp++;
-                /* Fix P3: attiva execution trace per il subtree opt-uncall.
-                 * op_jmpf forward push trace mentre active>0 E proc match.
-                 * Inverse JMPF_ELSE pop quando trace non vuota.
-                 * Decremento dopo UNCALL match. */
-                vm->branch_trace_active++;
-                vm_name_set(&vm->branch_trace_proc, &vm->branch_trace_proc_cap,
-                            ent->opt_call_callee);
-                /* Cache line-range dei from-loop del callee: la forward op_jmpf
-                 * NON deve pushare su branch_trace gli IF dentro un loop (il loro
-                 * inverse usa recompute, non consuma il cursor → la window LIFO si
-                 * disallineerebbe e gli IF top-level leggerebbero entry sbagliate
-                 * → DELOCAL loop-counter / branch errati sotto opt-uncall). */
-                {
-                    /* Tutti i loop del callee, quanti sono (prima al più 128). Le
-                     * coppie (lo, hi) stanno in un blocco che cresce senza essere
-                     * liberato sotto op_jmpf degli altri thread (vm_grow_keep). */
-                    LoopDescriptor *_ld = NULL;
-                    int _nlp = collect_loops(vm, vm->branch_trace_proc, orig, &_ld);
-                    if (_nlp > vm->bt_loop_cap) {
-                        int nc = vm->bt_loop_cap ? vm->bt_loop_cap : 16;
-                        while (nc < _nlp) nc *= 2;
-                        uint *nb = (uint *)vm_grow_keep(vm->bt_loop_lohi, 0,
-                                                        sizeof(uint) * 2 * (size_t)nc);
-                        vm->bt_loop_n = 0;
-                        __atomic_store_n(&vm->bt_loop_lohi, nb, __ATOMIC_RELEASE);
-                        vm->bt_loop_cap = nc;
-                    }
-                    vm->bt_loop_n = 0;
-                    for (int _li = 0; _li < _nlp; _li++) {
-                        /* Due corpi: la finestra parte da FROM_BACK, altrimenti un IF
-                         * dentro c2 finirebbe nel branch trace e l'inversione sbaglierebbe. */
-                        uint _lo = _ld[_li].from_start_line;
-                        if (_ld[_li].from_back_line && _ld[_li].from_back_line < _lo)
-                            _lo = _ld[_li].from_back_line;
-                        vm->bt_loop_lohi[2 * vm->bt_loop_n]     = _lo;
-                        vm->bt_loop_lohi[2 * vm->bt_loop_n + 1] = _ld[_li].eval_exit_line;
-                        vm->bt_loop_n++;
-                    }
-                    loop_descs_free(_ld, _nlp);
-                    free(_ld);
-                    vm_name_set(&vm->bt_loops_cached_proc, &vm->bt_loops_cached_proc_cap,
-                                vm_name_get(vm->branch_trace_proc));
-                }
-                *nl = '\n'; ptr = nl + 1;
-                continue;
-            }
             uint  cfi_cur = get_findex(fname);
-            /* Native pool_load: salta i 917 param-bind, esegue out=mem[slot] in C
-             * sul frame chiamante (hist coerente col bytecode → inverse OK). */
-            if (g_vm_native_arith && !strcmp(pn, "__mn_pool_load")) {
-                mn_native_pool_load_fwd(vm, cfi_cur);
-                *nl = '\n'; ptr = nl + 1; continue;
-            }
             int   is_rec    = vm_base_eq(fname, pn);
             int   new_depth = 0;
             if (is_rec) {
@@ -448,17 +247,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     vm->frames[bfi]->recursion_depth = new_depth;
                 }
             }
-            /* Fix P3 trace: push trace_top corrente sullo stack del clone.
-             * Inverse INVOP_CALL/UNCALL pop e setta come trace_window_start
-             * corrente. Stack necessario perché clone reused tra siblings.
-             * Solo se proc base matches trace_proc (procs altre = skip). */
-            if (vm->branch_trace_active > 0) {
-                if (vm_base_eq(pn, vm_name_get(vm->branch_trace_proc))) {
-                    frame_ensure_trace(vm->frames[cfi], vm->frames[cfi]->trace_window_top);
-                    vm->frames[cfi]->trace_window_stack[vm->frames[cfi]->trace_window_top++] =
-                        vm->branch_trace_top;
-                }
-            }
             VM_FRAME_KEY_BUF(nfname, pn);
             if (is_rec) {
                 if (current_thread_args)
@@ -476,19 +264,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     memcpy(nfname, pn, strlen(pn) + 1);
             }
             vm_buf_set(&fname, &fname_cap, nfname);
-            if (pn && mn_native_arith_call_forward(vm, pn, cfi)) {
-                if (vm->frames[cs[cs_top].base_findex]->active > 0)
-                    vm->frames[cs[cs_top].base_findex]->active--;
-                for (int k = 0; k < cs[cs_top].saved_param_count; k++)
-                    vm->frames[cfi]->vars[vm->frames[cfi]->param_indices[k]] =
-                        cs[cs_top].saved_params[k];
-                stack_restore(&vm->frames[cfi]->LocalVariables, cs[cs_top].saved_local_vars);
-                ptr = cs[cs_top].return_ptr;
-                vm_buf_set(&fname, &fname_cap, cs[cs_top].caller_frame);
-                cs_top--;
-                *nl = '\n';
-                continue;
-            }
             ptr = go_to_line(orig, vm->frames[cfi]->addr + 1);
             if (!ptr) vm_debug_panic("[VM] CALL: indirizzo non trovato!\n");
             continue;
@@ -519,84 +294,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 make_thread_frame_key(pn, inv_name, sizeof(inv_name));
             else
                 memcpy(inv_name, pn, strlen(pn) + 1);
-            Var *histv = NULL;
-            for (int hk = 0; hk < pc; hk++) {
-                Var *cv = vm->frames[cfi]->vars[pi[hk]];
-                if (cv && cv->T == TYPE_STACK) {
-                    histv = cv;
-                    break;
-                }
-            }
-            vm->invert_hist_guard_var   = NULL;
-            vm->invert_hist_floor_min   = 0;
-            vm->mn_hist_floor_pop_guard_anchor_fi1 = 0;
-            int matched_opt_uncall = 0;
-            int frame_indexer_floor_to_restore = -1;
-            if (histv && vm->mn_hist_floor_snap_sp > 0 &&
-                !strcmp(vm->mn_hist_floor_snaps[vm->mn_hist_floor_snap_sp - 1].opt_call_callee, pn)) {
-                MnemoHistFloorSnapEntry *top =
-                    &vm->mn_hist_floor_snaps[--vm->mn_hist_floor_snap_sp];
-                vm->invert_hist_floor_min = top->hist_len_floor;
-                vm->invert_hist_guard_var = histv;
-                /* cfi è l'indice di inv_name in FrameIndexer (clone_frame_for_thread
-                 * costruisce la stessa chiave, altrimenti è pn stesso). */
-                vm->mn_hist_floor_pop_guard_anchor_fi1 = (int)cfi + 1;
-                matched_opt_uncall = 1;
-                frame_indexer_floor_to_restore = top->frame_indexer_count_at_snap;
-            }
-            /* Fix P3 trace: pop callee clone trace_window stack, imposta
-             * trace_window_start corrente. Cursor reset = 0. Copia anche
-             * sul BASE frame perché invert_op_to_line riceve frame_name
-             * base e get_findex(base) → base fi. */
-            int uncall_win_start = -1;
-            if (vm->branch_trace_active > 0 && vm->frames[cfi]->trace_window_top > 0) {
-                int win = vm->frames[cfi]->trace_window_stack[--vm->frames[cfi]->trace_window_top];
-                vm->frames[cfi]->trace_window_start = win;
-                vm->frames[cfi]->trace_window_cursor = 0;
-                uint base_fi_t = char_id_map_get(&FrameIndexer, pn);
-                vm->frames[base_fi_t]->trace_window_start = win;
-                vm->frames[base_fi_t]->trace_window_cursor = 0;
-                uncall_win_start = win;
-            }
             /* Restore '\n' su orig prima del recursive scan: invert_op_to_line ->
                collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
                ancora attivo qui la scan si fermerebbe prematuramente. */
             *nl = '\n';
-            if (!pn || !mn_native_arith_uncall_inverse(vm, pn, cfi))
-                invert_op_to_line(vm, inv_name, orig, vm->frames[cfi]->end_addr - 1,
-                                  vm->frames[cfi]->addr + 1, 1);
-            vm->invert_hist_guard_var = NULL;
-            vm->invert_hist_floor_min   = 0;
-            vm->mn_hist_floor_pop_guard_anchor_fi1 = 0;
-            /* Fix P3: chiudi modalità trace e azzera trace residua (sanity).
-             * Tronca branch_trace_top allo start della finestra consumata: il
-             * consume inverso legge LIFO (top-1-cursor), quindi dopo l'uncall di
-             * questa finestra il top deve scendere al suo start perché le
-             * finestre esterne (call ricorsivi dello stesso opt-proc) leggano
-             * il proprio range corretto. */
-            if (matched_opt_uncall && vm->branch_trace_active > 0) {
-                vm->branch_trace_active--;
-                if (vm->branch_trace_active == 0) {
-                    vm->branch_trace_top = 0;
-                } else if (uncall_win_start >= 0 &&
-                           uncall_win_start <= vm->branch_trace_top) {
-                    vm->branch_trace_top = uncall_win_start;
-                }
-            }
-            /* Rilascia frames generati durante il pattern opt-uncall (forward +
-             * inverse). Permette riuso slot vm->frames per cicli call+uncall
-             * consecutivi. Necessario per `printer(5); printer(10);` con
-             * `__mn_putd_uint@N` auto-ricorsivo che cresce indefinitamente
-             * tra cicli. */
-            if (matched_opt_uncall && frame_indexer_floor_to_restore >= 0 &&
-                frame_indexer_floor_to_restore < FrameIndexer.count) {
-                pthread_mutex_lock(&var_indexer_mtx);
-                /* I frame [floor..old_count) restano allocati con Var*
-                 * dangling. Le loro chiavi spariscono dall'indice (niente
-                 * match futuri su chiave stale); gli slot si riusano. */
-                char_id_map_truncate(&FrameIndexer, frame_indexer_floor_to_restore);
-                pthread_mutex_unlock(&var_indexer_mtx);
-            }
+            invert_op_to_line(vm, inv_name, orig, vm->frames[cfi]->end_addr - 1,
+                              vm->frames[cfi]->addr + 1, 1);
             VMLOG("[UNCALL] invert_op_to_line completata\n");
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             stack_restore(&vm->frames[cfi]->LocalVariables, slv);
@@ -614,29 +317,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
         else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
         else if (!strcmp(fw, "SHOW"))    op_show   (vm, fname);
-        else if (!strcmp(fw, "DUMP"))    vm_dump_active(vm, fname);
         else if (!strcmp(fw, "PUSHEQ"))  op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
-        else if (!strcmp(fw, "MNHALVE")) op_mnhalve(vm, fname);
-        else if (!strcmp(fw, "MNSPLIT32")) op_mnsplit32(vm, fname);
         else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
         else if (!strcmp(fw, "PUSH"))  op_push (vm, fname);
         else if (!strcmp(fw, "POP"))   op_pop  (vm, fname);
-        else if (!strcmp(fw, "POOLADD"))    op_pooladd   (vm, fname);
-        else if (!strcmp(fw, "POOLSUB"))    op_poolsub   (vm, fname);
-        else if (!strcmp(fw, "POOLGETNEG")) op_poolgetneg(vm, fname);
-        else if (!strcmp(fw, "POOLGET"))    op_poolget   (vm, fname);
-        else if (!strcmp(fw, "POOLPUSH"))   op_poolpush  (vm, fname);
-        else if (!strcmp(fw, "POOLPOP"))    op_poolpop   (vm, fname);
         else if (!strcmp(fw, "SSEND")) op_ssend(vm, fname);
         else if (!strcmp(fw, "SRECV")) op_srecv(vm, fname);
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
-            int jmpf_line = atoi(ptr);
             *nl = '\n';
-            char *np = op_jmpf(vm, fname, orig, jmpf_line);
+            char *np = op_jmpf(vm, fname, orig);
             ptr = np ? np : nl + 1; continue;
         }
         else if (!strcmp(fw, "JMP")) {
@@ -835,7 +528,6 @@ void vm_free(VM *vm)
                 vm_grow_free(vm->frames[i]->vars);
                 free(vm->frames[i]->label);
                 free(vm->frames[i]->param_indices);
-                free(vm->frames[i]->trace_window_stack);
                 free(vm->frames[i]->name);
                 stack_release(&vm->frames[i]->LocalVariables);
                 char_id_map_destroy(&vm->frames[i]->VarIndexer);
@@ -848,31 +540,6 @@ void vm_free(VM *vm)
         vm->frames = NULL;
         vm->frames_cap = 0;
     }
-    if (vm->branch_trace) {
-        free(vm->branch_trace);
-        vm->branch_trace = NULL;
-        vm->branch_trace_cap = 0;
-    }
-    if (vm->mn_hist_floor_snaps) {
-        for (uint k = 0; k < vm->mn_hist_floor_snaps_cap; k++)
-            free(vm->mn_hist_floor_snaps[k].opt_call_callee);
-        free(vm->mn_hist_floor_snaps);
-        vm->mn_hist_floor_snaps = NULL;
-        vm->mn_hist_floor_snaps_cap = 0;
-    }
-    if (vm->mn_pool) {
-        free(vm->mn_pool);
-        vm->mn_pool = NULL;
-        vm->mn_pool_len = 0;
-        vm->mn_pool_cap = 0;
-    }
-    vm_grow_free(vm->branch_trace_proc);
-    vm_grow_free(vm->bt_loops_cached_proc);
-    vm_grow_free(vm->bt_loop_lohi);
-    vm->branch_trace_proc = vm->bt_loops_cached_proc = NULL;
-    vm->branch_trace_proc_cap = vm->bt_loops_cached_proc_cap = 0;
-    vm->bt_loop_lohi = NULL;
-    vm->bt_loop_cap = vm->bt_loop_n = 0;
 }
 
 /* ======================================================================
@@ -911,26 +578,6 @@ void vm_dump(VM *vm)
         if (strcmp(f->name, "main") != 0) continue;
         vm_dump_frame(f);
     }
-}
-
-/* op `dump` (MNDUMP): dump dello stato del frame attivo a metà esecuzione.
- * Usato da --check-invertibility: lo stato forward viene stampato PRIMA
- * dell'uncall (che reverte tutto), così il dump esce sempre — anche se
- * l'inverso fallisce (es. ssend/channel) o se l'uncall azzera la memoria.
- * Soppresso durante il replay inverso (come op_show) per non duplicare. */
-void vm_dump_active(VM *vm, const char *frame_name)
-{
-    if (vm->suppress_show) return;
-    vm_printf("=== VM dump ===\n");
-    /* get_findex: stesso indice usato da op_local per allocare le celle. */
-    uint fi = get_findex(frame_name);
-    vm_dump_frame(vm->frames[fi]);
-    /* Stats sullo stato forward (live cells qui, prima che uncall reverta/liberi).
-     * Stampate qui perché un uncall che fallisce (es. ssend) abortisce prima
-     * del vm_print_stats finale. */
-    if (g_vm_stats_enabled)
-        vm_print_stats(vm);
-    vm->mn_dumped = 1;  /* salta dump+stats finali post-uncall */
 }
 
 /* --vm-stats: post-execution stats su tutti gli int cell rimasti.
@@ -997,9 +644,6 @@ void vm_print_stats(VM *vm)
 
 static void vm_run_from_string_impl(const char *bytecode, int dump_after)
 {
-    const char *na = getenv("KAIROS_NATIVE_ARITH");
-    if (na && (na[0] == '1' || na[0] == 'y' || na[0] == 'Y' || na[0] == 't' || na[0] == 'T'))
-        g_vm_native_arith = 1;
     const char *st = getenv("KAIROS_VM_STATS");
     if (st && (st[0] == '1' || st[0] == 'y' || st[0] == 'Y' || st[0] == 't' || st[0] == 'T'))
         g_vm_stats_enabled = 1;
@@ -1014,21 +658,10 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     if (!vm) { fprintf(stderr, "VM alloc failed\n"); free(ast); return; }
     vm->dbg = NULL;
     /* frames: lo crea vm_ensure_frame_cap al primo PROC e cresce on-demand. */
-    vm->branch_trace = (int *)calloc(VM_BRANCH_TRACE_INIT_CAP, sizeof(int));
-    if (!vm->branch_trace) { fprintf(stderr, "VM branch_trace alloc failed\n"); free(ast); free(vm); return; }
-    vm->branch_trace_cap = VM_BRANCH_TRACE_INIT_CAP;
-    vm->mn_hist_floor_snaps = (MnemoHistFloorSnapEntry *)calloc(
-        MNEMO_HIST_SNAP_INIT_CAP, sizeof(MnemoHistFloorSnapEntry));
-    if (!vm->mn_hist_floor_snaps) {
-        fprintf(stderr, "VM mn_hist_floor_snaps alloc failed\n");
-        free(vm->branch_trace); free(ast); free(vm); return;
-    }
-    vm->mn_hist_floor_snaps_cap = MNEMO_HIST_SNAP_INIT_CAP;
     vm_exec(vm, ast);
-    if (dump_after && !vm->mn_dumped)
+    if (dump_after)
         vm_dump(vm);
-    if (!vm->mn_dumped)
-        vm_print_stats(vm);
+    vm_print_stats(vm);
     vm_free(vm);
     free(ast);
     free(vm);
@@ -1041,7 +674,7 @@ void vm_run_from_string(const char *bytecode)
     vm_run_from_string_impl(bytecode, 1);
 }
 
-/* Esecuzione senza dump finale (es. binari Mnemo standalone). */
+/* Esecuzione senza dump finale. */
 void vm_run_from_string_quiet(const char *bytecode)
 {
     vm_run_from_string_impl(bytecode, 0);

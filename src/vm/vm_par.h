@@ -234,12 +234,6 @@ static void *thread_entry(void *arg)
                 else if (!strcmp(fw, "POP"))    op_push      (vm, fname);
                 else if (!strcmp(fw, "SSEND"))  op_srecv     (vm, fname);
                 else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, fname);
-                else if (!strcmp(fw, "POOLADD"))    op_poolsub   (vm, fname);
-                else if (!strcmp(fw, "POOLSUB"))    op_pooladd   (vm, fname);
-                else if (!strcmp(fw, "POOLGETNEG")) op_poolget   (vm, fname);
-                else if (!strcmp(fw, "POOLGET"))    op_poolgetneg(vm, fname);
-                else if (!strcmp(fw, "POOLPUSH"))   op_poolpop   (vm, fname);
-                else if (!strcmp(fw, "POOLPOP"))    op_poolpush  (vm, fname);
                 else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, fname);
                 else if (!strcmp(fw, "DELOCAL"))op_local     (vm, fname);
                 else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
@@ -291,18 +285,6 @@ static void *thread_entry(void *arg)
             { if (args->is_inverse) op_pop(vm, fname); else op_push(vm, fname); }
         else if (!strcmp(fw, "POP"))
             { if (args->is_inverse) op_push(vm, fname); else op_pop(vm, fname); }
-        else if (!strcmp(fw, "POOLADD"))
-            { if (args->is_inverse) op_poolsub(vm, fname); else op_pooladd(vm, fname); }
-        else if (!strcmp(fw, "POOLSUB"))
-            { if (args->is_inverse) op_pooladd(vm, fname); else op_poolsub(vm, fname); }
-        else if (!strcmp(fw, "POOLGETNEG"))
-            { if (args->is_inverse) op_poolget(vm, fname); else op_poolgetneg(vm, fname); }
-        else if (!strcmp(fw, "POOLGET"))
-            { if (args->is_inverse) op_poolgetneg(vm, fname); else op_poolget(vm, fname); }
-        else if (!strcmp(fw, "POOLPUSH"))
-            { if (args->is_inverse) op_poolpop(vm, fname); else op_poolpush(vm, fname); }
-        else if (!strcmp(fw, "POOLPOP"))
-            { if (args->is_inverse) op_poolpush(vm, fname); else op_poolpop(vm, fname); }
         else if (!strcmp(fw, "SSEND"))
             { if (args->is_inverse) op_srecv(vm, fname); else op_ssend(vm, fname); }
         else if (!strcmp(fw, "SRECV"))
@@ -314,9 +296,8 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
-            int jmpf_line = atoi(ptr);
             *nl = '\n';
-            char *np = op_jmpf(vm, fname, args->buffer, jmpf_line);
+            char *np = op_jmpf(vm, fname, args->buffer);
             ptr = np ? np : nl + 1;
             continue;
         }

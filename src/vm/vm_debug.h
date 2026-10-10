@@ -20,7 +20,7 @@
 #include "vm_types.h"
 #include "vm_helpers.h"
 /* Trace VM verboso (`/tmp/kairos-vm.log`). Default OFF perché ogni VMLOG
-   apre+chiude il file (3 syscall) → ~1M syscall su encrypt opt-uncall.
+   apre+chiude il file (3 syscall) → ~1M syscall su programmi lunghi.
    Enable: `KAIROS_VM_TRACE=1 python -m src.kairos ...`. */
 #define VMLOG(...) do { \
     static int _vm_log_enabled = -1; \

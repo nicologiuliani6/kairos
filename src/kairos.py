@@ -3,9 +3,8 @@ import sys
 import ctypes
 
 # Kairos frontend (parser/bytecode) walks AST ricorsivamente. Programmi
-# Mnemo con array grandi unrollati possono produrre file .kairos da decine
-# di migliaia di righe → AST nodes ricorsivi → eccede recursion limit
-# default 1000. Bump a 200k così files fino a ~10MB compilano.
+# generati di decine di migliaia di righe → AST nodes ricorsivi → eccede
+# recursion limit default 1000. Bump a 200k così files fino a ~10MB compilano.
 sys.setrecursionlimit(200000)
 
 from src.frontend.bytecode import ByteCode_Compiler
@@ -42,36 +41,6 @@ from src.frontend.lexer import lexer
 from src.frontend.parser import parser, run_static_checks, desugar_try
 from src.frontend.errors import KairosCompileError
 
-_KAIROS_ALLOW_PAR_SHARED_INT = "// KAIROS_ALLOW_PAR_SHARED_INT"
-
-# Stessi nomi di src/vm/mn_native_arith.h (MN_NATIVE_PROCS) — se il bytecode
-# ne chiama uno, native-arith ha effetto reale (bypass per-nome della CALL).
-_MN_NATIVE_PROC_NAMES = (
-    "__mn_move_int", "__mn_mul_into", "__mn_mul_signed_into",
-    "__mn_divmod_nonneg", "__mn_divmod_signed", "__mn_mod_nonneg",
-    "__mn_mod_signed", "__mn_and_into", "__mn_or_into",
-    "__mn_bit_k_signed", "__mn_floor_div2_signed",
-    "__mn_divmod_nonneg_div2", "__mn_shl_into",
-)
-
-
-def _bytecode_wants_native_arith(bytecode_str: str) -> bool:
-    """--auto: il bytecode chiama procedure che native-arith intercetta per nome?"""
-    return any(name in bytecode_str for name in _MN_NATIVE_PROC_NAMES)
-
-
-def _strip_mnemo_par_shared_pragma(source: str) -> tuple[str, bool]:
-    """
-    Mnemo può premettere questa riga: disattiva il check STATIC «race su int nel PAR»
-    (variabili file-scope condivise + mutex nel modello C).
-    """
-    lines = source.splitlines()
-    if lines and lines[0].strip() == _KAIROS_ALLOW_PAR_SHARED_INT:
-        body = lines[1:]
-        return ("\n".join(body) + ("\n" if body else ""), True)
-    return source, False
-
-
 if __name__ == '__main__':
     # invert_op_to_line (UNCALL) è ricorsiva sulle CALL; uno stack POSIX stretto sul main thread può dare SIGSEGV.
     try:
@@ -85,7 +54,7 @@ if __name__ == '__main__':
         pass
 
     if len(sys.argv) < 2:
-        print("Uso: python Kairos.py <file> [--dump-bytecode] [--dap] [--native-arith] [--vm-stats] [--auto]")
+        print("Uso: python Kairos.py <file> [--dump-bytecode] [--dap] [--vm-stats]")
         sys.exit(1)
 
     dap_mode = "--dap" in sys.argv
@@ -93,14 +62,12 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         source = f.read()
 
-    source, skip_par_int_race = _strip_mnemo_par_shared_pragma(source)
-
     try:
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
             raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
         ast = desugar_try(ast)
-        run_static_checks(ast, check_par_int_race=not skip_par_int_race)
+        run_static_checks(ast)
         BT_Compiler = ByteCode_Compiler()
         BT_Compiler.process(ast)
     except KairosCompileError as exc:
@@ -148,20 +115,6 @@ if __name__ == '__main__':
     lib = ctypes.CDLL(lib_path)
     lib.vm_run_from_string.argtypes = [ctypes.c_char_p]
     lib.vm_run_from_string.restype  = None
-    if hasattr(lib, 'vm_set_native_arith'):
-        lib.vm_set_native_arith.argtypes = [ctypes.c_int]
-        lib.vm_set_native_arith.restype = None
-        na = os.environ.get('KAIROS_NATIVE_ARITH', '')
-        want_native = ("--native-arith" in sys.argv) or (na and na[0] in '1yYtT')
-        if (not want_native) and "--auto" in sys.argv:
-            want_native = _bytecode_wants_native_arith(bytecode_str)
-            print(
-                f"[Kairos] --auto: native-arith {'ON' if want_native else 'off'} "
-                f"({'trovate' if want_native else 'nessuna'} chiamata a procedure __mn_* accelerabili)",
-                file=sys.stderr,
-            )
-        if want_native:
-            lib.vm_set_native_arith(1)
     if "--vm-stats" in sys.argv:
         os.environ["KAIROS_VM_STATS"] = "1"
     lib.vm_run_from_string(bytecode_str.encode('utf-8'))

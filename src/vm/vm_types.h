@@ -108,11 +108,6 @@ static inline int vm_base_eq(const char *name, const char *base)
 static __thread char *vm_tok_save;
 #define strtok(_s, _d) strtok_r((_s), (_d), &vm_tok_save)
 
-/* Mnemo --opt-uncall-user-calls: vedere MnemoHistFloorSnapEntry più sotto.
- * Capacità iniziale di vm->mn_hist_floor_snaps (heap, cresce raddoppiando
- * via vm_ensure_hist_floor_snap_cap). Nessun hard cap. */
-#define MNEMO_HIST_SNAP_INIT_CAP 384
-
 typedef enum {
     TYPE_INT     = 0,
     TYPE_STACK   = 1,
@@ -160,18 +155,6 @@ typedef struct {
 /* Capacità iniziale del buffer di uno stack: cresce raddoppiando. */
 #define VAR_STACK_INIT_CAP 8
 
-typedef struct {
-    size_t hist_len_floor;
-    char  *opt_call_callee;     /* heap; riscritto quando la voce si riusa */
-    /* Floor su FrameIndexer.count al momento dello snap. Dopo UNCALL match
-     * il `cleanup` ripristina FrameIndexer a questa lunghezza, liberando
-     * frame_indices generati durante il pattern (forward+inverse). Necessario
-     * per opt-uncall su user fn invertibili contenenti __mn_putd_uint
-     * (auto-ricorsivo): la depth cresce per digit e tra cicli consecutivi
-     * non veniva mai resettata → MAX_FRAMES overflow. */
-    int    frame_indexer_count_at_snap;
-} MnemoHistFloorSnapEntry;
-
 typedef struct Var {
     ValueType T;
     int64_t  *value;
@@ -193,7 +176,6 @@ typedef struct Var {
 #define FRAME_VARS_INIT_CAP     8
 #define FRAME_LABEL_INIT_CAP    8
 #define FRAME_PARAMS_INIT_CAP   8
-#define FRAME_TRACE_INIT_CAP    16
 
 typedef struct {
     CharIdMap VarIndexer;
@@ -207,7 +189,7 @@ typedef struct {
     int       vars_cap;
     int       var_count;
     CharIdMap LabelIndexer;
-    /* label/param_indices/trace_window_stack: heap, crescono raddoppiando via
+    /* label/param_indices: heap, crescono raddoppiando via
      * frame_ensure_*. label e param_indices si scrivono solo nella prima
      * passata (un thread solo), il clone li copia. */
     uint     *label;
@@ -225,18 +207,8 @@ typedef struct {
      * re-entrancy: self-ricorsione (già gestita da is_rec) o ricorsione MUTUA
      * (is_even→is_odd→is_even). Per la mutua serve clonare il frame come per la
      * self-rec, altrimenti il delocal della call annidata libera i LOCAL int
-     * condivisi del frame base → `push(__mn_eN)` su Var* NULL. */
+     * condivisi del frame base → `push(x)` su Var* NULL. */
     int       active;
-    /* Fix P3 trace: per-clone-frame LIFO stack di trace_window_start.
-     * Forward CALL push branch_trace_top corrente. Inverse INVOP_CALL/
-     * UNCALL pop e setta come trace_window_start corrente (consumato
-     * da JMPF_ELSE handler via trace_window_cursor). Stack necessario
-     * perché clones reused (es. fib(1) e fib(0) entrambi a fib@2). */
-    int      *trace_window_stack;
-    int       trace_window_cap;
-    int       trace_window_top;
-    int       trace_window_start;
-    int       trace_window_cursor;
 } Frame;
 
 /* Capacità iniziale di vm->frames; cresce dinamicamente (raddoppia)
@@ -315,57 +287,7 @@ typedef struct {
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
     int   inversion_depth;
     int   suppress_show; /* 1 durante vm_run_BT di replay (inverso di UNCALL): no op_show */
-    int   mn_dumped;     /* 1 = opcode DUMP (--check-invertibility) ha già stampato il dump mid-run: salta il dump finale post-uncall (vuoto) */
     int   show_char_pending; /* ultimo SHOW è stato show(x,char): il prossimo show classico prefissa \n */
-    Var  *invert_hist_guard_var;   /* NULL = nessun vincolo pop su hist */
-    size_t invert_hist_floor_min;
-    /* Vincolo pop: solo mentre si invierte la proc. UNCALL Mnemo (`inv_name`), non i figli invert_op_to_line.
-     * I due nomi si confrontavano con strcmp; ora sono gli indici in FrameIndexer
-     * dei due frame, piu' uno (0 = nessuno): stessi nomi, stesso indice, e
-     * nessun buffer di lunghezza fissa. */
-    int    mn_hist_floor_pop_guard_anchor_fi1;
-    int    mn_hist_floor_pop_guard_cur_inv_fi1;
-    MnemoHistFloorSnapEntry *mn_hist_floor_snaps;
-    uint   mn_hist_floor_snaps_cap;
-    int    mn_hist_floor_snap_sp;
-    /* Fix P3 execution trace: attivato SOLO dentro opt-uncall pattern
-     * Mnemo (delimitato da CALL __mn_hist_floor_snap … UNCALL match).
-     * op_jmpf forward push branch-take su trace LIFO se active>0.
-     * vm_invert JMPF_ELSE handler pop una entry e replay quel branch
-     * specifico. Cosi non interferisce con path inverse legacy
-     * (divmod ecc. che usano replay basato su recursion_depth). */
-/* branch_trace heap-allocato, cresce on-demand via vm_ensure_branch_trace_cap. */
-#define VM_BRANCH_TRACE_INIT_CAP 1024
-    int   *branch_trace;
-    uint   branch_trace_cap;
-    int    branch_trace_top;
-    int    branch_trace_active;
-    /* Proc name (base) di cui le chiamate ricorsive partecipano alla
-     * trace. Settato da __mn_hist_floor_snap. op_jmpf push solo se
-     * current proc base name matches. Procs diverse non interferiscono. */
-    char  *branch_trace_proc;      /* vm_name_set, NULL = "" */
-    size_t branch_trace_proc_cap;
-    /* Cache delle line-range dei from-loop di `branch_trace_proc`. La forward
-     * op_jmpf NON deve pushare su branch_trace gli IF DENTRO un loop body: il
-     * loro inverse usa recompute (line_inside_loop_body), non consuma il cursor
-     * della window → se fossero pushati la window LIFO si disallinea e gli IF
-     * top-level leggono entry sbagliate. Cache lazy ricomputata quando
-     * branch_trace_proc cambia (gestisce window annidate). */
-    /* Coppie (lo, hi) in un blocco vm_grow_keep: op_jmpf le legge, anche dai
-     * rami di un par, mentre un nuovo snap puo' riscriverle. */
-    uint  *bt_loop_lohi;
-    int    bt_loop_cap;
-    int    bt_loop_n;
-    char  *bt_loops_cached_proc;
-    size_t bt_loops_cached_proc_cap;
-    /* Mnemo dynamic pointer pool: heap reversibile indicizzato a runtime.
-     * Sostituisce le celle statiche __mn_mem* del pool puntatori — cresce
-     * on-demand (zero-filled, doubling), così malloc-in-loop a bound runtime
-     * senza free funziona senza --ptr-pool-size. Ops POOLPUSH/POOLPOP/POOLADD/
-     * POOLSUB/POOLGET/POOLGETNEG (vm_ops.h), reversibili. Reset a ogni run. */
-    int64_t *mn_pool;
-    long     mn_pool_len;   /* celle valide (zero-filled fino a qui) */
-    long     mn_pool_cap;   /* capacità allocata */
 } VM;
 
 struct ThreadArgs {

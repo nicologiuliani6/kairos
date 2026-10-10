@@ -51,17 +51,6 @@ static inline void frame_ensure_params(Frame *f, int idx)
     f->param_indices = n; f->param_indices_cap = nc;
 }
 
-static inline void frame_ensure_trace(Frame *f, int idx)
-{
-    if (idx < f->trace_window_cap) return;
-    int nc = f->trace_window_cap ? f->trace_window_cap : FRAME_TRACE_INIT_CAP;
-    while (idx >= nc) nc *= 2;
-    int *n = (int *)realloc(f->trace_window_stack, sizeof(int) * (size_t)nc);
-    if (!n) { fprintf(stderr, "[VM] frame_ensure_trace: realloc(%d) fallita\n", nc); exit(1); }
-    memset(n + f->trace_window_cap, 0, sizeof(int) * (size_t)(nc - f->trace_window_cap));
-    f->trace_window_stack = n; f->trace_window_cap = nc;
-}
-
 /* Rimpiazza una stringa posseduta (nome di frame, di variabile). */
 static inline void vm_str_replace(char **dst, const char *src)
 {
