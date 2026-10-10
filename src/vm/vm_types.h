@@ -19,6 +19,11 @@
    niente limite fisso sulla lunghezza, e niente da liberare. */
 #define VM_LINE_COPY(dst, src) \
     size_t dst##_len = strlen(src); char dst[dst##_len + 1]; memcpy(dst, (src), dst##_len + 1)
+/* Copia locale della riga [src, end) del bytecode: il testo del programma non
+ * si scrive mai, quindi e' condiviso in sola lettura da tutti i thread. */
+#define VM_LINE_DUP(dst, src, end) \
+    size_t dst##_len = (size_t)((end) - (src)); char dst[dst##_len + 1]; \
+    memcpy(dst, (src), dst##_len); dst[dst##_len] = '\0'
 
 /* ----------------------------------------------------------------------
  *  Blocchi che crescono senza essere mai liberati sotto i piedi di un lettore

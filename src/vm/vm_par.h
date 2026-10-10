@@ -59,14 +59,13 @@ static inline ParBlock scan_par_block(char *par_ptr)
     while (*scan && depth > 0) {
         char *nl = strchr(scan, '\n');
         if (!nl) break;
-        *nl = '\0';
-        VM_LINE_COPY(tmp, scan);
+        VM_LINE_DUP(tmp, scan, nl);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw) {
             if      (strcmp(fw, "PAR_START") == 0) depth++;
             else if (strcmp(fw, "PAR_END")   == 0) {
                 depth--;
-                if (depth == 0) { *nl = '\n'; pb.after_end = nl + 1; break; }
+                if (depth == 0) { pb.after_end = nl + 1; break; }
             } else if (strncmp(fw, "THREAD_", 7) == 0 && depth == 1) {
                 if (pb.count == pb.cap) {
                     pb.cap = pb.cap ? pb.cap * 2 : 8;
@@ -77,14 +76,13 @@ static inline ParBlock scan_par_block(char *par_ptr)
                 pb.starts[pb.count++] = nl + 1;
             }
         }
-        *nl = '\n';
         scan = nl + 1;
     }
     return pb;
 }
 
 static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name,
-                                    ParBlock *pb, int dup_buffer, int is_inverse)
+                                    ParBlock *pb, int is_inverse)
 {
     pthread_mutex_t done_mtx  = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t  done_cond = PTHREAD_COND_INITIALIZER;
@@ -108,13 +106,8 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     for (int t = 0; t < pb->count; t++) {
         args[t] = calloc(1, sizeof(ThreadArgs));
         args[t]->vm        = vm;
-        args[t]->buffer    = dup_buffer ? strdup(buffer) : buffer;
-        if (dup_buffer) {
-            ptrdiff_t off = pb->starts[t] - buffer;
-            args[t]->start_ptr = args[t]->buffer + off;
-        } else {
-            args[t]->start_ptr = pb->starts[t];
-        }
+        args[t]->buffer    = buffer;          /* bytecode condiviso, sola lettura */
+        args[t]->start_ptr = pb->starts[t];
         args[t]->done_mtx    = &done_mtx;
         args[t]->done_cond   = &done_cond;
         args[t]->is_inverse  = is_inverse;
@@ -169,7 +162,6 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
 
     for (int t = 0; t < pb->count; t++) {
         pthread_join(args[t]->tid, NULL);
-        if (dup_buffer) free(args[t]->buffer);
         free(args[t]->frame_name);
         free(args[t]);
     }
@@ -200,10 +192,8 @@ static void *thread_entry(void *arg)
         while (scan && *scan) {
             char *nl = strchr(scan, '\n');
             if (!nl) break;
-            *nl = '\0';
-            VM_LINE_COPY(lb, scan);
+            VM_LINE_DUP(lb, scan, nl);
             char *fw = strtok(skip_lineno(lb), " \t");
-            *nl = '\n';
             if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) break;
             if (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL") ||
                 !strcmp(fw, "JMP") || !strcmp(fw, "JMPF") ||
@@ -215,9 +205,7 @@ static void *thread_entry(void *arg)
                 lines_cap *= 2;
                 lines = realloc(lines, sizeof(char *) * (size_t)lines_cap);
             }
-            *nl = '\0';
-            lines[nlines++] = strdup(scan);
-            *nl = '\n';
+            lines[nlines++] = strndup(scan, (size_t)(nl - scan));
             scan = nl + 1;
         }
 
@@ -252,12 +240,12 @@ static void *thread_entry(void *arg)
     char *ptr = args->start_ptr;
 
     while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        VM_LINE_COPY(lb, ptr);
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
+        VM_LINE_DUP(lb, ptr, nl);
         char *fw = strtok(skip_lineno(lb), " \t");
 
         if (!fw || strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END"))
-            { *nl = '\n'; break; }
+            break;
 
         if (vm->dbg && vm->dbg->initialized) {
             if (!strcmp(fw, "DECL") || !strcmp(fw, "LABEL")) {
@@ -267,11 +255,8 @@ static void *thread_entry(void *arg)
             }
         }
         if (!strcmp(fw, "PAR_START")) {
-            *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
-            /* Nei PAR annidati serve un buffer dedicato per thread:
-               i parser line-based modificano temporaneamente '\n' in '\0'. */
-            exec_par_threads(vm, args->buffer, fname, &pb, 1, args->is_inverse);
+            exec_par_threads(vm, args->buffer, fname, &pb, args->is_inverse);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             par_block_free(&pb);
             continue;
@@ -296,13 +281,11 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
-            *nl = '\n';
             char *np = op_jmpf(vm, fname, args->buffer);
             ptr = np ? np : nl + 1;
             continue;
         }
         else if (!strcmp(fw, "JMP")) {
-            *nl = '\n';
             ptr = op_jmp(vm, fname, args->buffer);
             continue;
         }
@@ -328,7 +311,6 @@ static void *thread_entry(void *arg)
             }
             /* Restore '\n' before any recursive scan on args->buffer (collect_ifs /
                vm_run_BT scan it line-by-line; an active '\0' would short-circuit strchr). */
-            *nl = '\n';
             if (do_invert)
                 invert_op_to_line(vm, thread_key, args->buffer,
                                   vm->frames[cfi]->end_addr - 1, vm->frames[cfi]->addr + 1, 1);
@@ -346,7 +328,7 @@ static void *thread_entry(void *arg)
                  !strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }
         else { vm_debug_panic("[THREAD] op sconosciuta: '%s'\n", fw); }
 
-        *nl = '\n'; ptr = nl + 1;
+        ptr = nl + 1;
     }
 thread_exit:
     vm_if_free_branch_stack();   /* vettori __thread di questo thread */

@@ -832,10 +832,10 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
     ParRange *out = NULL;
     char *ptr = go_to_line(buf, proc_start);
     while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
         uint cur = (uint)atoi(ptr);
-        if (cur >= proc_end) { *nl = '\n'; break; }
-        VM_LINE_COPY(tmp, ptr);
+        if (cur >= proc_end) break;
+        VM_LINE_DUP(tmp, ptr, nl);
         char *fw = strtok(skip_lineno(tmp), " \t");
         if (fw && !strcmp(fw, "PAR_START")) {
             if (n == cap) {
@@ -847,12 +847,11 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
             int   depth = 1;
             uint  max_inner = cur;
             char *scan  = nl + 1;
-            *nl = '\n';
             while (scan && *scan && depth > 0) {
-                char *nl2 = strchr(scan, '\n'); if (!nl2) break; *nl2 = '\0';
+                char *nl2 = strchr(scan, '\n'); if (!nl2) break;
                 uint  cur2 = (uint)atoi(scan);
                 if (cur2 > max_inner) max_inner = cur2;
-                VM_LINE_COPY(tmp2, scan);
+                VM_LINE_DUP(tmp2, scan, nl2);
                 char *fw2  = strtok(skip_lineno(tmp2), " \t");
                 if (fw2) {
                     if      (!strcmp(fw2, "PAR_START")) depth++;
@@ -861,17 +860,16 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
                         if (depth == 0) {
                             out[n].end_line = max_inner;
                             n++;
-                            *nl2 = '\n';
                             ptr = nl2 + 1;
                             goto next;
                         }
                     }
                 }
-                *nl2 = '\n'; scan = nl2 + 1;
+                scan = nl2 + 1;
             }
             break; /* PAR_END non trovato */
         }
-        *nl = '\n'; ptr = nl + 1;
+        ptr = nl + 1;
         next:;
     }
     *outp = out;
@@ -980,9 +978,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop, int honor_if_line_skip)
 {
     //fprintf(stderr, "[INVERT] frame='%s' start=%u stop=%u depth=%d\n", frame_name, start, stop, vm->inversion_depth);
-    /* buffer è già thread-locale (vm_par.h:77 dup_buffer per worker, top-level
-       vm_run_BT alloca dal chiamante). Mutations qui (newline='\0' poi restore)
-       sono transienti → no strdup, riduciamo malloc pressure. */
+    /* Il bytecode è condiviso in sola lettura: le righe si leggono per copia. */
     char *orig = buffer;
     VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
     vm->inversion_depth++;   
@@ -1061,12 +1057,11 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     char  *_arena_p = _arena;
     while (ptr && *ptr && (size_t)nl < lp_cap) {
         char *newline = strchr(ptr, '\n'); if (!newline) break;
-        *newline = '\0';
         uint cur_ln = (uint)atoi(ptr);
         char *op_start = skip_lineno(ptr);
         if (!strncmp(op_start, "END_PROC", 8) &&
-            (op_start[8] == ' ' || op_start[8] == '\t' || op_start[8] == '\0')) {
-            *newline = '\n'; break;
+            (op_start[8] == ' ' || op_start[8] == '\t' || op_start[8] == '\n')) {
+            break;
         }
         if (cur_ln <= start && cur_ln > stop) {
             size_t _line_len = (size_t)(newline - ptr);
@@ -1089,7 +1084,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             _arena_p += _line_len + 1;
             nl++;
         }
-        *newline = '\n'; ptr = newline + 1;
+        ptr = newline + 1;
     }
 
     int i = nl - 1;
@@ -1376,7 +1371,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             char *par_ptr = go_to_line(orig, cur + 1);
             if (par_ptr) {
                 ParBlock pb = scan_par_block(par_ptr);
-                exec_par_threads(vm, orig, cur_frame, &pb, 1, 1);
+                exec_par_threads(vm, orig, cur_frame, &pb, 1);
                 par_block_free(&pb);
             }
             i--; continue;
@@ -1432,21 +1427,17 @@ static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_l
     char *ptr = go_to_line(buf, from_line);
     if (!ptr) return 0;
     while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
         uint cur = (uint)atoi(ptr);
-        if (cur >= to_line) { *nl = '\n'; break; }
-        VM_LINE_COPY(lb, ptr);
+        if (cur >= to_line) break;
+        VM_LINE_DUP(lb, ptr, nl);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
             char *a1 = strtok(NULL, " \t");
-            if (!strcmp(fw, "LABEL") && a1 && !strncmp(a1, "FROM_", 5)) {
-                *nl = '\n'; return 1;
-            }
-            if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "FROM_", 5)) {
-                *nl = '\n'; return 1;
-            }
+            if (!strcmp(fw, "LABEL") && a1 && !strncmp(a1, "FROM_", 5)) return 1;
+            if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "FROM_", 5)) return 1;
         }
-        *nl = '\n'; ptr = nl + 1;
+        ptr = nl + 1;
     }
     return 0;
 }
@@ -1458,18 +1449,16 @@ static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_l
     char *ptr = go_to_line(buf, from_line);
     if (!ptr) return 0;
     while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
         uint cur = (uint)atoi(ptr);
-        if (cur >= to_line) { *nl = '\n'; break; }
-        VM_LINE_COPY(lb, ptr);
+        if (cur >= to_line) break;
+        VM_LINE_DUP(lb, ptr, nl);
         char *fw = strtok(skip_lineno(lb), " \t");
         if (fw) {
             char *a1 = strtok(NULL, " \t");
-            if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "ELSE_", 5)) {
-                *nl = '\n'; return 1;
-            }
+            if (!strcmp(fw, "JMPF") && a1 && !strncmp(a1, "ELSE_", 5)) return 1;
         }
-        *nl = '\n'; ptr = nl + 1;
+        ptr = nl + 1;
     }
     return 0;
 }
@@ -1479,15 +1468,13 @@ static inline int branch_span_has_call(char *buf, uint from_line, uint to_line)
     char *ptr = go_to_line(buf, from_line);
     if (!ptr) return 0;
     while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
         uint cur = (uint)atoi(ptr);
-        if (cur >= to_line) { *nl = '\n'; break; }
-        VM_LINE_COPY(lb, ptr);
+        if (cur >= to_line) break;
+        VM_LINE_DUP(lb, ptr, nl);
         char *fw = strtok(skip_lineno(lb), " \t");
-        if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) {
-            *nl = '\n'; return 1;
-        }
-        *nl = '\n'; ptr = nl + 1;
+        if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) return 1;
+        ptr = nl + 1;
     }
     return 0;
 }
@@ -1566,11 +1553,11 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         int nl = 0;
         char *p3 = go_to_line(original_buffer, from_line);
         while (p3 && *p3 && nl < lp_cap) {
-            char *nl3 = strchr(p3, '\n'); if (!nl3) break; *nl3 = '\0';
+            char *nl3 = strchr(p3, '\n'); if (!nl3) break;
             uint cur_ln = (uint)atoi(p3);
-            if (cur_ln >= to_line) { *nl3 = '\n'; break; }
-            lp[nl] = strdup(p3); ln[nl] = cur_ln; nl++;
-            *nl3 = '\n'; p3 = nl3 + 1;
+            if (cur_ln >= to_line) break;
+            lp[nl] = strndup(p3, (size_t)(nl3 - p3)); ln[nl] = cur_ln; nl++;
+            p3 = nl3 + 1;
         }
         int idx = nl - 1;
         while (idx >= 0) {
@@ -1714,10 +1701,10 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
         char *p2 = go_to_line(original_buffer, from_line);
         if (p2 && *p2) {
             while (p2 && *p2 && count < lines_cap) {
-                char *nl2 = strchr(p2, '\n'); if (!nl2) break; *nl2 = '\0';
-                if ((uint)atoi(p2) >= to_line) { *nl2 = '\n'; break; }
-                lines[count++] = strdup(p2);
-                *nl2 = '\n'; p2 = nl2 + 1;
+                char *nl2 = strchr(p2, '\n'); if (!nl2) break;
+                if ((uint)atoi(p2) >= to_line) break;
+                lines[count++] = strndup(p2, (size_t)(nl2 - p2));
+                p2 = nl2 + 1;
             }
         }
         for (int i = count - 1; i >= 0; i--) {

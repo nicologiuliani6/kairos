@@ -61,7 +61,7 @@ static inline int extract_srcline(const char *raw_line)
             int _ln = extract_srcline(raw_ptr);                          \
             dbg_hook(vm->dbg, _ln, fname, instr_text);                  \
             if (vm->dbg->mode == VM_MODE_DONE &&                        \
-                vm->inversion_depth == 0) { *nl='\n'; goto done; }      \
+                vm->inversion_depth == 0) { goto done; }                \
         }                                                                \
     } while(0)
 
@@ -90,7 +90,8 @@ static inline void vm_buf_set(char **buf, size_t *cap, const char *src)
 void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
 {
     g_current_vm = vm;
-    char *orig = strdup(buffer);
+    /* Il bytecode si legge soltanto: nessuna copia, lo stesso testo per tutti. */
+    char *orig = buffer;
     char  *fname = NULL;
     size_t fname_cap = 0;
     vm_buf_set(&fname, &fname_cap, frame_name_init);
@@ -130,16 +131,19 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); goto done; }
 
     while (*ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break; *nl = '\0';
-        VM_LINE_COPY(lb, ptr);
+        char *nl = strchr(ptr, '\n'); if (!nl) break;
+        VM_LINE_DUP(lb, ptr, nl);
         char *fw = strtok(skip_lineno(lb), " \t");
 
-        if (!fw) { *nl = '\n'; ptr = nl + 1; continue; }
+        if (!fw) { ptr = nl + 1; continue; }
 
         /* ── DEBUG HOOK ── chiamato prima di ogni istruzione breakpointable ── */
         if (strcmp(fw, "PROC") != 0 && strcmp(fw, "PARAM") != 0 &&
             strcmp(fw, "HALT") != 0) {
-            DEBUG_HOOK(ptr, lb);
+            if (vm->dbg && vm->dbg->initialized) {
+                VM_LINE_DUP(raw, ptr, nl);    /* riga intatta, per il debugger */
+                DEBUG_HOOK(raw, raw);
+            }
             vm_stats_sample(vm);
         }
 
@@ -148,7 +152,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             if (stack_size(&vm->frames[fi]->LocalVariables) > -1) {
                 vm_debug_panic("[VM] END_PROC: variabili LOCAL non chiuse!\n");
             }
-            *nl = '\n';
             if (cs_top >= 0) {
                 int cfi = cs[cs_top].callee_findex;
                 if (vm->frames[cs[cs_top].base_findex]->active > 0)
@@ -205,7 +208,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             VM_CS_ENSURE((uint)(cs_top + 1));
             cs_top++;
-            *nl = '\n';
             cs[cs_top].return_ptr         = nl + 1;
             cs[cs_top].is_recursive_clone = is_rec || reentrant;
             cs[cs_top].callee_findex      = cfi;
@@ -297,7 +299,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             /* Restore '\n' su orig prima del recursive scan: invert_op_to_line ->
                collect_ifs/collect_loops scansionano `orig` cercando '\n', con '\0'
                ancora attivo qui la scan si fermerebbe prematuramente. */
-            *nl = '\n';
             invert_op_to_line(vm, inv_name, orig, vm->frames[cfi]->end_addr - 1,
                               vm->frames[cfi]->addr + 1, 1);
             VMLOG("[UNCALL] invert_op_to_line completata\n");
@@ -307,9 +308,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             ptr = nl + 1; continue;
         }
         else if (!strcmp(fw, "PAR_START")) {
-            *nl = '\n';
             ParBlock pb = scan_par_block(nl + 1);
-            exec_par_threads(vm, orig, fname, &pb, 1, 0);
+            exec_par_threads(vm, orig, fname, &pb, 0);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             par_block_free(&pb);
             continue;
@@ -328,12 +328,11 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
         else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
         else if (!strcmp(fw, "JMPF")) {
-            *nl = '\n';
             char *np = op_jmpf(vm, fname, orig);
             ptr = np ? np : nl + 1; continue;
         }
         else if (!strcmp(fw, "JMP")) {
-            *nl = '\n'; ptr = op_jmp(vm, fname, orig); continue;
+            ptr = op_jmp(vm, fname, orig); continue;
         }
         else if (!strcmp(fw, "START") ||
                  !strcmp(fw, "PROC") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") ||
@@ -342,7 +341,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
          * del branch fisico nel bytecode. thread_entry salta così; qui vm_run_BT
          * annidato (CALL da worker) deve terminare allo stesso modo. */
         else if (strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) {
-            *nl = '\n';
             if (current_thread_args) {
                 goto done;
             }
@@ -350,11 +348,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         }
         else { vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw); }
 
-        *nl = '\n'; ptr = nl + 1;
+        ptr = nl + 1;
     }
 
 done:
-    free(orig);
     for (uint k = 0; k < cs_cap; k++) {
         free(cs[k].caller_frame);
         free(cs[k].saved_params);
