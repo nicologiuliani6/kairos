@@ -890,6 +890,46 @@ static inline int line_is_inside_par(uint line, ParRange *pars, int npars)
  *  invert_op_to_line)
  * ====================================================================== */
 
+/* Inverso di `CALL pn args` quando il frontend ha compilato il corpo inverso
+ * `<pn>__inv` (procedure ricorsive, src/frontend/inverse.py): lo si esegue in
+ * avanti, come una `uncall` scritta nel sorgente. Il replay dinamico per
+ * recursion_depth non regge tutte le forme di ricorsione (es. ramo then
+ * ricorsivo, else caso base). Legge gli argomenti con strtok. 1 = gestita. */
+static int invert_call_via_compiled_inverse(VM *vm, char *buf, uint caller_fi, const char *pn)
+{
+    if (!pn) return 0;
+    size_t pl = strlen(pn);
+    char invn[pl + sizeof("__inv")];
+    memcpy(invn, pn, pl);
+    memcpy(invn + pl, "__inv", sizeof("__inv"));
+    if (char_id_map_lookup(&FrameIndexer, invn) < 0) return 0;
+    uint cfi = current_thread_args ? clone_frame_for_thread(vm, invn)
+                                   : char_id_map_get(&FrameIndexer, invn);
+    int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
+    VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[cfi]->vars[pi[k]];
+    Stack slv = vm->frames[cfi]->LocalVariables;
+    stack_init(&vm->frames[cfi]->LocalVariables);
+    char *p = NULL; int j = 0;
+    while ((p = strtok(NULL, " \t")) && j < pc) {
+        int si = char_id_map_get(&vm->frames[caller_fi]->VarIndexer, p);
+        vm->frames[cfi]->vars[pi[j++]] = vm->frames[caller_fi]->vars[si];
+    }
+    VM_FRAME_KEY_BUF(cn, invn);
+    if (current_thread_args) make_thread_frame_key(invn, cn, sizeof(cn));
+    else memcpy(cn, invn, strlen(invn) + 1);
+    int saved_inv = vm->inversion_depth;
+    int ss = vm->suppress_show;
+    vm->inversion_depth = 0;
+    vm->suppress_show = 1;
+    vm_run_BT(vm, buf, cn);
+    vm->inversion_depth = saved_inv;
+    vm->suppress_show = ss;
+    for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
+    stack_restore(&vm->frames[cfi]->LocalVariables, slv);
+    VM_PARAM_SAVE_FREE(sv);
+    return 1;
+}
+
 static void exec_branch_inverse(VM *vm, char *original_buffer,
                                 const char *frame_name,
                                 uint from_line, uint to_line,
@@ -1009,13 +1049,16 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     uint    *ln    = malloc(sizeof(uint)    * lp_cap);
     uint8_t *lp_op = malloc(sizeof(uint8_t) * lp_cap);
     int nl = 0;
-    /* Arena: one malloc per invert call instead of N strdups.
-       Upper bound = size of remaining buffer from stop+1 to END_PROC. */
-    size_t _arena_cap = strlen(orig) + 1;
+    /* Arena: one malloc per invert call instead of N strdups. Dimensionata sui
+       byte delle righe (stop, start] che si raccolgono, non sull'intero
+       programma: l'inversione è ricorsiva (loop e if annidati) e un'arena da
+       tutto il buffer a ogni livello esauriva la RAM sui programmi grandi. */
+    char  *ptr     = go_to_line(orig, stop + 1);   // ← parti da dopo PROC
+    char  *_span_e = (ptr && start > stop) ? go_to_line(ptr, start - stop + 1) : NULL;
+    size_t _arena_cap = (ptr ? (_span_e ? (size_t)(_span_e - ptr) : strlen(ptr)) : 0) + 1;
     char  *_arena = (char *)malloc(_arena_cap);
     if (!_arena) vm_debug_panic("[UNCALL] arena malloc fallita\n");
     char  *_arena_p = _arena;
-    char *ptr = go_to_line(orig, stop + 1);   // ← CAMBIA: parti da dopo PROC
     while (ptr && *ptr && (size_t)nl < lp_cap) {
         char *newline = strchr(ptr, '\n'); if (!newline) break;
         *newline = '\0';
@@ -1027,6 +1070,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         }
         if (cur_ln <= start && cur_ln > stop) {
             size_t _line_len = (size_t)(newline - ptr);
+            if ((size_t)(_arena_p - _arena) + _line_len + 1 > _arena_cap)
+                vm_debug_panic("[UNCALL] arena: riga %u fuori dallo span (%u, %u]\n",
+                               cur_ln, stop, start);
             memcpy(_arena_p, ptr, _line_len);
             _arena_p[_line_len] = '\0';
             /* Precompute op_tag al collection: classify_op richiede null-term
@@ -1225,6 +1271,9 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             if (vm->dbg && vm->dbg->initialized)
                 dbg_hook(vm->dbg, invert_extract_srcline(lp[i]), cur_frame, lp[i]);
             char *pn = strtok(NULL, " \t");
+            if (invert_call_via_compiled_inverse(vm, orig, get_findex(frame_name), pn)) {
+                i--; continue;
+            }
             /* Ricorsiva se pn è il nome base del frame corrente. */
             int is_rec = vm_base_eq(frame_name, pn);
             int new_depth = 0;
@@ -1602,6 +1651,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             if (!strcmp(fw, "CALL")) {
                 vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
+                if (invert_call_via_compiled_inverse(vm, original_buffer, cfi, pn)) { idx--; continue; }
                 /* Ricorsiva se pn è il nome base del frame corrente. */
                 int is_rec_c = vm_base_eq(frame_name, pn);
                 int new_depth_c = 0;
@@ -1682,6 +1732,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                    new_depth dal frame_name (@1, @_1, …) e usa clone_frame_for_depth. */
                 vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
+                if (invert_call_via_compiled_inverse(vm, original_buffer, cfi, pn)) continue;
                 /* Ricorsiva se pn è il nome base del frame corrente. */
                 int is_rec_c = vm_base_eq(frame_name, pn);
                 int new_depth_c = 0;
