@@ -111,7 +111,9 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
 
     /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
        gli accessi condivisi dove serve. */
-    session_par_enter();                       /* vm_session.h */
+    /* i rami partono eseguibili; chi li lancia smette di esserlo finche' aspetta */
+    __atomic_add_fetch(&g_runnable, pb->count, __ATOMIC_SEQ_CST);
+    run_dec();
     for (int t = 0; t < pb->count; t++)
         pthread_create(&args[t]->tid, NULL, thread_entry, args[t]);
 
@@ -131,6 +133,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
            cio' che qui si osserva. Si conferma dopo un'attesa, perche' lo stato
            "tutti fermi" e' anche transitorio durante un rendez-vous. */
         if (done + blocked == pb->count) {
+            unsigned prog = __atomic_load_n(&g_progress, __ATOMIC_SEQ_CST);
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
             ts.tv_nsec += 200L * 1000L * 1000L;
@@ -141,7 +144,9 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
                     if (args[t]->finished) done2++;
                     else if (args[t]->blocked) blocked2++;
                 }
-                if (done2 == done && done2 + blocked2 == pb->count && blocked2 > 0) {
+                if (done2 == done && done2 + blocked2 == pb->count && blocked2 > 0 &&
+                    __atomic_load_n(&g_runnable, __ATOMIC_SEQ_CST) <= 0 &&
+                    __atomic_load_n(&g_progress, __ATOMIC_SEQ_CST) == prog) {
                     pthread_mutex_unlock(&done_mtx);
                     vm_debug_panic(
                         "[VM] SESSIONE: stallo, tutti i thread del par sono fermi in attesa "
@@ -154,6 +159,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         pthread_cond_wait(&done_cond, &done_mtx);
     }
     pthread_mutex_unlock(&done_mtx);
+    run_inc();   /* i rami sono finiti: chi li ha lanciati riparte */
 
     for (int t = 0; t < pb->count; t++) {
         pthread_join(args[t]->tid, NULL);
@@ -161,7 +167,6 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         free(args[t]);
     }
     free(args);
-    session_par_exit();                        /* vm_session.h */
 }
 
 /* ======================================================================
@@ -175,6 +180,7 @@ static void *thread_entry(void *arg)
     VM         *vm   = args->vm;
     const char *fname = args->frame_name;   /* vive quanto il thread */
     current_thread_args = args;
+    session_thread_begin();   /* vm_session.h */
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
     Stack branch_locals;
     stack_init(&branch_locals);
@@ -323,12 +329,14 @@ static void *thread_entry(void *arg)
             }
             /* Restore '\n' before any recursive scan on args->buffer (collect_ifs /
                vm_run_BT scan it line-by-line; an active '\0' would short-circuit strchr). */
+            vm->frames[cfi]->active++;   /* per la rientranza mutua (Janus.c CALL) */
             if (do_invert)
                 invert_op_to_line(vm, thread_key, args->buffer,
                                   vm->frames[cfi]->end_addr - 1, vm->frames[cfi]->addr + 1, 1);
             else {
                 vm_run_BT(vm, args->buffer, thread_key);
             }
+            vm->frames[cfi]->active--;
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             stack_restore(&vm->frames[cfi]->LocalVariables, slv);
             VM_PARAM_SAVE_FREE(sv);
@@ -341,6 +349,7 @@ static void *thread_entry(void *arg)
         ptr = nl + 1;
     }
 thread_exit:
+    session_thread_end();
     g_branch_locals = NULL;
     stack_release(&branch_locals);
     vm_if_free_branch_stack();   /* vettori __thread di questo thread */
@@ -353,6 +362,8 @@ thread_exit:
     }
     pthread_mutex_lock(args->done_mtx);
     args->finished = 1;
+    run_dec();
+    __atomic_add_fetch(&g_progress, 1, __ATOMIC_SEQ_CST);
     pthread_cond_broadcast(args->done_cond);
     pthread_mutex_unlock(args->done_mtx);
     return NULL;

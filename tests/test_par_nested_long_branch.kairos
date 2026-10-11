@@ -1,0 +1,31 @@
+// Un par annidato i cui rami aspettano su un canale non e' in stallo finche'
+// un ramo fratello del par esterno sta ancora calcolando e poi spedisce.
+procedure main()
+    channel c
+    channel d
+    int x
+    int y
+    int a
+    int b
+    int i
+    int n
+    n += 300000
+    a += 5
+    b += 6
+    par
+        par
+            srecv(<x>, c)
+        and
+            srecv(<y>, d)
+        rap
+    and
+        from i == 0 do
+            skip
+        loop
+            i += 1
+        until i == n
+        ssend(<a>, c)
+        ssend(<b>, d)
+    rap
+    show(x)
+    show(y)

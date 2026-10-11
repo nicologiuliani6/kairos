@@ -1,0 +1,9 @@
+// Errore di compilazione atteso: due procedure con lo stesso nome.
+procedure f(int x)
+    x += 1
+procedure f(int x)
+    x += 2
+procedure main()
+    int a
+    call f(a)
+    show(a)

@@ -152,7 +152,7 @@ The bytecode reaches the VM in memory, with no intermediate file, and there is *
 
 | Type | Initial value | Notes |
 |---|---|---|
-| `int` | `0` | signed 64-bit integer |
+| `int` | `0` | signed 64-bit integer, two's complement: arithmetic wraps modulo 2^64 |
 | `int a[n]` | `n` cells set to `m` | constant length fixed at declaration |
 | `stack` | `nil` | LIFO list of integers |
 | `channel` | `empty` | synchronous (rendez-vous) channel |
@@ -322,7 +322,7 @@ rap
 
 One `pthread` per branch, all started together; the block ends when all of them end. `par` blocks can be nested. The inverse runs the inverse of every branch (swapping `ssend`/`srecv` and `call`/`uncall`).
 
-Branches share the frame but not writable memory; each branch has its own stack of open `local`s, so `local … delocal` blocks in different branches never interleave: the frontend rejects stacks used by more than one branch and any `int` or array **written** in one branch and **used** in another, even indirectly (writes made by called procedures, fixed-point analysis over the call graph; `pop`/`srecv` count as writes). An `int` only read by several branches is allowed. At run time the VM also reports two simultaneous updates of the same `int` when it sees them (`vm_ref_lock.h`); this is a best-effort check, the guarantee is the static one.
+Branches share the frame but not writable memory; each branch has its own stack of open `local`s, so `local … delocal` blocks in different branches never interleave: the frontend rejects a stack used by more than one branch (even only by `show`) and any `int` or array **written** in one branch and **used** in another, even indirectly (writes made by called procedures, fixed-point analysis over the call graph; `pop`/`srecv` count as writes). An `int` only read by several branches is allowed. At run time the VM also reports two simultaneous updates of the same `int` when it sees them (`vm_ref_lock.h`); this is a best-effort check, the guarantee is the static one.
 
 ### `show`
 
@@ -346,6 +346,8 @@ The frontend rejects with `[STATIC]` / `[LOCAL]`:
 - `x += e`, `x -= e`, `x ^= e` with `x` in `e` (arrays included), or with an index that reads the array being written;
 - `delocal int x = x`;
 - a `delocal` that does not close the most recent `local` of the same block, a `local` left open, or a `local` that redeclares a parameter or an open local;
+- two procedures with the same name, or a `main` with parameters;
+- a literal that does not fit in 64 bits;
 - a `delocal` whose type differs from its `local`;
 - a variable used but not declared (parameter, declaration or open local);
 - a `call`/`uncall` of a procedure that does not exist, with the wrong number of arguments, or with the same variable passed twice;

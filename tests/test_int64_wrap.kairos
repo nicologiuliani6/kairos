@@ -1,0 +1,11 @@
+// Interi a 64 bit in complemento a due: + - * e / (anche INT64_MIN / -1) modulo 2^64.
+procedure main()
+    int a
+    int b
+    int x
+    a += 9223372036854775807
+    a += 1
+    show(a)
+    b -= 1
+    x += (a / b)
+    show(x)

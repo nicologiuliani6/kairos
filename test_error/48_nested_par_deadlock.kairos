@@ -1,0 +1,18 @@
+// Errore VM atteso (stallo): tutti i thread, anche quelli del par annidato,
+// aspettano su canali su cui nessuno spedira'.
+procedure main()
+    channel c
+    channel d
+    channel e
+    int x
+    int y
+    int z
+    par
+        par
+            srecv(<x>, c)
+        and
+            srecv(<y>, d)
+        rap
+    and
+        srecv(<z>, e)
+    rap

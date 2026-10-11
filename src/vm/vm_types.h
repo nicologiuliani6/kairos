@@ -133,8 +133,7 @@ typedef struct Waiter {
 /* Titolarita' di un canale. La logica sta tutta in vm_session.h: qui c'e'
    solo la forma del dato, perche' vive dentro Channel. */
 typedef struct {
-    pthread_t t;
-    unsigned  epoch;
+    unsigned long serial;   /* numero di serie del thread titolare */
 } SessionOwner;
 
 typedef struct {

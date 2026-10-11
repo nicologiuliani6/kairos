@@ -58,6 +58,11 @@ def t_ID(t):
 def t_NUMBER(t):
     r'\d+(?![a-zA-Z_])'
     t.value = int(t.value)
+    # Gli interi sono a 64 bit: un letterale si legge modulo 2^64 (cosi' si
+    # scrivono anche le costanti senza segno fino a 2^64 - 1), oltre e' un errore.
+    if t.value >= 1 << 64:
+        raise KairosCompileError(
+            "LEXER", f"riga {t.lineno}: letterale {t.value} oltre i 64 bit")
     return t
 
 def t_INVALID_NUMBER_SUFFIX(t):

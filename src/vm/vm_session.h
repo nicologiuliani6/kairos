@@ -8,7 +8,7 @@
  *  Fuori da questo file esistono soltanto:
  *    - il campo `SessionState session` dentro Channel (vm_types.h);
  *    - una chiamata per punto d'uso in vm_ops.h (ssend, srecv, channel-ref);
- *    - session_par_enter / session_par_exit in vm_par.h.
+ *    - session_thread_begin / session_thread_end in vm_par.h.
  *  Cambiare la disciplina, o toglierla, non deve richiedere di leggere altro.
  *
  *  COSA GARANTISCE
@@ -42,28 +42,22 @@
  *  in un'altra procedura. Il runtime lo segue senza sforzo, perche' vede
  *  l'identita' del Channel e non il nome della variabile.
  *
- *  EPOCHE
+ *  TITOLARI DEFUNTI
  *
- *  I titolari sono thread, e i thread di un `par` muoiono quando il blocco
- *  finisce. Uno stesso `par` rieseguito (tipicamente call e poi uncall) crea
- *  thread nuovi, e i vecchi titolari sono defunti. Invece di inseguirli, si
- *  marca ogni titolarita' con l'epoca in cui e' nata: all'uscita dal `par`
- *  piu' esterno l'epoca avanza e le titolarita' precedenti smettono di
- *  valere. Fuori da un `par` non c'e' concorrenza, quindi non c'e' nulla da
- *  sorvegliare. I `par` annidati NON fanno avanzare l'epoca: la titolarita'
- *  vale per tutto il blocco piu' esterno.
+ *  I titolari sono thread, e i thread di un `par` muoiono quando il loro ramo
+ *  finisce. Ogni thread ha un numero di serie mai riusato (il principale ha 0)
+ *  e, quando finisce, le sue titolarita' smettono di valere: due `par` in
+ *  sequenza sullo stesso canale, o lo stesso `par` rieseguito (call e poi
+ *  uncall), hanno titolari nuovi senza conflitti con i vecchi.
  * ====================================================================== */
 
 #include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
 #include "vm_types.h"
 #include "vm_panic.h"
 
 #define SESSION_MAX_OWNERS 2   /* sessione binaria: due, per definizione */
-
-/* Profondita' di annidamento dei `par` ed epoca corrente. Le tocca solo il
-   thread che entra o esce da un par, mai due thread insieme. */
-static volatile unsigned g_session_par_depth = 0;
-static volatile unsigned g_session_epoch     = 1;
 
 /* ponytail: un solo lock globale per tutto lo stato di sessione, invece del
    mutex di ciascun canale. Lo stato e' minuscolo e lo si tocca una volta per
@@ -73,33 +67,61 @@ static volatile unsigned g_session_epoch     = 1;
    mutex del canale di trasporto). */
 static pthread_mutex_t g_session_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-static inline void session_par_enter(void)
+/* Ritorna la nuova profondita' (1 = par piu' esterno). */
+/* Thread vivi, per numero di serie; li tocca solo chi tiene g_session_mtx. */
+static unsigned char *g_serial_alive     = NULL;
+static unsigned long  g_serial_cap       = 0;
+static unsigned long  g_serial_next      = 1;
+static __thread unsigned long g_my_serial = 0;   /* 0 = thread principale */
+
+static inline int serial_alive(unsigned long sr)
 {
-    g_session_par_depth++;
+    return sr == 0 || (sr < g_serial_cap && g_serial_alive[sr]);
 }
 
-static inline void session_par_exit(void)
+/* All'avvio di un thread di par: gli assegna un numero di serie nuovo. */
+static inline void session_thread_begin(void)
 {
-    if (g_session_par_depth > 0) g_session_par_depth--;
-    if (g_session_par_depth == 0) g_session_epoch++;   /* le titolarita' scadono */
+    pthread_mutex_lock(&g_session_mtx);
+    unsigned long sr = g_serial_next++;
+    if (sr >= g_serial_cap) {
+        unsigned long nc = g_serial_cap ? g_serial_cap * 2 : 64;
+        while (nc <= sr) nc *= 2;
+        unsigned char *n = realloc(g_serial_alive, nc);
+        if (!n) { pthread_mutex_unlock(&g_session_mtx); vm_debug_panic("[VM] memoria esaurita\n"); }
+        memset(n + g_serial_cap, 0, nc - g_serial_cap);
+        g_serial_alive = n;
+        g_serial_cap = nc;
+    }
+    g_serial_alive[sr] = 1;
+    g_my_serial = sr;
+    pthread_mutex_unlock(&g_session_mtx);
+}
+
+/* Alla fine del thread: le sue titolarita' scadono. */
+static inline void session_thread_end(void)
+{
+    pthread_mutex_lock(&g_session_mtx);
+    if (g_my_serial < g_serial_cap) g_serial_alive[g_my_serial] = 0;
+    pthread_mutex_unlock(&g_session_mtx);
 }
 
 /* ---------------------------------------------------------------------- */
 
-/* Scarta i titolari di epoche passate: thread ormai terminati. */
+/* Scarta i titolari defunti. */
 static inline void session_purge(SessionState *s)
 {
     int w = 0;
     for (int i = 0; i < s->owner_n; i++)
-        if (s->owner[i].epoch == g_session_epoch)
+        if (serial_alive(s->owner[i].serial))
             s->owner[w++] = s->owner[i];
     s->owner_n = w;
 }
 
-static inline int session_is_owner(const SessionState *s, pthread_t t)
+static inline int session_is_owner(const SessionState *s, unsigned long me)
 {
     for (int i = 0; i < s->owner_n; i++)
-        if (pthread_equal(s->owner[i].t, t)) return 1;
+        if (s->owner[i].serial == me) return 1;
     return 0;
 }
 
@@ -109,7 +131,7 @@ static inline int session_is_owner(const SessionState *s, pthread_t t)
 static inline void session_claim(Channel *ch, const char *name, const char *come)
 {
     if (!ch) return;
-    pthread_t me = pthread_self();
+    unsigned long me = g_my_serial;
     SessionState *s = &ch->session;
 
     pthread_mutex_lock(&g_session_mtx);
@@ -126,8 +148,7 @@ static inline void session_claim(Channel *ch, const char *name, const char *come
             name, come);
     }
 
-    s->owner[s->owner_n].t     = me;
-    s->owner[s->owner_n].epoch = g_session_epoch;
+    s->owner[s->owner_n].serial = me;
     s->owner_n++;
     pthread_mutex_unlock(&g_session_mtx);
 }
@@ -151,14 +172,14 @@ static inline void session_delegate_release(Channel *ch, const char *name)
 {
     (void)name;
     if (!ch) return;
-    pthread_t me = pthread_self();
+    unsigned long me = g_my_serial;
     SessionState *s = &ch->session;
 
     pthread_mutex_lock(&g_session_mtx);
     session_purge(s);
     int w = 0;
     for (int i = 0; i < s->owner_n; i++)
-        if (!pthread_equal(s->owner[i].t, me)) s->owner[w++] = s->owner[i];
+        if (s->owner[i].serial != me) s->owner[w++] = s->owner[i];
     s->owner_n = w;
     pthread_mutex_unlock(&g_session_mtx);
 }

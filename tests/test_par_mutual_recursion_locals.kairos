@@ -1,0 +1,51 @@
+// Mutua ricorsione con local dentro i rami di un par: ogni attivazione ha il
+// proprio frame anche nel thread, in avanti e all'indietro.
+procedure f(int n, int acc)
+    local int t = 0
+    if n == 0 then
+        skip
+    else
+        n -= 1
+        t += n
+        acc += 1
+        call g(n, acc)
+        t -= n
+        n += 1
+    fi n == 0
+    delocal int t = 0
+
+procedure g(int n, int acc)
+    local int u = 0
+    if n == 0 then
+        skip
+    else
+        n -= 1
+        u += 2
+        acc += 10
+        call f(n, acc)
+        u -= 2
+        n += 1
+    fi n == 0
+    delocal int u = 0
+
+procedure main()
+    int a
+    int b
+    int ra
+    int rb
+    a += 3
+    b += 4
+    par
+        call f(a, ra)
+    and
+        call f(b, rb)
+    rap
+    show(ra)
+    show(rb)
+    par
+        uncall f(a, ra)
+    and
+        uncall f(b, rb)
+    rap
+    show(ra)
+    show(rb)

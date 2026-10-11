@@ -1,4 +1,5 @@
-// Errore VM atteso: terzo titolare. Il channel 'c' e' usato da TRE thread
+// Errore VM atteso: terzo titolare, oppure stallo se il terzo thread arriva
+// quando i primi due hanno gia' finito. Il channel 'c' e' usato da TRE thread
 // concorrenti nello stesso blocco PAR (uno ssend e due srecv). La sessione e'
 // binaria: al piu' due titolari per canale in ogni istante, altrimenti non e'
 // determinato chi sia il partner di una data offerta ch!/ch?. Non e' piu' un

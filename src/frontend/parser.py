@@ -635,10 +635,12 @@ def _walk_proc_int_param_mutations_and_calls(stmt, int_formal_set, mutated_out, 
         return
     tag = stmt[0]
     if tag == 'assign':
-        _, var_name, _op, _expr, _lineno = stmt
-        var_name = _lv_base(var_name)
-        if var_name in int_formal_set:
-            mutated_out.add(var_name)
+        _, var_name, op, expr, _lineno = stmt
+        sides = [var_name] + ([expr] if op == '<=>' else [])   # lo scambio scrive entrambi
+        for side in sides:
+            base = _lv_base(side)
+            if base in int_formal_set:
+                mutated_out.add(base)
         return
     if tag in ('call', 'uncall'):
         _, proc_name, args, _lineno = stmt
@@ -786,9 +788,11 @@ def _collect_stack_endpoints_in_stmt(stmt, out):
     tag = stmt[0]
     if tag == 'call_direct':
         _, name, args, _lineno = stmt
-        lname = name.lower()
-        if lname in ('push', 'pop') and isinstance(args, list) and len(args) >= 2:
-            out.add(args[1])
+        # Ogni argomento conta (push/pop, payload e destinazioni di ssend/srecv,
+        # show): il chiamante tiene solo quelli dichiarati stack.
+        for a in args or []:
+            if isinstance(a, str):
+                out.add(a)
         return
 
     if tag == 'if':
@@ -1156,6 +1160,12 @@ def _run_static_checks_body(program_ast):
             continue
         proc_name = proc[1]
         params = proc[2] or []
+        if proc_name in proc_signatures:
+            raise KairosCompileError(
+                "STATIC", f"procedura '{proc_name}' definita due volte")
+        if proc_name == 'main' and params:
+            raise KairosCompileError(
+                "STATIC", "main non ha parametri: le sue variabili si dichiarano nel corpo")
         proc_signatures[proc_name] = [ptype for ptype, _pname in params]
 
     proc_param_lists, proc_int_mutated_formals = _compute_proc_int_mutated_formals(procedures)

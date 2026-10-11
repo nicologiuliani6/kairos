@@ -1,0 +1,17 @@
+// Errore di compilazione atteso: lo stack s e' spedito da un ramo e letto da un altro.
+procedure main()
+    stack s
+    channel c
+    stack r
+    int x
+    x += 7
+    push(x, s)
+    local channel d = empty
+    par
+        ssend(<s>, c)
+    and
+        srecv(<r>, c)
+    and
+        show(s)
+    rap
+    delocal channel d = empty

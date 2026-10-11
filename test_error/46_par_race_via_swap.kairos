@@ -1,0 +1,15 @@
+// Errore di compilazione atteso: lo scambio nella procedura chiamata scrive z, che l'altro ramo legge.
+procedure sw(int a, int b)
+    a <=> b
+
+procedure main()
+    int x
+    int y
+    int z
+    x += 1
+    y += 2
+    par
+        call sw(x, z)
+    and
+        show(z)
+    rap

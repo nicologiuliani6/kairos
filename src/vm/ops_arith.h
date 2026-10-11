@@ -13,7 +13,7 @@ static inline void op_pusheq(VM *vm, const char *frame_name)
     Var  *v;
     int64_t *cell = lvalue_ptr(vm, Findex, ID, &v, "PUSHEQ");
     var_par_mut_acquire(v);
-    *cell += resolve_value(vm, Findex, expr);
+    *cell = (int64_t)((uint64_t)*cell + (uint64_t)resolve_value(vm, Findex, expr));
     var_par_mut_release(v);
 }
 
@@ -41,7 +41,7 @@ static inline void op_mineq(VM *vm, const char *frame_name)
     if (expr_is_bare_ident(expr) && !strcmp(ID, expr))
         vm_debug_panic("[VM] MINEQ: `%s -= %s` non reversibile (perde informazione)\n", ID, expr);
     var_par_mut_acquire(v);
-    *cell -= resolve_value(vm, Findex, expr);
+    *cell = (int64_t)((uint64_t)*cell - (uint64_t)resolve_value(vm, Findex, expr));
     var_par_mut_release(v);
 }
 

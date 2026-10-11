@@ -211,13 +211,17 @@ static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
         char right[rlen + 1]; memcpy(right, after_op, (size_t)rlen); right[rlen] = '\0';
         int64_t rval = resolve_expr(vm, fi, right);
 
-        if (op == '+') return lval + rval;
-        if (op == '-') return lval - rval;
-        if (op == '*') return lval * rval;
+        /* Interi a 64 bit in complemento a due: + - * modulo 2^64 (in C
+           l'overflow con segno non e' definito, quindi si calcola senza segno). */
+        if (op == '+') return (int64_t)((uint64_t)lval + (uint64_t)rval);
+        if (op == '-') return (int64_t)((uint64_t)lval - (uint64_t)rval);
+        if (op == '*') return (int64_t)((uint64_t)lval * (uint64_t)rval);
         if (op == '/' || op == '%') {
             if (rval == 0)
                 vm_debug_panic("[VM] Div-Err: divisione per zero (%lld %c 0)\n",
                                (long long)lval, op);
+            if (rval == -1)   /* INT64_MIN / -1 trabocca: anche qui modulo 2^64 */
+                return op == '/' ? (int64_t)(0 - (uint64_t)lval) : 0;
             return op == '/' ? lval / rval : lval % rval;
         }
         /* Confronti e connettivi, come in Janus: 1 vero, 0 falso. Il frontend

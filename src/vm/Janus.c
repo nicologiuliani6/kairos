@@ -197,10 +197,11 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
              * proc-base è già attiva sul call stack → clona come per la self-rec
              * (depth = #attivazioni correnti), così i LOCAL int del frame base
              * della call esterna non vengono liberati dal delocal di quella
-             * interna. Solo path non-thread (i worker PAR usano clone_for_thread). */
-            uint base_fi_pn = char_id_map_get(&FrameIndexer, pn);
-            int  reentrant  = !is_rec && !current_thread_args
-                              && vm->frames[base_fi_pn]->active > 0;
+             * interna. In un ramo di par le attivazioni si contano sul frame
+             * del thread, che e' solo suo. */
+            uint base_fi_pn = current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                  : char_id_map_get(&FrameIndexer, pn);
+            int  reentrant  = !is_rec && vm->frames[base_fi_pn]->active > 0;
             int  reent_depth = reentrant ? vm->frames[base_fi_pn]->active + 1 : 0;
             uint cfi;
             if (is_rec) {
@@ -258,7 +259,10 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             } else if (reentrant) {
                 /* clone mutuo: il body deve girare sul frame clonato (es. is_even@1),
                  * non sul base. */
-                make_frame_key(pn, reent_depth, nfname, sizeof(nfname));
+                if (current_thread_args)
+                    make_frame_key_par_rec(pn, reent_depth, nfname, sizeof(nfname));
+                else
+                    make_frame_key(pn, reent_depth, nfname, sizeof(nfname));
             } else {
                 if (current_thread_args)
                     make_thread_frame_key(pn, nfname, sizeof(nfname));
@@ -464,6 +468,8 @@ void vm_exec(VM *vm, char *buffer)
     /* main parte a prima passata conclusa: tutte le procedure sono registrate,
      * in qualunque ordine compaiano nel file. */
     if (!has_main) vm_debug_panic("[VM] manca la procedura main\n");
+    /* nuovo programma: nessun par aperto, solo il thread principale */
+    __atomic_store_n(&g_runnable, 1, __ATOMIC_SEQ_CST);
     vm_run_BT(vm, orig, "main");
     free(orig);
 }

@@ -5,6 +5,25 @@
 #include "vm_types.h"
 
 /* ======================================================================
+ *  Thread che possono avanzare, su tutto il programma
+ *
+ *  Uno stallo e' tale solo se nessun thread del programma puo' piu' avanzare:
+ *  un par annidato i cui rami sono fermi su un canale puo' essere sbloccato da
+ *  un ramo fratello del par esterno che sta ancora calcolando. Si contano i
+ *  thread eseguibili (non fermi su un canale, non in attesa dei propri rami) e
+ *  un'epoca che avanza a ogni sblocco o fine di thread.
+ * ====================================================================== */
+static int      g_runnable = 1;   /* il thread principale */
+static unsigned g_progress = 0;
+
+static inline void run_dec(void) { __atomic_sub_fetch(&g_runnable, 1, __ATOMIC_SEQ_CST); }
+static inline void run_inc(void)
+{
+    __atomic_add_fetch(&g_runnable, 1, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&g_progress, 1, __ATOMIC_SEQ_CST);
+}
+
+/* ======================================================================
  *  Notify / wait — handshake tra thread su canale
  * ====================================================================== */
 
@@ -23,10 +42,12 @@ static inline void wait_for_turn_done(ThreadArgs *ta)
     if (!ta) return;
     pthread_mutex_lock(ta->done_mtx);
     ta->blocked = 1;
+    run_dec();
     while (!ta->turn_done && !ta->finished)
         pthread_cond_wait(ta->done_cond, ta->done_mtx);
     ta->turn_done = 0;
     ta->blocked   = 0;
+    run_inc();
     pthread_mutex_unlock(ta->done_mtx);
 }
 
@@ -35,6 +56,7 @@ static inline void signal_blocked(ThreadArgs *ta)
     if (!ta) return;
     pthread_mutex_lock(ta->done_mtx);
     ta->blocked = 1;
+    run_dec();
     pthread_cond_broadcast(ta->done_cond);
     pthread_mutex_unlock(ta->done_mtx);
 }
@@ -44,6 +66,7 @@ static inline void clear_blocked(ThreadArgs *ta)
     if (!ta) return;
     pthread_mutex_lock(ta->done_mtx);
     ta->blocked = 0;
+    run_inc();
     pthread_mutex_unlock(ta->done_mtx);
 }
 

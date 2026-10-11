@@ -1,0 +1,4 @@
+// Errore di compilazione atteso: main non ha parametri.
+procedure main(int x)
+    x += 1
+    show(x)

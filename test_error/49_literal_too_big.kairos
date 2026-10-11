@@ -1,0 +1,5 @@
+// Errore di compilazione atteso: letterale oltre i 64 bit.
+procedure main()
+    int a
+    a += 18446744073709551616
+    show(a)
