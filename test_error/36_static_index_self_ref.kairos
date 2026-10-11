@@ -1,0 +1,7 @@
+// Errore di compilazione atteso: l'indice della cella scritta dipende dallo
+// stesso array, quindi l'inverso agirebbe su un'altra cella.
+procedure main()
+    local int a[3] = 0
+    a[a[0]] += 1
+    a[a[0]] -= 1
+    delocal int a[3] = 0

@@ -1,0 +1,20 @@
+// Errore VM atteso (Srecv-Err): la destinazione stack di srecv dev'essere vuota.
+procedure main()
+    stack a
+    stack b
+    int x
+    int y
+    channel c
+    x += 5
+    push(x, a)
+    y += 9
+    push(y, b)
+    x += 1
+    push(x, a)
+    par
+        ssend(<a>, c)
+    and
+        srecv(<b>, c)
+    rap
+    show(a)
+    show(b)

@@ -557,6 +557,14 @@ static inline void op_srecv(VM *vm, const char *frame_name)
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
             }
+            /* Srecv-Err anche per le collezioni: la destinazione dev'essere
+               vuota, altrimenti il contenuto ricevuto si accoderebbe al vecchio
+               e ssend, l'inverso, rispedirebbe anche quello. */
+            if (dest->T == TYPE_STACK && dest->stack_len != 0) {
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic(
+                    "[VM] SRECV: stack '%s' non vuoto prima della ricezione (Srecv-Err)\n", tokv[i]);
+            }
             if (n > 0) {
                 var_stack_reserve(dest, dest->stack_len + (size_t)n);
                 memcpy(dest->value + dest->stack_len, chv->channel->buf + read_idx, (size_t)n * sizeof(int64_t));
@@ -600,7 +608,6 @@ static inline void op_show_flush_char_line(VM *vm)
 
 static inline void op_show(VM *vm, const char *frame_name)
 {
-    if (vm->suppress_show) return;
     char *ID = strtok(NULL, " \t");
     if (!ID) vm_debug_panic("[VM] SHOW: manca il nome della variabile\n");
     char *fmt = strtok(NULL, " \t");

@@ -1,0 +1,10 @@
+// Errore di compilazione atteso (Local-Err): un local non può ridichiarare un
+// nome già presente nell'attivazione, qui il parametro n.
+procedure q(int n)
+    local int n = 5
+    delocal int n = 5
+
+procedure main()
+    local int a = 3
+    call q(a)
+    delocal int a = 3

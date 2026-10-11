@@ -173,7 +173,7 @@ delocal int y = x        // y must still equal x
 delocal int x = 0
 ```
 
-As in Janus, `local x … delocal x` is a **block**: each `delocal` closes the most recent open `local` *of the same statement list*, and no `local` may stay open at the end of the list (a `then` branch, a loop body, a `par` branch, a procedure body). The frontend rejects anything else. At run time `delocal` checks the declared value. The inverse of `local` is `delocal` and vice versa.
+As in Janus, `local x … delocal x` is a **block**: each `delocal` closes the most recent open `local` *of the same statement list*, and no `local` may stay open at the end of the list (a `then` branch, a loop body, a `par` branch, a procedure body). A `local` may not redeclare a parameter or a still-open local of the same activation (Local-Err). The frontend rejects anything else. At run time `delocal` checks the declared value. The inverse of `local` is `delocal` and vice versa.
 
 ### Reversible assignments
 
@@ -184,7 +184,7 @@ As in Janus, `local x … delocal x` is a **block**: each `delocal` closes the m
 | `x ^= e` | itself |
 | `x <=> y` | itself |
 
-The variable (or array) on the left **must not occur** in `e`: `x += x` would lose information and is rejected.
+The variable (or array) on the left **must not occur** in `e`, nor in the index of the cell being written: `x += x` and `a[a[0]] += 1` would lose information and are rejected.
 
 ### Expressions
 
@@ -228,7 +228,7 @@ procedure main()
 
 ### Procedures, `call` and `uncall`
 
-Parameters are passed **by reference**. Every program has a `procedure main()` with no parameters.
+Parameters are passed **by reference**. Every program has a `procedure main()` with no parameters; it runs once all procedures are registered, so the order of procedures in the file does not matter.
 
 ```kairos
 procedure increment(int x)
@@ -265,7 +265,7 @@ loop
 until <b2>
 ```
 
-Trace `c1 [c2 c1]*`. As in Janus, `b1` must be true on entry (**LoopError1** otherwise) and false every time the loop is re-entered after `c2` (**LoopError2**); `b2` is evaluated after each `c1`. The inverse is `from b2 do I(c1) loop I(c2) until b1`.
+Trace `c1 [c2 c1]*`. As in Janus, `b1` must be true on entry (**LoopError1** otherwise) and false every time the loop is re-entered after `c2` (**LoopError2**); `b2` is evaluated after each `c1`. The inverse is `from b2 do I(c1) loop I(c2) until b1`, with the same checks on `b2`.
 
 ```kairos
 local int i = 0
@@ -304,7 +304,7 @@ Each is the inverse of the other. Popping an empty stack is an error.
 
 ```kairos
 ssend(<v1, v2, …>, c)   // send, zeroing/emptying the sources
-srecv(<d1, d2, …>, c)   // receive; int destinations must be 0 (Srecv-Err)
+srecv(<d1, d2, …>, c)   // receive; int destinations must be 0, stacks empty (Srecv-Err)
 ```
 
 Synchronous rendez-vous: `ssend` waits for an `srecv` and vice versa; values in transit are FIFO. The payload can hold `int`, `stack` (emptied and concatenated) and `channel` (endpoint passing, as in the π-calculus). `ssend` and `srecv` are each other's inverse. Inside a `par` each channel is a **binary session**: exactly two branches use it, with complementary protocols (static check in `sessions.py`, dynamic check in the VM).
@@ -325,7 +325,7 @@ Branches share the frame but not writable memory: the frontend rejects stacks us
 
 ### `show`
 
-Output is not part of the reversible model: it is a development aid and is ignored when running backwards.
+Output is not part of the store, so it does not affect reversibility, but it is observable: `show` is its own inverse, so `uncall` prints again, in reverse order (`n_k … n_1` for a forward `n_1 … n_k`).
 
 ```kairos
 show(x)          // "x: 42"  (int, stack, channel, array)
@@ -342,14 +342,15 @@ show(x, char)    // a single character: the low byte of x, no newline
 
 The frontend rejects with `[STATIC]` / `[LOCAL]`:
 
-- `x += e`, `x -= e`, `x ^= e` with `x` in `e` (arrays included);
+- `x += e`, `x -= e`, `x ^= e` with `x` in `e` (arrays included), or with an index that reads the array being written;
 - `delocal int x = x`;
-- a `delocal` that does not close the most recent `local` of the same block, or a `local` left open;
+- a `delocal` that does not close the most recent `local` of the same block, a `local` left open, or a `local` that redeclares a parameter or an open local;
+- a `call`/`uncall` of a procedure that does not exist;
 - in a `par`: the same `stack` in several branches; an `int`/array written in one branch and used in another; a `call` to a name that is neither a procedure nor a builtin (its writes would be unknown); channels used by a single branch, by more than two, or with incompatible protocols.
 
 It warns (the program runs, but the inverse may fail) when an `if` guard is modified inside its own body or when the source of a `local int y = x` changes before the `delocal`.
 
-At run time the VM checks, exactly as Janus does: the value of every `delocal`, the exit assertion of every `if` (forwards) and its entry guard (backwards), the `from` guard on entry (LoopError1) and on re-entry (LoopError2); and beyond Janus: `pop` and `srecv` into non-zero destinations, empty stacks, indices and divisions, channel sessions. Every rule has an example in `test_error/`.
+At run time the VM checks, exactly as Janus does: the value of every `delocal`, the exit assertion of every `if` (forwards) and its entry guard (backwards), the `from` guard on entry (LoopError1) and on re-entry (LoopError2), and the same for `until` when running backwards; and beyond Janus: `pop` and `srecv` into non-zero or non-empty destinations, empty stacks, indices and divisions, channel sessions. Every rule has an example in `test_error/`.
 
 ---
 
@@ -394,5 +395,5 @@ Diagnostics are printed in Italian.
 
 ## Debugger and VS Code
 
-- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
+- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter (a completed call is undone as a whole with its inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, inside `par` branches, or over `ssend`/`srecv` is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
 - **Standalone app**: `make release-app`.

@@ -21,6 +21,14 @@ static inline int par_extract_srcline(const char *raw_line)
     return atoi(at + 1);
 }
 
+/* Ramo di par che si sta invertendo (righe [lo, hi] del frame base
+ * g_inv_branch_frame); lo = 0: nessuno. L'inverter non salta il par che lo
+ * racchiude e non svuota lo stack dei local di quel frame, condiviso con gli
+ * altri rami. Vale per il solo thread del ramo. */
+static __thread uint g_inv_branch_lo = 0;
+static __thread uint g_inv_branch_hi = 0;
+static __thread uint g_inv_branch_frame = 0;
+
 /* Forward declarations — definite rispettivamente in vm_par.h (thread_entry)
    e in Kairos.c (vm_run_BT, invert_op_to_line). */
 static void *thread_entry(void *arg);
@@ -224,7 +232,7 @@ static void *thread_entry(void *arg)
                 else if (!strcmp(fw, "SRECV"))  op_ssend     (vm, fname);
                 else if (!strcmp(fw, "LOCAL"))  op_delocal   (vm, fname);
                 else if (!strcmp(fw, "DELOCAL"))op_local     (vm, fname);
-                else if (!strcmp(fw, "SHOW"))   { /* no-op in inverse */ }
+                else if (!strcmp(fw, "SHOW"))   op_show(vm, fname);
                 else if (!strcmp(fw, "START") || !strcmp(fw, "PARAM") ||
                          !strcmp(fw, "LABEL") || !strcmp(fw, "DECL")) { /* skip */ }
                 else { vm_debug_panic("[THREAD-INV] op sconosciuta: '%s'\n", fw); }
@@ -233,8 +241,22 @@ static void *thread_entry(void *arg)
             free(lines);
             goto thread_exit;
         }
+        /* Ramo con chiamate, condizionali, cicli o par annidati: lo si inverte
+         * come qualunque sequenza, I(c1;...;cn) = I(cn);...;I(c1), con
+         * l'inverter sull'intervallo di righe del ramo. */
+        uint lo = (uint)atoi(args->start_ptr);
+        uint hi = nlines ? (uint)atoi(lines[nlines - 1]) : 0;
         for (int k = 0; k < nlines; k++) free(lines[k]);
         free(lines);
+        if (nlines) {
+            VM_FRAME_BASE(bbase, fname);
+            g_inv_branch_frame = char_id_map_get(&FrameIndexer, bbase);
+            g_inv_branch_lo = lo;
+            g_inv_branch_hi = hi;
+            invert_op_to_line(vm, fname, args->buffer, hi, lo - 1, 1);
+            g_inv_branch_lo = g_inv_branch_hi = 0;
+        }
+        goto thread_exit;
     }
 
     char *ptr = args->start_ptr;
@@ -251,7 +273,7 @@ static void *thread_entry(void *arg)
             if (!strcmp(fw, "DECL") || !strcmp(fw, "LABEL")) {
                 vm->dbg->current_line = par_extract_srcline(ptr);
             } else if (strcmp(fw, "PARAM") != 0) {
-                dbg_hook(vm->dbg, par_extract_srcline(ptr), fname, lb);
+                dbg_hook(vm->dbg, par_extract_srcline(ptr), fname, lb, 0);
             }
         }
         if (!strcmp(fw, "PAR_START")) {
@@ -261,7 +283,7 @@ static void *thread_entry(void *arg)
             par_block_free(&pb);
             continue;
         }
-        else if (!strcmp(fw, "SHOW"))   { if (!args->is_inverse) op_show(vm, fname); }
+        else if (!strcmp(fw, "SHOW"))   op_show(vm, fname);
         else if (!strcmp(fw, "PUSHEQ")) op_pusheq (vm, fname);
         else if (!strcmp(fw, "MINEQ"))  op_mineq  (vm, fname);
         else if (!strcmp(fw, "XOREQ"))  op_xoreq  (vm, fname);
@@ -314,10 +336,7 @@ static void *thread_entry(void *arg)
                 invert_op_to_line(vm, thread_key, args->buffer,
                                   vm->frames[cfi]->end_addr - 1, vm->frames[cfi]->addr + 1, 1);
             else {
-                int ss = vm->suppress_show;
-                if (args->is_inverse) vm->suppress_show = 1;
                 vm_run_BT(vm, args->buffer, thread_key);
-                vm->suppress_show = ss;
             }
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             stack_restore(&vm->frames[cfi]->LocalVariables, slv);

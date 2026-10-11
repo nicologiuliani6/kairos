@@ -40,7 +40,6 @@ static inline void dbg_init(VMDebugState *dbg)
     memset(dbg, 0, sizeof(VMDebugState));
     dbg->mode        = VM_MODE_RUN;
     dbg->history_top = -1;
-    dbg->rebuild_target_top = -1;
     dbg->ignore_breakpoint_once_line = -1;
     dbg->bp_count    = 0;
     vm_name_set(&dbg->current_frame, &dbg->current_frame_cap, "");
@@ -174,16 +173,27 @@ static inline ExecRecord *dbg_pop_history(VMDebugState *dbg)
  *
  *  Comportamento:
  *    - aggiorna current_line / current_frame nel debug state
+ *    - se il controllore chiede un passo indietro (STEP_BACK) e il chiamante
+ *      lo sa eseguire (can_step_back), ritorna 1: e' il ciclo dell'interprete
+ *      a eseguire l'inversa dell'istruzione precedente; altrimenti registra il
+ *      motivo in last_error e resta in pausa
  *    - se il modo è STEP: transita in PAUSE dopo aver segnato il punto
  *    - se il modo è CONTINUE e la riga è un breakpoint: transita in PAUSE
  *    - in PAUSE: chiama on_pause (se presente) e si blocca su pause_cond
  *      finché il controllore esterno non cambia mode e segnala
  * ====================================================================== */
 
-static inline void dbg_hook(VMDebugState *dbg,
-                            int line, const char *frame, const char *instr_text)
+static inline void dbg_set_error(VMDebugState *dbg, const char *msg)
 {
-    if (!dbg || !dbg->initialized) return;
+    free(dbg->last_error);
+    dbg->last_error = msg ? strdup(msg) : NULL;
+}
+
+static inline int dbg_hook(VMDebugState *dbg,
+                           int line, const char *frame, const char *instr_text,
+                           int can_step_back)
+{
+    if (!dbg || !dbg->initialized) return 0;
     pthread_mutex_lock(&dbg->pause_mtx);
     int should_pause = 0;
 
@@ -192,13 +202,10 @@ static inline void dbg_hook(VMDebugState *dbg,
     if (dbg->mode != VM_MODE_PAUSE) {
         dbg->current_line = line;
         vm_name_set(&dbg->current_frame, &dbg->current_frame_cap, frame);
-        if (dbg->mode != VM_MODE_CONTINUE_INV)
-            dbg_record(dbg, line, frame, instr_text);
+        dbg_record(dbg, line, frame, instr_text);
     }
 
     if (dbg->mode == VM_MODE_STEP || dbg->mode == VM_MODE_STEP_BACK)
-        should_pause = 1;
-    else if (dbg->rebuild_active && dbg->history_top >= dbg->rebuild_target_top)
         should_pause = 1;
     else if (dbg->mode == VM_MODE_CONTINUE || dbg->mode == VM_MODE_RUN) {
         if (dbg->ignore_breakpoint_once_line == line) {
@@ -224,14 +231,28 @@ static inline void dbg_hook(VMDebugState *dbg,
         pthread_cond_broadcast(&dbg->pause_cond);
     }
 
-    while (dbg->mode == VM_MODE_PAUSE)
-        pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+    for (;;) {
+        while (dbg->mode == VM_MODE_PAUSE)
+            pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+        if (dbg->mode == VM_MODE_STEP_BACK && !can_step_back) {
+            dbg_set_error(dbg, "passo indietro non disponibile qui: l'istruzione corrente "
+                               "e' dentro un'inversione o in un ramo di par");
+            dbg->mode = VM_MODE_PAUSE;
+            pthread_cond_broadcast(&dbg->pause_cond);
+            continue;
+        }
+        break;
+    }
+    int step_back = (dbg->mode == VM_MODE_STEP_BACK);
 
     /* Non azzerare out_buf qui: alcuni client DAP leggono l'output tramite
        vm_debug_output_ext dopo la pausa; svuotarlo qui fa perdere gli SHOW. */
 
     pthread_mutex_unlock(&dbg->pause_mtx);
-}/* Sblocca la VM dopo una pausa (chiamato dal controllore esterno) */
+    return step_back;
+}
+
+/* Sblocca la VM dopo una pausa (chiamato dal controllore esterno) */
 static inline void dbg_resume(VMDebugState *dbg, VMExecMode new_mode)
 {
     if (!dbg || !dbg->initialized) return;

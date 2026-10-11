@@ -1,0 +1,46 @@
+// uncall di una procedura con par: ogni ramo si inverte come una sequenza,
+// cioè in ordine rovesciato, anche quando contiene chiamate, condizionali,
+// cicli, local e canali.
+procedure add1(int x)
+    x += 1
+
+procedure xor3(int x)
+    x ^= 3
+
+procedure w(int x, int y, int z)
+    local channel c = empty
+    par
+        call add1(x)
+        call xor3(x)
+        if x == 1 then
+            x += 10
+        fi x == 11
+        local int i = 0
+        from i == 0 do
+            x += i
+            i += 1
+        loop until i == 3
+        delocal int i = 3
+        ssend(<x>, c)
+    and
+        y += 7
+        srecv(<z>, c)
+        call add1(z)
+    rap
+    delocal channel c = empty
+
+procedure main()
+    local int x = 0
+    local int y = 0
+    local int z = 0
+    call w(x, y, z)
+    show(x)
+    show(y)
+    show(z)
+    uncall w(x, y, z)
+    show(x)
+    show(y)
+    show(z)
+    delocal int z = 0
+    delocal int y = 0
+    delocal int x = 0

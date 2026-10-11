@@ -21,111 +21,7 @@ int vm_debug_continue(VMDebugState *dbg);
 static VM       *g_debug_vm       = NULL;
 VMDebugState    *g_debug_dbg      = NULL;
 static char     *g_debug_buf      = NULL;
-static char     *g_debug_src_raw  = NULL;
-static char     *g_debug_buf_orig = NULL;
 static pthread_t g_debug_tid;
-
-static int vm_debug_line_inside_par(const char *src, int target_line)
-{
-    if (!src || target_line <= 0) return 0;
-    int in_par = 0;
-    const char *line = src;
-    while (line && *line) {
-        const char *nl = strchr(line, '\n');
-        size_t len = nl ? (size_t)(nl - line) : strlen(line);
-        char row[len + 1];              /* riga intera, della sua misura */
-        memcpy(row, line, len);
-        row[len] = '\0';
-
-        const char *at = strchr(line, '@');
-        int srcline = at ? atoi(at + 1) : 0;
-
-        char *p = skip_lineno(row);
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '@') {
-            while (*p && *p != ' ' && *p != '\t') p++;
-            while (*p == ' ' || *p == '\t') p++;
-        }
-        if (*p == '\0') {
-            line = nl ? (nl + 1) : NULL;
-            continue;
-        }
-
-        char *op = p;                   /* primo token, terminato sul posto */
-        while (*p && *p != ' ' && *p != '\t') p++;
-        *p = '\0';
-        if (op[0] == '\0') {
-            line = nl ? (nl + 1) : NULL;
-            continue;
-        }
-
-        if (!strcmp(op, "PAR_START")) in_par++;
-        else if (!strcmp(op, "PAR_END") && in_par > 0) in_par--;
-
-        if (srcline == target_line) {
-            return (in_par > 0);
-        }
-        line = nl ? (nl + 1) : NULL;
-    }
-    return 0;
-}
-
-static int vm_debug_rebuild_to_history_top(VMDebugState *dbg, int target_top)
-{
-    if (!dbg || !g_debug_src_raw) return -1;
-
-    /* Breakpoint dell'utente messi da parte durante il rebuild: tutti. */
-    int bp_count = dbg->bp_count;
-    int *bps = (int *)malloc(sizeof(int) * (size_t)(bp_count ? bp_count : 1));
-    if (!bps) return -1;
-    for (int i = 0; i < bp_count; i++) bps[i] = dbg->breakpoints[i];
-
-    char *src = strdup(g_debug_src_raw);
-    if (!src) { free(bps); return -1; }
-
-    /* Mantieni stabile la stessa pipe output durante i rebuild (step-back/revert):
-       il client DAP puo` aver gia` aperto il fd in lettura e non lo ri-chiede. */
-    int keep_rd = dbg->output_pipe_rd;
-    int keep_wr = dbg->output_pipe_fd;
-    dbg->output_pipe_rd = -1;
-    dbg->output_pipe_fd = -1;
-
-    vm_debug_stop(dbg);
-
-    dbg->output_pipe_rd = keep_rd;
-    dbg->output_pipe_fd = keep_wr;
-
-    dbg->history_top = -1;
-    dbg->first_pause_reached = 0;
-    dbg->mode = VM_MODE_STEP;
-    dbg->out_len = 0;
-    dbg->bp_count = 0;
-    for (int i = 0; i < bp_count; i++) _vm_debug_set_breakpoint(dbg, bps[i]);
-
-    vm_debug_start(src, dbg);
-    free(src);
-
-    /* Rebuild interno per step-back/reverse-continue:
-       non deve produrre output utente (es. SHOW) in Debug Console. */
-    dbg->suppress_output = 1;
-
-    /* Rebuild robusto: evita step-by-step (puo` deadlockare su PAR/channels).
-       Corri in CONTINUE senza breakpoints utente e fermati quando history_top
-       raggiunge il target tramite hook (rebuild_active/rebuild_target_top). */
-    dbg->bp_count = 0;
-    dbg->rebuild_active = 1;
-    dbg->rebuild_target_top = target_top;
-    int line = vm_debug_continue(dbg);
-    (void)line;
-    dbg->rebuild_active = 0;
-    dbg->rebuild_target_top = -1;
-    dbg->bp_count = 0;
-    for (int i = 0; i < bp_count; i++) _vm_debug_set_breakpoint(dbg, bps[i]);
-    free(bps);
-
-    dbg->suppress_output = 0;
-    return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
-}
 
 static void *debug_exec_thread(void *arg)
 {
@@ -144,7 +40,9 @@ static void *debug_exec_thread(void *arg)
 
         if (!g_debug_dbg->shutting_down) {
             pthread_mutex_lock(&g_debug_dbg->pause_mtx);
-            while (g_debug_dbg->mode == VM_MODE_DONE)
+            /* Si esce anche allo spegnimento: vm_debug_stop rimette DONE e
+               questo thread, se non si e' ancora risvegliato, lo rivedrebbe. */
+            while (g_debug_dbg->mode == VM_MODE_DONE && !g_debug_dbg->shutting_down)
                 pthread_cond_wait(&g_debug_dbg->pause_cond, &g_debug_dbg->pause_mtx);
             pthread_mutex_unlock(&g_debug_dbg->pause_mtx);
         }
@@ -175,12 +73,10 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
         if (g_debug_dbg) dbg_resume(g_debug_dbg, VM_MODE_DONE);
         pthread_join(g_debug_tid, NULL);
         free(g_debug_buf);
-        free(g_debug_src_raw);
         vm_free(g_debug_vm);
         free(g_debug_vm);
         g_debug_vm  = NULL;
         g_debug_buf = NULL;
-        g_debug_src_raw = NULL;
     }
 
     g_debug_dbg = dbg;
@@ -212,13 +108,8 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
     }
 
     size_t blen = strlen(normalized) + 1;
-    size_t rlen = strlen(bytecode) + 1;
     g_debug_buf = malloc(blen);
     memcpy(g_debug_buf, normalized, blen);
-    g_debug_src_raw = malloc(rlen);
-    memcpy(g_debug_src_raw, bytecode, rlen);
-    g_debug_buf_orig = malloc(blen);
-    memcpy(g_debug_buf_orig, normalized, blen);
     free(normalized);
 
     dbg->mode = VM_MODE_STEP;
@@ -236,6 +127,7 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
 int vm_debug_step(VMDebugState *dbg)
 {
     if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
+    dbg_set_error(dbg, NULL);
     pthread_mutex_lock(&dbg->pause_mtx);
     dbg->mode = VM_MODE_STEP;
     pthread_cond_broadcast(&dbg->pause_cond);
@@ -247,53 +139,33 @@ int vm_debug_step(VMDebugState *dbg)
     return (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
 }
 
+/* Passo indietro: lo esegue l'interprete, che e' fermo su un'istruzione.
+ * Gli si chiede STEP_BACK; esegue l'inversa dell'istruzione precedente del
+ * frame, riporta li' il puntatore e si ferma di nuovo. Se il passo non e'
+ * possibile resta dov'e' e il motivo si legge con vm_debug_error_ext. */
 int vm_debug_step_back(VMDebugState *dbg)
 {
-    if (!dbg || dbg->history_top < 0) return -1;
-    dbg->ignore_breakpoint_once_line = -1;
-    int original_line = dbg->current_line;
-    int in_par = vm_debug_line_inside_par(g_debug_src_raw, dbg->current_line);
-
-    /* Fallback sicuro per frame PAR/threaded: il rebuild completo puo` bloccare
-       quando il breakpoint cade dentro un thread del blocco PAR (es. call consumer).
-       In tal caso facciamo uno step-back "logico" sulla history senza rebuild. */
-    if ((strstr(vm_name_get(dbg->current_frame), "@t") != NULL) ||
-        (dbg->history_top >= 0 && strstr(vm_name_get(dbg->history[dbg->history_top].frame), "@t") != NULL) ||
-        in_par) {
-        int target_top = dbg->history_top;
-        if (dbg->history[target_top].line == dbg->current_line && target_top > 0)
-            target_top--;
-        dbg->history_top = target_top;
-        dbg->current_line = dbg->history[target_top].line;
-        vm_name_set(&dbg->current_frame, &dbg->current_frame_cap,
-                    vm_name_get(dbg->history[target_top].frame));
+    if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
+    pthread_mutex_lock(&dbg->pause_mtx);
+    if (dbg->mode != VM_MODE_PAUSE) {
+        pthread_mutex_unlock(&dbg->pause_mtx);
         return dbg->current_line;
     }
-
-    int target_top = dbg->history_top;
-
-    /* Se la posizione corrente e` gia` l'ultimo record history, vai al
-       precedente. Se invece la riga corrente non e` in history (es. SHOW),
-       il primo step-back deve atterrare sull'ultimo record disponibile. */
-    if (dbg->history[dbg->history_top].line == dbg->current_line) {
-        if (dbg->history_top == 0) return dbg->current_line;
-        target_top = dbg->history_top - 1;
-    }
-
-    int out_line = vm_debug_rebuild_to_history_top(dbg, target_top);
-
-    /* Se il rebuild resta sulla stessa riga (caso frequente quando la riga
-       corrente non e` registrata in history, es. SHOW), prova un passo in piu`
-       indietro per evitare il "secondo stepback non fa nulla". */
-    if (out_line == original_line && target_top > 0)
-        out_line = vm_debug_rebuild_to_history_top(dbg, target_top - 1);
-
-    return (out_line < 0) ? original_line : out_line;
+    dbg->ignore_breakpoint_once_line = -1;
+    dbg_set_error(dbg, NULL);
+    dbg->mode = VM_MODE_STEP_BACK;
+    pthread_cond_broadcast(&dbg->pause_cond);
+    while (dbg->mode != VM_MODE_PAUSE && dbg->mode != VM_MODE_DONE)
+        pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
+    int line = (dbg->mode == VM_MODE_DONE) ? -1 : dbg->current_line;
+    pthread_mutex_unlock(&dbg->pause_mtx);
+    return line;
 }
 
 int vm_debug_continue(VMDebugState *dbg)
 {
     if (!dbg || dbg->mode == VM_MODE_DONE) return -1;
+    dbg_set_error(dbg, NULL);
     pthread_mutex_lock(&dbg->pause_mtx);
 
     /* Se siamo fermi su una linea che e` anche breakpoint (es. dopo revert),
@@ -318,18 +190,20 @@ int vm_debug_continue(VMDebugState *dbg)
     return result;
 }
 
+/* Indietro fino al breakpoint precedente: passi indietro ripetuti, finche'
+ * si arriva su una riga con breakpoint o un passo non e' piu' possibile. */
 int vm_debug_continue_inverse(VMDebugState *dbg)
 {
-    if (!dbg || dbg->history_top < 0) return 0;
-    dbg->ignore_breakpoint_once_line = -1;
-    int target_top = -1;
-    for (int i = dbg->history_top - 1; i >= 0; i--) {
-        if (dbg_is_breakpoint(dbg, dbg->history[i].line)) {
-            target_top = i;
-            break;
-        }
+    if (!dbg) return -1;
+    int line = dbg->current_line;
+    for (;;) {
+        int before = dbg->history_top;
+        line = vm_debug_step_back(dbg);
+        if (line < 0) return line;
+        if (dbg->last_error && dbg->last_error[0]) return line;
+        if (dbg->history_top >= before) return line;
+        if (dbg_is_breakpoint(dbg, line)) return line;
     }
-    return vm_debug_rebuild_to_history_top(dbg, target_top);
 }
 
 int vm_debug_goto_line(VMDebugState *dbg, int target_line)
@@ -376,10 +250,6 @@ void vm_debug_stop(VMDebugState *dbg)
 
     free(g_debug_buf);
     g_debug_buf = NULL;
-    free(g_debug_src_raw);
-    g_debug_src_raw = NULL;
-    free(g_debug_buf_orig);
-    g_debug_buf_orig = NULL;
     vm_free(g_debug_vm);
     free(g_debug_vm);
     g_debug_vm  = NULL;

@@ -55,15 +55,10 @@ static inline int extract_srcline(const char *raw_line)
     return atoi(at + 1);
 }
 
-#define DEBUG_HOOK(raw_ptr, instr_text)                                  \
-    do {                                                                 \
-        if (vm->dbg && vm->dbg->initialized) {                          \
-            int _ln = extract_srcline(raw_ptr);                          \
-            dbg_hook(vm->dbg, _ln, fname, instr_text);                  \
-            if (vm->dbg->mode == VM_MODE_DONE &&                        \
-                vm->inversion_depth == 0) { goto done; }                \
-        }                                                                \
-    } while(0)
+/* Annidamento di vm_run_BT nel thread: 1 = l'esecuzione del programma; di
+ * piu' solo dentro un'inversione (uncall eseguite in avanti mentre si inverte),
+ * dove il passo indietro del debugger non si applica. */
+static __thread int g_run_bt_depth = 0;
 
 /* ======================================================================
  *  vm_run_BT — loop principale di esecuzione
@@ -110,6 +105,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         Stack  saved_local_vars;
         int    is_recursive_clone;
         int    base_findex;   /* frame-base della proc chiamata: per decremento `active` a END_PROC */
+        int    hist_at_call;  /* debugger: indice nella storia della riga CALL */
     } CallRecord;
     /* Call stack dinamico: cresce on-demand (raddoppia). Nessun hard cap.
      * Gli slot nuovi sono azzerati: i loro buffer partono vuoti. */
@@ -126,6 +122,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         cs = _nb; cs_cap = _nc; \
     } \
 } while (0)
+    g_run_bt_depth++;
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si]->addr + 1);
     if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); goto done; }
@@ -142,7 +139,16 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             strcmp(fw, "HALT") != 0) {
             if (vm->dbg && vm->dbg->initialized) {
                 VM_LINE_DUP(raw, ptr, nl);    /* riga intatta, per il debugger */
-                DEBUG_HOOK(raw, raw);
+                int can = (g_run_bt_depth == 1 && !current_thread_args);
+                int back = dbg_hook(vm->dbg, extract_srcline(raw), fname, raw, can);
+                if (vm->dbg->mode == VM_MODE_DONE && vm->inversion_depth == 0) goto done;
+                if (back) {
+                    /* Passo indietro: l'inversa dell'istruzione precedente, poi
+                     * l'esecuzione riparte da quella istruzione. */
+                    ptr = dbg_step_back_here(vm, orig, fname, ptr,
+                                             cs_top >= 0 ? cs[cs_top].hist_at_call : -1);
+                    continue;
+                }
             }
             vm_stats_sample(vm);
         }
@@ -211,6 +217,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             cs[cs_top].is_recursive_clone = is_rec || reentrant;
             cs[cs_top].callee_findex      = cfi;
             cs[cs_top].base_findex        = (int)base_fi_pn;
+            cs[cs_top].hist_at_call       = (vm->dbg && vm->dbg->initialized)
+                                            ? vm->dbg->history_top : -1;
             vm->frames[base_fi_pn]->active++;
             vm_buf_set(&cs[cs_top].caller_frame, &cs[cs_top].caller_frame_cap, fname);
             int  pc = vm->frames[cfi]->param_count, *pi = vm->frames[cfi]->param_indices;
@@ -344,6 +352,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     }
 
 done:
+    g_run_bt_depth--;
     for (uint k = 0; k < cs_cap; k++) {
         free(cs[k].caller_frame);
         free(cs[k].saved_params);
@@ -366,6 +375,7 @@ void vm_exec(VM *vm, char *buffer)
      * local del frame (names_hint/locals_hint), così che in esecuzione non
      * debbano crescere. Sono stime per eccesso, non limiti. */
     int   proc_names = 0, proc_locals = 0;
+    int   has_main = 0;
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n');
@@ -412,8 +422,7 @@ void vm_exec(VM *vm, char *buffer)
                     name,
                     vm->frames[vm->frame_top]->addr,
                     vm->frames[vm->frame_top]->end_addr);
-                if (!strcmp(name, "main"))
-                    vm_run_BT(vm, orig, "main");
+                if (!strcmp(name, "main")) has_main = 1;
 
             } else if (!strcmp(fw, "DECL")) {
                 char *type = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
@@ -452,6 +461,10 @@ void vm_exec(VM *vm, char *buffer)
         }
         *nl = '\n'; ptr = nl + 1; line++;
     }
+    /* main parte a prima passata conclusa: tutte le procedure sono registrate,
+     * in qualunque ordine compaiano nel file. */
+    if (!has_main) vm_debug_panic("[VM] manca la procedura main\n");
+    vm_run_BT(vm, orig, "main");
     free(orig);
 }
 

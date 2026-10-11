@@ -1,0 +1,37 @@
+// Fixture di tests/test-dap/test_dap_step_back_inverse.c: il passo indietro
+// esegue l'inversa dell'istruzione precedente (assegnamenti, if, cicli,
+// local/delocal, stack, chiamate disfatte intere).
+procedure f(int a, int b)
+    if a > 2 then
+        b += a
+    else
+        b -= 1
+    fi b > 2
+    local int i = 0
+    from i == 0 do
+        b += i
+        i += 1
+    loop until i == 3
+    delocal int i = 3
+
+procedure main()
+    local int x = 5
+    local int y = 0
+    local stack s = nil
+    y += (x * 2)
+    call f(x, y)
+    x <=> y
+    push(y, s)
+    local int k = 0
+    from k == 0 do
+        if k == 1 then
+            x -= 1
+        fi k == 1
+        k += 1
+    loop until k == 4
+    delocal int k = 4
+    pop(y, s)
+    uncall f(y, x)
+    delocal stack s = nil
+    delocal int y = 5
+    delocal int x = 9

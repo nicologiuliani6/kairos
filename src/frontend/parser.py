@@ -865,6 +865,17 @@ def _check_stmt_reversibility(
     tag = stmt[0]
     if tag == 'assign':
         _, var_name, op, expr, lineno = stmt
+        # L'indice di una cella scritta non puo' dipendere dalle celle scritte:
+        # `a[a[0]] += 1` cambierebbe a[0] e l'inverso agirebbe su un'altra cella.
+        sides = [var_name] + ([expr] if op == '<=>' else [])
+        written = {_lv_base(lv) for lv in sides}
+        for lv in sides:
+            if isinstance(lv, tuple) and lv and lv[0] == 'index':
+                if any(_expr_contains_var(lv[2], w) for w in written):
+                    raise KairosCompileError(
+                        "STATIC",
+                        f"riga {lineno}: l'indice di '{_lv_text(lv)}' dipende da una variabile "
+                        f"scritta dalla stessa istruzione (operazione non reversibile)")
         if op in ('+=', '-=', '^=') and _expr_contains_var(expr, var_name):
             raise KairosCompileError(
                 "STATIC",
@@ -1010,16 +1021,25 @@ def run_static_checks(program_ast):
         _ParStaticConfig.program_procedures = prev_procs
 
 
-def _check_local_blocks(stmts, proc_name):
+def _check_local_blocks(stmts, proc_name, in_scope=()):
     """Come in Janus, `local x … delocal x` e' un blocco: ogni delocal chiude
     il local aperto piu' di recente nella stessa lista di istruzioni, e a fine
-    lista non resta nessun local aperto."""
+    lista non resta nessun local aperto. Un local non puo' ridichiarare un nome
+    gia' presente nello store dell'attivazione (parametro o local ancora
+    aperto): e' Local-Err."""
     open_ = []
     for s in stmts or []:
         if not isinstance(s, tuple) or not s:
             continue
         tag = s[0]
-        if tag == 'local':
+        if tag == 'decl':
+            in_scope = tuple(in_scope) + (s[2],)
+        elif tag == 'local':
+            if s[2] in in_scope or any(n == s[2] for n, _ in open_):
+                raise KairosCompileError(
+                    "LOCAL",
+                    f"riga {s[-1]}: local '{s[2]}' in {proc_name}: il nome e' gia' in uso "
+                    f"(parametro o local aperto) nella stessa attivazione (Local-Err)")
             open_.append((s[2], s[-1]))
         elif tag == 'delocal':
             if not open_ or open_[-1][0] != s[2]:
@@ -1029,16 +1049,18 @@ def _check_local_blocks(stmts, proc_name):
                     f"riga {s[-1]}: delocal '{s[2]}' in {proc_name} non chiude il local "
                     f"aperto più di recente nello stesso blocco (atteso: {atteso})")
             open_.pop()
-        elif tag == 'if':
-            _check_local_blocks(s[2], proc_name)
-            _check_local_blocks(s[3], proc_name)
-        elif tag == 'from':
-            _check_local_blocks(s[2], proc_name)
-            if len(s) >= 7:
-                _check_local_blocks(s[6], proc_name)
-        elif tag == 'par':
-            for b in s[1]:
-                _check_local_blocks(b, proc_name)
+        else:
+            inner = tuple(in_scope) + tuple(n for n, _ in open_)
+            if tag == 'if':
+                _check_local_blocks(s[2], proc_name, inner)
+                _check_local_blocks(s[3], proc_name, inner)
+            elif tag == 'from':
+                _check_local_blocks(s[2], proc_name, inner)
+                if len(s) >= 7:
+                    _check_local_blocks(s[6], proc_name, inner)
+            elif tag == 'par':
+                for b in s[1]:
+                    _check_local_blocks(b, proc_name, inner)
     if open_:
         name, ln = open_[-1]
         raise KairosCompileError(
@@ -1083,7 +1105,7 @@ def _run_static_checks_body(program_ast):
             continue
         declared_types = _collect_declared_types(proc)
         body = proc[3] or []
-        _check_local_blocks(body, proc[1])
+        _check_local_blocks(body, proc[1], tuple(pn for _pt, pn in (proc[2] or [])))
         _check_callees_defined(body, proc_signatures)
         for stmt in body:
             _check_stmt_reversibility(
@@ -1320,10 +1342,9 @@ def desugar_try(program_ast):
             out_procs.append(proc)
             continue
         _, name, params, body, ln = proc
-        # Le procedure sintetiche del try vanno emesse PRIMA della procedura che
-        # le usa: in Kairos `main` (o un'altra proc) viene eseguita appena lo
-        # scan del prepass incontra il suo PROC, quindi i callee devono essere
-        # già registrati (definiti più in alto nel file).
+        # Le procedure sintetiche del try si emettono accanto alla procedura
+        # che le usa (l'ordine nel file non conta: main parte dopo la prima
+        # passata).
         new_procs = []
         new_body = _desugar_stmts(body, new_procs, counter, proc_bodies, ssend_srecv_cache)
         out_procs.extend(new_procs)

@@ -237,9 +237,8 @@ typedef enum {
 } VMExecMode;
 
 /* Debugger: breakpoint, storia dei passi e output crescono su richiesta. La
- * storia non e' piu' un anello: l'indice di un record (history_top) e' quello
- * che il rebuild per lo step-back usa come traguardo, e un anello che scarta i
- * record vecchi lo falsava oltre la sua capacita'. */
+ * storia tiene solo posizioni (riga, frame, testo dell'istruzione), nessun
+ * dato: dice al passo indietro quale istruzione invertire. */
 #define DBG_BP_INIT_CAP       16
 #define DBG_HISTORY_INIT_CAP  1024
 #define DBG_OUT_INIT_CAP      4096
@@ -278,8 +277,6 @@ typedef struct {
     int         out_len;
     pthread_mutex_t out_mtx;
     int         suppress_output;
-    int         rebuild_active;
-    int         rebuild_target_top;
     char       *last_error;         /* heap, NULL = nessun errore */
     int output_pipe_fd;   /* scrittura: la VM ci scrive sopra */
     int output_pipe_rd;   /* lettura:   Node.js legge da qui  */
@@ -291,7 +288,6 @@ typedef struct {
     int   frame_top;
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
     int   inversion_depth;
-    int   suppress_show; /* 1 durante vm_run_BT di replay (inverso di UNCALL): no op_show */
     int   show_char_pending; /* ultimo SHOW è stato show(x,char): il prossimo show classico prefissa \n */
 } VM;
 

@@ -73,6 +73,9 @@ test-dap: build-dap
 	$(CC) -g -I$(VM_DIR) tests/test-dap/test_dap_autonomous.c -L build -lvm_dap -lpthread \
 	    -Wl,-rpath,'$$ORIGIN' -o build/test_dap_autonomous
 	./build/test_dap_autonomous
+	$(CC) -g -I$(VM_DIR) tests/test-dap/test_dap_step_back_inverse.c -L build -lvm_dap -lpthread \
+	    -Wl,-rpath,'$$ORIGIN' -o build/test_dap_step_back_inverse
+	./build/test_dap_step_back_inverse
 
 # Genera il version-script con i simboli pubblici del debugger
 $(VERSCRIPT): $(VM_SOURCES)
