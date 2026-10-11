@@ -1,0 +1,23 @@
+// Errore di compilazione atteso: lo stack s e' usato da due rami, anche se dentro un try.
+procedure main()
+    stack s
+    int x
+    int y
+    x += 1
+    y += 1
+    par
+        try x == 2
+            push(x, s)
+            pop(x, s)
+            x += 1
+        yrt x == 2
+    and
+        try y == 2
+            push(y, s)
+            pop(y, s)
+            y += 1
+        yrt y == 2
+    rap
+    show(s)
+    show(x)
+    show(y)

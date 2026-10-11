@@ -1,6 +1,6 @@
 # Kairos
 
-Kairos is a **reversible, concurrent** programming language in the [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) family. Every program runs forwards and backwards: each command has a well-defined inverse, and `uncall` runs a procedure in reverse. Kairos follows Janus one-to-one on the reversible core (assignments, `if … fi`, `from … until`, `local … delocal`, `call`/`uncall`) and adds explicit parallelism (`par … and … rap`), typed synchronous channels with channel passing (π-calculus style), stacks, arrays and a `try … rollback … yrt` construct.
+Kairos is a **reversible, concurrent** programming language in the [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) family. Every program runs forwards and backwards: each command has a well-defined inverse, and `uncall` runs a procedure in reverse. Kairos follows Janus one-to-one on the reversible core (assignments, `if … fi`, `from … until`, `local … delocal`, `call`/`uncall`) and adds explicit parallelism (`par … and … rap`), synchronous channels with inferred protocols and channel passing (π-calculus style), stacks, arrays and a `try … rollback … yrt` construct.
 
 The frontend is written in Python (PLY) and produces a textual bytecode; the VM is written in C and interprets it both forwards and backwards.
 
@@ -96,6 +96,7 @@ To build a package locally use `packaging/linux/build-deb.sh`, `build-rpm.sh` or
 | `make build-dap` | `build/libvm_dap.so` for the debugger |
 | `make run FILE=f.kairos` | runs a program with `--dump-bytecode` |
 | `make test` | runs `tests/`, `examples/` and `lossless/` (5 s timeout each; `KAIROS_EXCLUDE` in the makefile excludes files) |
+| `make test-error` | every program in `test_error/` must stop with its tagged error (`*_ok.kairos` must run) |
 | `make test-dap` | debugger smoke test (step, step back, streamed output) |
 | `make release-app` | standalone app `build/dist/KairosApp` (PyInstaller) |
 | `make install-deps` / `make check-system` | venv and dependencies / system requirements check |
@@ -159,7 +160,7 @@ The bytecode reaches the VM in memory, with no intermediate file, and there is *
 
 ### Declarations, `local` and `delocal`
 
-In `main` a declaration without `local` (`int x`, `stack s`, `channel c`) creates a frame variable, initially empty. Elsewhere use `local`/`delocal`:
+In `main` a declaration without `local` (`int x`, `stack s`, `channel c`) creates a frame variable, initially empty. Elsewhere (the compiler enforces it) use `local`/`delocal`:
 
 ```kairos
 local int x = 0
@@ -346,17 +347,18 @@ The frontend rejects with `[STATIC]` / `[LOCAL]`:
 - `x += e`, `x -= e`, `x ^= e` with `x` in `e` (arrays included), or with an index that reads the array being written;
 - `delocal int x = x`;
 - a `delocal` that does not close the most recent `local` of the same block, a `local` left open, or a `local` that redeclares a parameter or an open local;
-- two procedures with the same name, or a `main` with parameters;
+- two procedures with the same name, a `main` with parameters, or a procedure named like a builtin (`show`, `push`, `pop`, `ssend`, `srecv`) or with a name the compiler reserves (`…__inv`, `__try_…`);
+- a declaration without `local` (`int x`, `stack s`, `channel c`) outside `main`;
+- a `delocal` without its expected value;
+- operands of the wrong type: a stack, channel or whole array inside an expression; `push`/`pop` not between an `int` variable and a stack; `ssend`/`srecv` on something that is not a channel, with a payload that is not made of distinct `int`s, stacks or channels;
 - a literal that does not fit in 64 bits;
 - a `delocal` whose type differs from its `local`;
 - a variable used but not declared (parameter, declaration or open local);
-- a `call`/`uncall` of a procedure that does not exist, with the wrong number of arguments, or with the same variable passed twice;
+- a `call`/`uncall` (or the short form `f(x)`) of a procedure that does not exist, with the wrong number of arguments, or with the same variable passed twice;
 - in a `par`: the same `stack` in several branches; an `int`/array written in one branch and used in another; a `call` to a name that is neither a procedure nor a builtin (its writes would be unknown); two branches using a channel with incompatible protocols (a channel used by one branch only, or by more than two, is caught at run time);
 - a `par`, `ssend` or `srecv` inside a `try` body or rollback, also through called procedures.
 
-It warns (the program runs, but the inverse may fail) when an `if` guard is modified inside its own body or when the source of a `local int y = x` changes before the `delocal`.
-
-At run time the VM checks, exactly as Janus does: the value of every `delocal`, the exit assertion of every `if` (forwards) and its entry guard (backwards), the `from` guard on entry (LoopError1) and on re-entry (LoopError2), and the same for `until` when running backwards; and beyond Janus: `pop` and `srecv` into non-zero or non-empty destinations, empty stacks, indices and divisions, channel sessions. Every rule has an example in `test_error/`.
+At run time the VM checks, exactly as Janus does: the value of every `delocal`, the exit assertion of every `if` (forwards) and its entry guard (backwards), the `from` guard on entry (LoopError1) and on re-entry (LoopError2), and the same for `until` when running backwards; and beyond Janus: `pop` and `srecv` into non-zero or non-empty destinations, empty stacks, indices and divisions, channel sessions (including `ssend`/`srecv` outside any `par`, which can never meet a partner). Every rule has an example in `test_error/` (`make test-error`).
 
 ---
 

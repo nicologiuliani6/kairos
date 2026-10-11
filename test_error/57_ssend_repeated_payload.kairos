@@ -1,0 +1,15 @@
+// Errore di compilazione atteso: le variabili di un messaggio devono essere distinte.
+procedure main()
+    int x
+    int a
+    int b
+    channel c
+    x += 5
+    par
+        ssend(<x, x>, c)
+    and
+        srecv(<a, b>, c)
+    rap
+    show(a)
+    show(b)
+    show(x)

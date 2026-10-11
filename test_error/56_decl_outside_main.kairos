@@ -1,0 +1,12 @@
+// Errore di compilazione atteso: fuori da main le variabili si introducono con local/delocal.
+procedure p(int a)
+    int t
+    t += 1
+    a += t
+    show(t)
+
+procedure main()
+    int x
+    call p(x)
+    call p(x)
+    show(x)

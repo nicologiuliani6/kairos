@@ -15,10 +15,12 @@
 
 // --- carattere k-esimo della rotazione che parte da off --------------------
 //
-//  Il modulo non si scrive con l'operatore ma con un if: j e' una variabile
-//  locale che va riportata a zero, quindi la correzione j -= n deve poter
-//  essere disfatta, e per disfarla serve sapere se e' avvenuta. La guardia
-//  d'uscita j < off lo dice.
+//  Basterebbe c += blocco[((off + k) % n)], reversibile perche' l'indice dipende
+//  solo da variabili che il comando non tocca. Qui la correzione e' esplicita,
+//  per mostrare come si disfa un passo che perde informazione: j e' una
+//  variabile locale che va riportata a zero, quindi la correzione j -= n deve
+//  poter essere disfatta, e per disfarla serve sapere se e' avvenuta. La
+//  guardia d'uscita j < off lo dice.
 procedure car(int blocco[], int n, int off, int k, int c)
     local int j = 0
         j += off

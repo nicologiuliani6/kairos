@@ -1,0 +1,17 @@
+// Errore di compilazione atteso: il par raggiunto con la chiamata abbreviata f(x) e' vietato nel try.
+procedure two(int a, int b)
+    par
+        a += 1
+    and
+        b += 1
+    rap
+
+procedure main()
+    int a
+    int b
+    try a == 1
+        two(a, b)
+    rollback
+        b += 5
+    yrt a == 1
+    show(a)

@@ -32,7 +32,7 @@ YELLOW := \033[1;33m
 CYAN   := \033[0;36m
 RESET  := \033[0m
 
-.PHONY: all build build-release build-dap test-dap run test release release-app install-deps check-system check-deps check-pyinstaller clean help
+.PHONY: all build build-release build-dap test-dap run test test-error release release-app install-deps check-system check-deps check-pyinstaller clean help
 
 # Default: release (massima ottimizzazione).
 all: release
@@ -146,6 +146,23 @@ test: build-release
 		exit 1; \
 	fi
 
+# Ogni programma di test_error/ deve fermarsi con un errore etichettato
+# ([LEXER], [PARSER], [STATIC], [LOCAL], [VM]); quelli *_ok.kairos devono girare.
+test-error: build-release
+	@echo "$(CYAN)=== Programmi errati (test_error/) ===$(RESET)"
+	@passed=0; failed=0; \
+	for f in test_error/*.kairos; do \
+		name=$$(basename $$f); \
+		output=$$(timeout 20s $(PYTHON) -m src.kairos $$f 2>&1); \
+		if echo "$$output" | grep -qE "^\[(LEXER|PARSER|STATIC|LOCAL|VM)\]"; then got=err; else got=ok; fi; \
+		case $$name in *_ok.kairos) want=ok;; *) want=err;; esac; \
+		if [ $$got = $$want ]; then passed=$$((passed+1)); \
+		else echo "  $(RED)FAIL$(RESET)  $$name (atteso $$want)"; failed=$$((failed+1)); fi; \
+	done; \
+	rm -f bytecode.txt; \
+	echo "$(CYAN)Risultati: $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
+	[ $$failed -eq 0 ]
+
 # PyInstaller standalone app (rinominato da `release` per non confondersi con la build libvm).
 release-app: release check-pyinstaller
 	@echo "$(CYAN)Build KairosApp standalone (PyInstaller)...$(RESET)"
@@ -217,6 +234,7 @@ help:
 	@echo "  $(GREEN)make test-dap$(RESET)                 Test C debugger (pipe + loop lungo)"
 	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)       Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
 	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + lossless/"
+	@echo "  $(GREEN)make test-error$(RESET)               test_error/: ogni programma si ferma con il suo errore"
 	@echo "  $(GREEN)make release-app$(RESET)              Build KairosApp standalone con PyInstaller"
 	@echo "  $(GREEN)make check-system$(RESET)             Controlla i requisiti di sistema (gcc, make, python3-venv)"
 	@echo "  $(GREEN)make install-deps$(RESET)             Controlla i requisiti, crea il venv e installa le dipendenze"

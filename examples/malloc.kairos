@@ -73,9 +73,7 @@ procedure mem_reset(stack cell, stack garbage)
 
 // --- ESEMPIO D'USO ---
 
-procedure test_malloc()
-    stack garbage
-    stack idx_stack
+procedure test_malloc(stack garbage, stack idx_stack)
     local channel ch = empty
     local stack cell1 = nil
     local stack cell2 = nil
@@ -138,5 +136,7 @@ procedure test_malloc()
     show(garbage)
 
 procedure main()
-    call test_malloc()
-    uncall test_malloc()
+    stack garbage
+    stack idx_stack
+    call test_malloc(garbage, idx_stack)
+    uncall test_malloc(garbage, idx_stack)

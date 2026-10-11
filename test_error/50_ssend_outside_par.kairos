@@ -1,0 +1,7 @@
+// Errore VM atteso (stallo): fuori da un par c'e' un solo thread e nessun
+// partner potra' mai ricevere.
+procedure main()
+    channel c
+    int x
+    x += 1
+    ssend(<x>, c)

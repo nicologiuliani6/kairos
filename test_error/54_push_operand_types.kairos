@@ -1,0 +1,6 @@
+// Errore di compilazione atteso: push vuole una variabile intera e uno stack.
+procedure main()
+    channel c
+    stack s
+    push(c, s)
+    show(s)

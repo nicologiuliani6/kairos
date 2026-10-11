@@ -239,7 +239,10 @@ def p_delocal(p):
         p[0] = ('delocal', p[2], p[3], p[5], p.lineno(1))
         if VERBOSE: print(f"delocal: {p[3]} ({p[2]}) = {p[5]}")
     else:
-        p[0] = ('delocal', p[2], p[3], None, p.lineno(1))
+        # Come in Janus il delocal dice il valore atteso: e' cio' che rende
+        # l'allocazione invertibile.
+        raise KairosCompileError(
+            "PARSER", f"riga {p.lineno(1)}: delocal {p[2]} {p[3]} senza il valore atteso")
         if VERBOSE: print(f"delocal: {p[3]} ({p[2]})")
 
 # ── Liste argomenti ─────────────────────────────────────────────────────────
@@ -1152,6 +1155,94 @@ def _check_callees_defined(stmts, procs):
                 _check_callees_defined(b, procs)
 
 
+def _kind(t):
+    """Categoria di un tipo dichiarato: int, array, stack o channel."""
+    if t is None:
+        return None
+    return 'array' if t.startswith('array') else t
+
+
+def _check_expr_types(e, declared, ln):
+    """In un'espressione una variabile e' un intero; un array si legge solo
+    cella per cella."""
+    if isinstance(e, tuple) and e and e[0] == 'binop':
+        _check_expr_types(e[2], declared, ln)
+        _check_expr_types(e[3], declared, ln)
+    elif isinstance(e, tuple) and e and e[0] == 'index':
+        if _kind(declared.get(e[1])) != 'array':
+            raise KairosCompileError("STATIC", f"riga {ln}: '{e[1]}' non e' un array")
+        _check_expr_types(e[2], declared, ln)
+    elif isinstance(e, str) and not _is_number_literal(e) and e.lower() not in ('nil', 'empty'):
+        k = _kind(declared.get(e))
+        if k not in (None, 'int'):
+            raise KairosCompileError(
+                "STATIC", f"riga {ln}: '{e}' e' {k}, in un'espressione serve un intero")
+
+
+def _check_types(stmts, declared, proc_name):
+    """Tipi degli operandi: espressioni intere, push/pop fra un intero e uno
+    stack, ssend/srecv con payload distinti su un canale; le dichiarazioni
+    senza local valgono solo in main."""
+    for x in stmts or []:
+        if not isinstance(x, tuple) or not x:
+            continue
+        tag, ln = x[0], x[-1]
+        if tag == 'decl' and proc_name != 'main':
+            raise KairosCompileError(
+                "STATIC", f"riga {ln}: '{x[1]} {x[2]}' in {proc_name}: fuori da main le "
+                "variabili si introducono con local/delocal")
+        elif tag == 'assign':
+            _, lv, op, e, _ = x
+            for side in [lv] + ([e] if op == '<=>' else []):
+                if isinstance(side, str) and _kind(declared.get(side)) not in (None, 'int'):
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: '{side}' non e' un intero")
+                _check_expr_types(side, declared, ln)
+            if op != '<=>':
+                _check_expr_types(e, declared, ln)
+        elif tag in ('local', 'delocal'):
+            if x[3] is not None and _kind(x[1]) in ('int', 'array'):
+                _check_expr_types(x[3], declared, ln)
+        elif tag == 'call_direct':
+            name, args = x[1].lower(), x[2]
+            if name in ('push', 'pop'):
+                if len(args) != 2:
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: {name} vuole due argomenti, una variabile e uno stack")
+                if _kind(declared.get(args[0])) != 'int' or _kind(declared.get(args[1])) != 'stack':
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: {name}({args[0]}, {args[1]}): il primo argomento "
+                        "e' una variabile intera, il secondo uno stack")
+            elif name in ('ssend', 'srecv'):
+                payload, ch = args[:-1], args[-1] if args else None
+                if _kind(declared.get(ch)) != 'channel':
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: {name}: '{ch}' non e' un canale")
+                if len(set(payload)) != len(payload):
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: {name}: le variabili del messaggio devono essere distinte")
+                for v in payload:
+                    if _kind(declared.get(v)) not in ('int', 'stack', 'channel'):
+                        raise KairosCompileError(
+                            "STATIC", f"riga {ln}: {name}: '{v}' non si puo' spedire "
+                            "(un messaggio porta interi, stack o canali)")
+        elif tag == 'if':
+            for c in (x[1], x[4]):
+                _check_expr_types(c[2], declared, ln)
+                _check_expr_types(c[3], declared, ln)
+            _check_types(x[2], declared, proc_name)
+            _check_types(x[3], declared, proc_name)
+        elif tag == 'from':
+            for c in (x[1], x[3]):
+                _check_expr_types(c[2], declared, ln)
+                _check_expr_types(c[3], declared, ln)
+            _check_types(x[2], declared, proc_name)
+            _check_types(from_second_body(x), declared, proc_name)
+        elif tag == 'par':
+            for b in x[1]:
+                _check_types(b, declared, proc_name)
+
+
 def _run_static_checks_body(program_ast):
     procedures = program_ast[1] if len(program_ast) > 1 else []
     proc_signatures = {}
@@ -1177,6 +1268,7 @@ def _run_static_checks_body(program_ast):
         body = proc[3] or []
         _check_local_blocks(body, proc[1], tuple(pn for _pt, pn in (proc[2] or [])))
         _check_callees_defined(body, proc_signatures)
+        _check_types(body, declared_types, proc[1])
         for stmt in body:
             _check_stmt_reversibility(
                 stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
@@ -1361,7 +1453,7 @@ def _desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache):
         try_name = f"__try_body_{uid}"
         fv_body = sorted(_try_free_vars(body))
         new_procs.append(('procedure', try_name,
-                          [('int', v) for v in fv_body], body, ln))
+                          [(_try_param_type(v), v) for v in fv_body], body, ln))
         else_body = [('uncall', try_name, list(fv_body), ln)]
         if rb_body is not None:
             rb_body = _desugar_stmts(rb_body, new_procs, counter, proc_bodies, ssend_srecv_cache)
@@ -1369,7 +1461,7 @@ def _desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache):
             rb_name = f"__try_rb_{uid}"
             fv_rb = sorted(_try_free_vars(rb_body))
             new_procs.append(('procedure', rb_name,
-                              [('int', v) for v in fv_rb], rb_body, ln))
+                              [(_try_param_type(v), v) for v in fv_rb], rb_body, ln))
             else_body.append(('call', rb_name, list(fv_rb), ln))
         # entry_cond decide il commit (valutata dopo il body); exit_cond è
         # l'asserzione del `fi`: vera dopo il commit, falsa dopo il rollback.
@@ -1378,6 +1470,66 @@ def _desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache):
             ('if', entry_cond, [], else_body, exit_cond, ln),
         ]
     return [s]
+
+
+# Tipi delle variabili della procedura che contiene il try in corso di
+# riscrittura: i parametri delle procedure sintetiche hanno il tipo vero
+# delle variabili libere (uno stack resta uno stack per i controlli sul par).
+_try_declared = {}
+
+
+def _try_param_type(v):
+    t = _try_declared.get(v, 'int')
+    return 'array' if t.startswith('array') else t
+
+
+def _normalize_calls(procedures):
+    """`f(x)` verso una procedura del programma diventa `call f(x)`, cosi' ogni
+    controllo su call vale anche per la forma abbreviata; un nome che non e'
+    ne' procedura ne' builtin e' un errore. I nomi delle builtin e i suffissi
+    usati dal compilatore (`__inv`, `__try_`) non sono nomi di procedura."""
+    names = set()
+    for proc in procedures:
+        if isinstance(proc, tuple) and proc and proc[0] == 'procedure':
+            n = proc[1]
+            if n.lower() in _BUILTIN_CALL_OPCODES or n.endswith('__inv') or n.startswith('__try_'):
+                raise KairosCompileError(
+                    "STATIC", f"'{n}' non e' un nome di procedura ammesso "
+                    "(builtin o nome riservato al compilatore)")
+            names.add(n)
+
+    def stmts(lst):
+        return [stmt(x) for x in lst] if lst is not None else lst
+
+    def stmt(x):
+        if not isinstance(x, tuple) or not x:
+            return x
+        tag = x[0]
+        if tag == 'call_direct':
+            if x[1] in names:
+                return ('call', x[1], x[2], x[3])
+            if x[1].lower() not in _BUILTIN_CALL_OPCODES:
+                raise KairosCompileError(
+                    "STATIC", f"riga {x[3]}: '{x[1]}' non e' una procedura del programma "
+                    "ne' una builtin")
+            return x
+        if tag == 'if':
+            return ('if', x[1], stmts(x[2]), stmts(x[3]), x[4], x[5])
+        if tag == 'from':
+            y = list(x)
+            y[2] = stmts(x[2])
+            if len(x) >= 7:
+                y[6] = stmts(x[6])
+            return tuple(y)
+        if tag == 'par':
+            return ('par', [stmts(b) for b in x[1]], x[2])
+        if tag == 'try':
+            return ('try', x[1], stmts(x[2]), stmts(x[3]), x[4], x[5])
+        return x
+
+    return [('procedure', p[1], p[2], stmts(p[3]), *p[4:])
+            if isinstance(p, tuple) and p and p[0] == 'procedure' else p
+            for p in procedures]
 
 
 def desugar_try(program_ast):
@@ -1389,7 +1541,7 @@ def desugar_try(program_ast):
     """
     if not program_ast or program_ast[0] != 'program':
         return program_ast
-    procedures = program_ast[1] if len(program_ast) > 1 else []
+    procedures = _normalize_calls(program_ast[1] if len(program_ast) > 1 else [])
     # Mappa nome->corpo ORIGINALE (pre-desugar) di tutte le procedure del
     # programma: serve a _try_assert_no_forbidden per seguire call/uncall
     # transitivamente e vietare ssend/srecv raggiunti indirettamente dentro
@@ -1414,6 +1566,8 @@ def desugar_try(program_ast):
         # che le usa (l'ordine nel file non conta: main parte dopo la prima
         # passata).
         new_procs = []
+        global _try_declared
+        _try_declared = _collect_declared_types(proc)
         new_body = _desugar_stmts(body, new_procs, counter, proc_bodies, ssend_srecv_cache)
         out_procs.extend(new_procs)
         out_procs.append(('procedure', name, params, new_body, ln))

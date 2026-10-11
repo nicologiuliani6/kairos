@@ -1,0 +1,6 @@
+// Errore di compilazione atteso: f(x) nomina una procedura che non esiste.
+procedure main()
+    int x
+    x += 1
+    foo(x)
+    show(x)

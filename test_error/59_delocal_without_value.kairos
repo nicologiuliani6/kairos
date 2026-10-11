@@ -1,0 +1,8 @@
+// Errore di compilazione atteso: delocal dice sempre il valore atteso.
+procedure main()
+    local int x = 0
+    local stack s = nil
+    x += 3
+    x -= 3
+    delocal stack s
+    delocal int x

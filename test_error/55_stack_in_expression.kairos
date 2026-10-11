@@ -1,0 +1,7 @@
+// Errore di compilazione atteso: uno stack non e' un intero.
+procedure main()
+    int x
+    stack s
+    x += 3
+    x += s
+    show(x)

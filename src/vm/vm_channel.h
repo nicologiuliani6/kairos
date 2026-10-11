@@ -77,6 +77,10 @@ static inline void clear_blocked(ThreadArgs *ta)
 
 static inline int op_wait(Channel *ch, int is_send)
 {
+    /* Fuori da un par c'e' un solo thread: nessun partner potra' mai arrivare. */
+    if (!current_thread_args)
+        vm_debug_panic("[VM] SESSIONE: stallo, %s fuori da un par: nessun partner "
+                       "puo' arrivare\n", is_send ? "ssend" : "srecv");
     /* Prima di bloccarci, svegliamo l'eventuale sender pendente */
     if (!is_send && current_thread_args && current_thread_args->sender_to_notify) {
         ThreadArgs *s = current_thread_args->sender_to_notify;

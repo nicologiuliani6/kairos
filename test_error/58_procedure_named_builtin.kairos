@@ -1,0 +1,6 @@
+// Errore di compilazione atteso: show e' una builtin, non un nome di procedura.
+procedure show(int a)
+    a += 1
+procedure main()
+    int x
+    show(x)
