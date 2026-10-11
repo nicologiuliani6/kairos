@@ -181,64 +181,68 @@ static inline int token_len(const char *p)
     return i > 0 ? i : 1;
 }
 
+static inline int64_t apply_binop(char op, int64_t lval, int64_t rval)
+{
+    /* Interi a 64 bit in complemento a due: + - * modulo 2^64 (in C
+       l'overflow con segno non e' definito, quindi si calcola senza segno). */
+    if (op == '+') return (int64_t)((uint64_t)lval + (uint64_t)rval);
+    if (op == '-') return (int64_t)((uint64_t)lval - (uint64_t)rval);
+    if (op == '*') return (int64_t)((uint64_t)lval * (uint64_t)rval);
+    if (op == '/' || op == '%') {
+        if (rval == 0)
+            vm_debug_panic("[VM] Div-Err: divisione per zero (%lld %c 0)\n",
+                           (long long)lval, op);
+        if (rval == -1)   /* INT64_MIN / -1 trabocca: anche qui modulo 2^64 */
+            return op == '/' ? (int64_t)(0 - (uint64_t)lval) : 0;
+        return op == '/' ? lval / rval : lval % rval;
+    }
+    /* Confronti e connettivi, come in Janus: 1 vero, 0 falso. Il frontend
+       codifica gli operatori di due caratteri in uno: = # { } & | */
+    if (op == '=') return lval == rval;
+    if (op == '#') return lval != rval;
+    if (op == '<') return lval <  rval;
+    if (op == '>') return lval >  rval;
+    if (op == '{') return lval <= rval;
+    if (op == '}') return lval >= rval;
+    if (op == '&') return (lval != 0) && (rval != 0);
+    if (op == '|') return (lval != 0) || (rval != 0);
+    vm_debug_panic("[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
+    return 0;
+}
+
+/* Valuta l'espressione che comincia in *pp e avanza *pp oltre la sua fine.
+ * Lavora sul testo senza copiarlo: lo stack del C cresce solo con
+ * l'annidamento delle parentesi, non con la lunghezza dell'espressione. */
+static int64_t eval_expr_at(VM *vm, uint fi, const char **pp)
+{
+    const char *p = *pp;
+    while (*p == ' ') p++;
+    if (*p == '(') {
+        p++;
+        int64_t lval = eval_expr_at(vm, fi, &p);
+        while (*p == ' ') p++;
+        char op = *p ? *p++ : '\0';
+        int64_t rval = eval_expr_at(vm, fi, &p);
+        while (*p == ' ') p++;
+        if (*p == ')') p++;
+        *pp = p;
+        return apply_binop(op, lval, rval);
+    }
+    /* atomo: numero (anche negativo), variabile o cella a[...] */
+    int len = (*p == '-') ? 1 + token_len(p + 1) : token_len(p);
+    char small[64];
+    char *atom = (len < (int)sizeof small) ? small : (char *)malloc((size_t)len + 1);
+    if (!atom) vm_debug_panic("[VM] memoria esaurita\n");
+    memcpy(atom, p, (size_t)len); atom[len] = '\0';
+    int64_t v = resolve_atom(vm, fi, atom);
+    if (atom != small) free(atom);
+    *pp = p + len;
+    return v;
+}
+
 static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 {
-    /* Salta spazi iniziali */
-    while (*tok == ' ') tok++;
-
-    /* Espressione parentesizzata: (left op right) */
-    if (*tok == '(') {
-        /* Salta '(' iniziale */
-        const char *inner = tok + 1;
-        while (*inner == ' ') inner++;
-
-        /* Leggi left operand */
-        int llen = token_len(inner);
-        char left[llen + 1]; memcpy(left, inner, (size_t)llen); left[llen] = '\0';
-        int64_t lval = resolve_expr(vm, fi, left);
-
-        /* Salta l'operand e spazi */
-        const char *after_left = inner + llen;
-        while (*after_left == ' ') after_left++;
-
-        /* Leggi operatore */
-        char op = *after_left;
-        const char *after_op = after_left + 1;
-        while (*after_op == ' ') after_op++;
-
-        /* Leggi right operand (fino alla ')' di chiusura) */
-        int rlen = token_len(after_op);
-        char right[rlen + 1]; memcpy(right, after_op, (size_t)rlen); right[rlen] = '\0';
-        int64_t rval = resolve_expr(vm, fi, right);
-
-        /* Interi a 64 bit in complemento a due: + - * modulo 2^64 (in C
-           l'overflow con segno non e' definito, quindi si calcola senza segno). */
-        if (op == '+') return (int64_t)((uint64_t)lval + (uint64_t)rval);
-        if (op == '-') return (int64_t)((uint64_t)lval - (uint64_t)rval);
-        if (op == '*') return (int64_t)((uint64_t)lval * (uint64_t)rval);
-        if (op == '/' || op == '%') {
-            if (rval == 0)
-                vm_debug_panic("[VM] Div-Err: divisione per zero (%lld %c 0)\n",
-                               (long long)lval, op);
-            if (rval == -1)   /* INT64_MIN / -1 trabocca: anche qui modulo 2^64 */
-                return op == '/' ? (int64_t)(0 - (uint64_t)lval) : 0;
-            return op == '/' ? lval / rval : lval % rval;
-        }
-        /* Confronti e connettivi, come in Janus: 1 vero, 0 falso. Il frontend
-           codifica gli operatori di due caratteri in uno: = # { } & | */
-        if (op == '=') return lval == rval;
-        if (op == '#') return lval != rval;
-        if (op == '<') return lval <  rval;
-        if (op == '>') return lval >  rval;
-        if (op == '{') return lval <= rval;
-        if (op == '}') return lval >= rval;
-        if (op == '&') return (lval != 0) && (rval != 0);
-        if (op == '|') return (lval != 0) || (rval != 0);
-        vm_debug_panic("[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
-    }
-
-    /* Atom semplice */
-    return resolve_atom(vm, fi, tok);
+    return eval_expr_at(vm, fi, &tok);
 }
 
 static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)

@@ -1,0 +1,15 @@
+// Errore VM atteso: uno stack ricevuto va in uno stack.
+procedure main()
+    channel c
+    channel d
+    stack s
+    int x
+    x += 3
+    push(x, s)
+    par
+        ssend(<s>, c)
+    and
+        srecv(<d>, c)
+    rap
+    show(s)
+    show(d)

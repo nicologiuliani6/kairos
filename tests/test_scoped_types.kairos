@@ -1,0 +1,14 @@
+// Lo stesso nome puo' essere un intero in un blocco e uno stack in un altro:
+// i tipi seguono gli scope.
+procedure main()
+    local int x = 1
+    x += 1
+    show(x)
+    x -= 1
+    delocal int x = 1
+    local stack x = nil
+    int k
+    k += 3
+    push(k, x)
+    pop(k, x)
+    delocal stack x = nil

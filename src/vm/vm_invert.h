@@ -1173,10 +1173,13 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 i = (t >= 0) ? t - 1 : i - 1;
                 continue;
             }
+            /* in un ramo di par la pila dei local e' del ramo: quella del
+             * frame, condivisa coi fratelli, non si tocca */
+            int own = !(g_branch_locals && fi == g_branch_locals_fi);
             Stack sv = vm->frames[fi]->LocalVariables;
-            stack_init(&vm->frames[fi]->LocalVariables);
+            if (own) stack_init(&vm->frames[fi]->LocalVariables);
             exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to);
-            stack_restore(&vm->frames[fi]->LocalVariables, sv);
+            if (own) stack_restore(&vm->frames[fi]->LocalVariables, sv);
             check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
             int t = -1;
             for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
@@ -1494,11 +1497,16 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     int _vcap = vm->frames[cfi]->vars_cap > 0 ? vm->frames[cfi]->vars_cap : 1;
     Var **saved = (Var **)malloc(sizeof(Var *) * (size_t)_vcap);
     memcpy(saved, vm->frames[cfi]->vars, sizeof(Var *) * (size_t)_vcap);
+    /* In un ramo di par il frame e' condiviso con i rami fratelli: la pila dei
+     * local del ramo e' gia' sua (frame_locals) e gli slot del frame non si
+     * toccano, perche' un fratello puo' aprire o chiudere un local nello
+     * stesso momento. */
+    int in_branch = g_branch_locals && cfi == g_branch_locals_fi;
     Stack saved_lv = vm->frames[cfi]->LocalVariables;
-    stack_init(&vm->frames[cfi]->LocalVariables);
+    if (!in_branch) stack_init(&vm->frames[cfi]->LocalVariables);
 
     Var **tmp_alloc = (Var **)calloc((size_t)_vcap, sizeof(Var *));
-    for (int v = 0; v < vm->frames[cfi]->var_count; v++) {
+    for (int v = 0; !in_branch && v < vm->frames[cfi]->var_count; v++) {
         if (!vm->frames[cfi]->vars[v]) {
             vm->frames[cfi]->vars[v]        = calloc(1, sizeof(Var));
             vm->frames[cfi]->vars[v]->T     = TYPE_INT;
@@ -1598,10 +1606,11 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                     bt = ifs[matched].fi_label_line;
                 }
                 if (bf < bt) {
+                    int own = !(g_branch_locals && cfi == g_branch_locals_fi);
                     Stack sv2 = vm->frames[cfi]->LocalVariables;
-                    stack_init(&vm->frames[cfi]->LocalVariables);
+                    if (own) stack_init(&vm->frames[cfi]->LocalVariables);
                     exec_branch_inverse(vm, original_buffer, frame_name, bf, bt);
-                    stack_restore(&vm->frames[cfi]->LocalVariables, sv2);
+                    if (own) stack_restore(&vm->frames[cfi]->LocalVariables, sv2);
                 }
                 /* Jump idx a prima dell'EVAL del nested IF. */
                 int t = -1;
@@ -1701,12 +1710,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     /* Ripristina solo gli slot dei parametri. Gli altri restano come il ramo
      * li ha lasciati: op_local/op_delocal liberano e riallocano le Var, e
      * reinstaurare il vecchio puntatore ne userebbe uno già liberato. */
-    for (int p = 0; p < vm->frames[cfi]->param_count; p++) {
+    for (int p = 0; !in_branch && p < vm->frames[cfi]->param_count; p++) {
         int pidx = vm->frames[cfi]->param_indices[p];
         if (pidx < _vcap)
             vm->frames[cfi]->vars[pidx] = saved[pidx];
     }
-    stack_restore(&vm->frames[cfi]->LocalVariables, saved_lv);
+    if (!in_branch) stack_restore(&vm->frames[cfi]->LocalVariables, saved_lv);
     free(saved);
     free(tmp_alloc);
 }

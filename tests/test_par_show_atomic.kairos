@@ -1,0 +1,37 @@
+// Due rami stampano insieme stack lunghi: ogni show esce come una riga intera.
+procedure main()
+    stack s1
+    stack s2
+    par
+        local int t1 = 0
+        local int i1 = 0
+        from i1 == 0 do
+            t1 += 7
+            push(t1, s1)
+            i1 += 1
+        loop until i1 == 60
+        delocal int i1 = 60
+        local int j1 = 0
+        from j1 == 0 do
+            show(s1)
+            j1 += 1
+        loop until j1 == 300
+        delocal int j1 = 300
+        delocal int t1 = 0
+    and
+        local int t2 = 0
+        local int i2 = 0
+        from i2 == 0 do
+            t2 += 9
+            push(t2, s2)
+            i2 += 1
+        loop until i2 == 60
+        delocal int i2 = 60
+        local int j2 = 0
+        from j2 == 0 do
+            show(s2)
+            j2 += 1
+        loop until j2 == 300
+        delocal int j2 = 300
+        delocal int t2 = 0
+    rap

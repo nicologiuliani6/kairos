@@ -1,0 +1,30 @@
+// Errore di compilazione atteso: un argomento ha lo stesso tipo del parametro (qui uno stack per un int).
+procedure f(int x, int y)
+    y += x
+
+procedure dirt()
+    local stack d = nil
+    local int t = 0
+    local int i = 0
+    from i == 0 do
+        t += 123456789
+        push(t, d)
+        i += 1
+    loop until i == 20
+    delocal int i = 20
+    local int u = 0
+    from u == 0 do
+        pop(t, d)
+        t -= 123456789
+        u += 1
+    loop until u == 20
+    delocal int u = 20
+    delocal int t = 0
+    delocal stack d = nil
+
+procedure main()
+    call dirt()
+    stack s
+    int r
+    f(s, r)
+    show(r)

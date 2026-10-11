@@ -1,0 +1,50 @@
+// uncall di un par con if e local nei rami, dentro cicli: ogni ramo disfa i
+// propri local senza toccare gli slot del frame che condivide coi fratelli.
+procedure p(int x, int y, int k)
+    par
+        local int i = 0
+        from i == 0 do
+            local int t = 0
+            t += 1
+            if x > 0 then
+                local int u = 0
+                u += 1
+                u -= 1
+                delocal int u = 0
+            else
+                skip
+            fi x > 0
+            t -= 1
+            delocal int t = 0
+            i += 1
+        loop until i == 50
+        delocal int i = 50
+    and
+        local int j = 0
+        from j == 0 do
+            local int s = 0
+            s += 1
+            if y > 0 then
+                local int v = 0
+                v += 1
+                v -= 1
+                delocal int v = 0
+            else
+                skip
+            fi y > 0
+            s -= 1
+            delocal int s = 0
+            j += 1
+        loop until j == 50
+        delocal int j = 50
+    rap
+
+procedure main()
+    int x
+    int y
+    int k
+    x += 1
+    y += 1
+    call p(x, y, k)
+    uncall p(x, y, k)
+    show(x)

@@ -107,6 +107,10 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t]->done_cond   = &done_cond;
         args[t]->is_inverse  = is_inverse;
         args[t]->frame_name  = char_id_strdup(frame_name);
+        size_t pl = strlen(g_branch_path) + 24;
+        args[t]->branch_path = (char *)malloc(pl);
+        if (!args[t]->branch_path) vm_debug_panic("[VM] PAR: memoria esaurita\n");
+        snprintf(args[t]->branch_path, pl, "%s/%d", g_branch_path, t);
     }
 
     /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
@@ -164,6 +168,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     for (int t = 0; t < pb->count; t++) {
         pthread_join(args[t]->tid, NULL);
         free(args[t]->frame_name);
+        free(args[t]->branch_path);
         free(args[t]);
     }
     free(args);
@@ -180,6 +185,7 @@ static void *thread_entry(void *arg)
     VM         *vm   = args->vm;
     const char *fname = args->frame_name;   /* vive quanto il thread */
     current_thread_args = args;
+    g_branch_path = args->branch_path;
     session_thread_begin();   /* vm_session.h */
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
     Stack branch_locals;

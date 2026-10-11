@@ -1,0 +1,43 @@
+// Due attivazioni concorrenti della stessa procedura delegano un canale locale:
+// l'uncall restituisce a ciascuna il proprio canale.
+procedure w(channel c1, int z)
+    local channel d = empty
+        ssend(<d>, c1)
+        ssend(<z>, d)
+    delocal channel d = empty
+
+procedure r(channel c1, int y)
+    local channel e = empty
+        srecv(<e>, c1)
+        srecv(<y>, e)
+    delocal channel e = empty
+
+procedure pair(channel c1, int z, int y)
+    par
+        call w(c1, z)
+    and
+        call r(c1, y)
+    rap
+
+procedure both(channel ca, channel cb, int z1, int y1, int z2, int y2)
+    par
+        call pair(ca, z1, y1)
+    and
+        call pair(cb, z2, y2)
+    rap
+
+procedure main()
+    channel ca
+    channel cb
+    int z1
+    int z2
+    int y1
+    int y2
+    z1 += 1
+    z2 += 2
+    call both(ca, cb, z1, y1, z2, y2)
+    show(y1)
+    show(y2)
+    uncall both(ca, cb, z1, y1, z2, y2)
+    show(z1)
+    show(z2)

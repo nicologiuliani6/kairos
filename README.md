@@ -164,7 +164,7 @@ In `main` a declaration without `local` (`int x`, `stack s`, `channel c`) create
 
 ```kairos
 local int x = 0
-local int y = x          // y starts from the current value of x
+local int y = x          // y starts from the current value of x (ints only)
 local stack s = nil
 local channel c = empty
 ...
@@ -327,7 +327,7 @@ Branches share the frame but not writable memory; each branch has its own stack 
 
 ### `show`
 
-Output is not part of the store, so it does not affect reversibility, but it is observable: `show` is its own inverse, so `uncall` prints again, in reverse order (`n_k … n_1` for a forward `n_1 … n_k`).
+Output is not part of the store, so it does not affect reversibility, but it is observable: `show` is its own inverse, so `uncall` prints again, in reverse order (`n_k … n_1` for a forward `n_1 … n_k`). Each `show` prints its whole line even when two `par` branches print at the same time.
 
 ```kairos
 show(x)          // "x: 42"  (int, stack, channel, array)
@@ -350,7 +350,7 @@ The frontend rejects with `[STATIC]` / `[LOCAL]`:
 - two procedures with the same name, a `main` with parameters, or a procedure named like a builtin (`show`, `push`, `pop`, `ssend`, `srecv`) or with a name the compiler reserves (`…__inv`, `__try_…`);
 - a declaration without `local` (`int x`, `stack s`, `channel c`) outside `main`;
 - a `delocal` without its expected value;
-- operands of the wrong type: a stack, channel or whole array inside an expression; `push`/`pop` not between an `int` variable and a stack; `ssend`/`srecv` on something that is not a channel, with a payload that is not made of distinct `int`s, stacks or channels;
+- operands of the wrong type, following the declaration in scope (a name may be an `int` in one block and a stack in another): a stack, channel or whole array inside an expression; a `call`/`uncall` argument whose type differs from the parameter; `push`/`pop` not between an `int` variable and a stack; `ssend`/`srecv` on something that is not a channel, with a payload that is not made of distinct `int`s, stacks or channels; a `local`/`delocal` value that is not an integer for `int` and arrays, `nil` for a stack, `empty` for a channel;
 - a literal that does not fit in 64 bits;
 - a `delocal` whose type differs from its `local`;
 - a variable used but not declared (parameter, declaration or open local);

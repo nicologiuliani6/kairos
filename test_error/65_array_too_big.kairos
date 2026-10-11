@@ -1,0 +1,5 @@
+// Errore VM atteso: array troppo grande per la memoria.
+procedure main()
+    local int a[2305843009213693952] = 0
+    show(a)
+    delocal int a[2305843009213693952] = 0

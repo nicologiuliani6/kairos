@@ -1,0 +1,5 @@
+// Errore di compilazione atteso: nil non e' un valore intero.
+procedure main()
+    local int a = nil
+    a += 3
+    delocal int a = empty

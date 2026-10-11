@@ -1172,75 +1172,103 @@ def _check_expr_types(e, declared, ln):
         if _kind(declared.get(e[1])) != 'array':
             raise KairosCompileError("STATIC", f"riga {ln}: '{e[1]}' non e' un array")
         _check_expr_types(e[2], declared, ln)
-    elif isinstance(e, str) and not _is_number_literal(e) and e.lower() not in ('nil', 'empty'):
+    elif isinstance(e, str) and not _is_number_literal(e):
+        if e.lower() in ('nil', 'empty'):
+            raise KairosCompileError(
+                "STATIC", f"riga {ln}: '{e}' e' il valore di uno stack o di un canale, "
+                "qui serve un intero")
         k = _kind(declared.get(e))
         if k not in (None, 'int'):
             raise KairosCompileError(
                 "STATIC", f"riga {ln}: '{e}' e' {k}, in un'espressione serve un intero")
 
 
-def _check_types(stmts, declared, proc_name):
-    """Tipi degli operandi: espressioni intere, push/pop fra un intero e uno
-    stack, ssend/srecv con payload distinti su un canale; le dichiarazioni
-    senza local valgono solo in main."""
+def _check_types(stmts, env, proc_name, signatures):
+    """Tipi degli operandi, con gli scope veri (un nome puo' essere int in un
+    blocco e stack in un altro): espressioni intere, argomenti di una call
+    dello stesso tipo dei parametri, push/pop fra un intero e uno stack,
+    ssend/srecv su un canale con payload distinti, valore di local/delocal
+    del tipo della variabile; le dichiarazioni senza local valgono solo in
+    main. `env` mappa i nomi in scope al loro tipo."""
+    env = dict(env)
     for x in stmts or []:
         if not isinstance(x, tuple) or not x:
             continue
         tag, ln = x[0], x[-1]
-        if tag == 'decl' and proc_name != 'main':
-            raise KairosCompileError(
-                "STATIC", f"riga {ln}: '{x[1]} {x[2]}' in {proc_name}: fuori da main le "
-                "variabili si introducono con local/delocal")
+        if tag == 'decl':
+            if proc_name != 'main':
+                raise KairosCompileError(
+                    "STATIC", f"riga {ln}: '{x[1]} {x[2]}' in {proc_name}: fuori da main le "
+                    "variabili si introducono con local/delocal")
+            env[x[2]] = x[1]
         elif tag == 'assign':
             _, lv, op, e, _ = x
             for side in [lv] + ([e] if op == '<=>' else []):
-                if isinstance(side, str) and _kind(declared.get(side)) not in (None, 'int'):
+                if isinstance(side, str) and _kind(env.get(side)) not in (None, 'int'):
                     raise KairosCompileError(
                         "STATIC", f"riga {ln}: '{side}' non e' un intero")
-                _check_expr_types(side, declared, ln)
+                _check_expr_types(side, env, ln)
             if op != '<=>':
-                _check_expr_types(e, declared, ln)
+                _check_expr_types(e, env, ln)
         elif tag in ('local', 'delocal'):
-            if x[3] is not None and _kind(x[1]) in ('int', 'array'):
-                _check_expr_types(x[3], declared, ln)
+            k, val = _kind(x[1]), x[3]
+            if k in ('int', 'array'):
+                _check_expr_types(val, env, ln)
+            elif k == 'stack' and val != 'nil':
+                raise KairosCompileError(
+                    "STATIC", f"riga {ln}: {tag} stack {x[2]}: il valore e' nil (stack vuoto)")
+            elif k == 'channel' and val != 'empty':
+                raise KairosCompileError(
+                    "STATIC", f"riga {ln}: {tag} channel {x[2]}: il valore e' empty")
+            if tag == 'local':
+                env[x[2]] = x[1]
+            else:
+                env.pop(x[2], None)
+        elif tag in ('call', 'uncall'):
+            params = signatures.get(x[1], [])
+            for a, pt in zip(x[2], params):
+                ka, kp = _kind(env.get(a)), _kind(pt)
+                if ka is not None and ka != kp:
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: {x[1]}: '{a}' e' {ka}, il parametro e' {kp}")
         elif tag == 'call_direct':
             name, args = x[1].lower(), x[2]
             if name in ('push', 'pop'):
                 if len(args) != 2:
                     raise KairosCompileError(
                         "STATIC", f"riga {ln}: {name} vuole due argomenti, una variabile e uno stack")
-                if _kind(declared.get(args[0])) != 'int' or _kind(declared.get(args[1])) != 'stack':
+                if _kind(env.get(args[0])) != 'int' or _kind(env.get(args[1])) != 'stack':
                     raise KairosCompileError(
                         "STATIC", f"riga {ln}: {name}({args[0]}, {args[1]}): il primo argomento "
                         "e' una variabile intera, il secondo uno stack")
             elif name in ('ssend', 'srecv'):
                 payload, ch = args[:-1], args[-1] if args else None
-                if _kind(declared.get(ch)) != 'channel':
+                if _kind(env.get(ch)) != 'channel':
                     raise KairosCompileError(
                         "STATIC", f"riga {ln}: {name}: '{ch}' non e' un canale")
                 if len(set(payload)) != len(payload):
                     raise KairosCompileError(
                         "STATIC", f"riga {ln}: {name}: le variabili del messaggio devono essere distinte")
                 for v in payload:
-                    if _kind(declared.get(v)) not in ('int', 'stack', 'channel'):
+                    if _kind(env.get(v)) not in ('int', 'stack', 'channel'):
                         raise KairosCompileError(
                             "STATIC", f"riga {ln}: {name}: '{v}' non si puo' spedire "
                             "(un messaggio porta interi, stack o canali)")
         elif tag == 'if':
             for c in (x[1], x[4]):
-                _check_expr_types(c[2], declared, ln)
-                _check_expr_types(c[3], declared, ln)
-            _check_types(x[2], declared, proc_name)
-            _check_types(x[3], declared, proc_name)
+                _check_expr_types(c[2], env, ln)
+                _check_expr_types(c[3], env, ln)
+            _check_types(x[2], env, proc_name, signatures)
+            _check_types(x[3], env, proc_name, signatures)
         elif tag == 'from':
             for c in (x[1], x[3]):
-                _check_expr_types(c[2], declared, ln)
-                _check_expr_types(c[3], declared, ln)
-            _check_types(x[2], declared, proc_name)
-            _check_types(from_second_body(x), declared, proc_name)
+                _check_expr_types(c[2], env, ln)
+                _check_expr_types(c[3], env, ln)
+            _check_types(x[2], env, proc_name, signatures)
+            _check_types(from_second_body(x), env, proc_name, signatures)
         elif tag == 'par':
-            for b in x[1]:
-                _check_types(b, declared, proc_name)
+            for br in x[1]:
+                _check_types(br, env, proc_name, signatures)
 
 
 def _run_static_checks_body(program_ast):
@@ -1268,7 +1296,7 @@ def _run_static_checks_body(program_ast):
         body = proc[3] or []
         _check_local_blocks(body, proc[1], tuple(pn for _pt, pn in (proc[2] or [])))
         _check_callees_defined(body, proc_signatures)
-        _check_types(body, declared_types, proc[1])
+        _check_types(body, {pn: pt for pt, pn in (proc[2] or [])}, proc[1], proc_signatures)
         for stmt in body:
             _check_stmt_reversibility(
                 stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals

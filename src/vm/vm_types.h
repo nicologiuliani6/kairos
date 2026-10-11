@@ -301,6 +301,7 @@ struct ThreadArgs {
     pthread_mutex_t *done_mtx;
     pthread_cond_t  *done_cond;
     ThreadArgs *sender_to_notify;
+    char       *branch_path;        /* heap: indici dei rami dal par piu' esterno */
 };
 
 extern __thread ThreadArgs *current_thread_args;

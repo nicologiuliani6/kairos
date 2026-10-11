@@ -107,6 +107,11 @@ static inline Stack *frame_locals(VM *vm, uint fi)
 
 #define CHANNEL_REF_MARKER (-1001)
 
+/* Posizione del thread nell'albero dei par: "/1/0" e' il ramo 0 di un par
+ * dentro il ramo 1 del par piu' esterno; "" il thread principale. E' la stessa
+ * all'andata e all'inversione, e due rami concorrenti ne hanno di diverse. */
+static __thread const char *g_branch_path = "";
+
 /* Canali delocal'd ancora condivisi, da ripristinare se il LOCAL inverso li
  * ricrea. Vettore che cresce, nomi sull'heap: nessun numero massimo di voci
  * (prima oltre 4096 una voce si perdeva in silenzio). */
@@ -121,11 +126,24 @@ static int                  g_channel_restore_cap = 0;
 static int                  g_channel_restore_top = 0;
 static pthread_mutex_t g_channel_restore_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+/* Chiave di un'attivazione: posizione del ramo e procedura. Due attivazioni
+ * concorrenti della stessa procedura stanno in rami diversi; quelle di uno
+ * stesso ramo si disfano in ordine inverso, e la ricerca dall'ultima voce le
+ * accoppia giuste. */
+static inline char *channel_restore_key(const char *frame_name)
+{
+    VM_FRAME_BASE(proc, frame_name);
+    size_t a = strlen(g_branch_path), b = strlen(proc);
+    char *k = (char *)malloc(a + b + 2);
+    if (!k) vm_debug_panic("[VM] channel restore: memoria esaurita\n");
+    memcpy(k, g_branch_path, a); k[a] = '|'; memcpy(k + a + 1, proc, b + 1);
+    return k;
+}
+
 static inline void channel_restore_push(const char *frame_name, const char *var_name, Channel *ch)
 {
     if (!ch) return;
-    VM_FRAME_BASE(proc, frame_name);
-    char *p = char_id_strdup(proc), *v = char_id_strdup(var_name);
+    char *p = channel_restore_key(frame_name), *v = char_id_strdup(var_name);
     pthread_mutex_lock(&g_channel_restore_mtx);
     if (g_channel_restore_top >= g_channel_restore_cap) {
         int nc = g_channel_restore_cap ? g_channel_restore_cap * 2 : 64;
@@ -147,7 +165,7 @@ static inline void channel_restore_push(const char *frame_name, const char *var_
 
 static inline Channel *channel_restore_pop(const char *frame_name, const char *var_name)
 {
-    VM_FRAME_BASE(proc, frame_name);
+    char *proc = channel_restore_key(frame_name);
     pthread_mutex_lock(&g_channel_restore_mtx);
     for (int i = g_channel_restore_top - 1; i >= 0; i--) {
         if (strcmp(g_channel_restore[i].proc, proc) == 0 &&
@@ -158,10 +176,12 @@ static inline Channel *channel_restore_pop(const char *frame_name, const char *v
             g_channel_restore[i] = g_channel_restore[g_channel_restore_top - 1];
             g_channel_restore_top--;
             pthread_mutex_unlock(&g_channel_restore_mtx);
+            free(proc);
             return ch;
         }
     }
     pthread_mutex_unlock(&g_channel_restore_mtx);
+    free(proc);
     return NULL;
 }
 
@@ -523,7 +543,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
                     }
                 }
             }
-        } else if (marker == (int)TYPE_STACK || marker == (int)TYPE_CHANNEL) {
+        } else if (marker == (int)TYPE_STACK) {
             if (read_idx >= chv->channel->buf_len) {
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
@@ -533,14 +553,15 @@ static inline void op_srecv(VM *vm, const char *frame_name)
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
             }
-            if (dest->T != TYPE_STACK && dest->T != TYPE_CHANNEL) {
+            if (dest->T != TYPE_STACK) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload stack/channel richiede destinazione stack o channel\n");
+                vm_debug_panic("[VM] SRECV: payload stack richiede destinazione stack ('%s' non lo e')\n",
+                               tokv[i]);
             }
             /* Srecv-Err anche per le collezioni: la destinazione dev'essere
                vuota, altrimenti il contenuto ricevuto si accoderebbe al vecchio
                e ssend, l'inverso, rispedirebbe anche quello. */
-            if (dest->T == TYPE_STACK && dest->stack_len != 0) {
+            if (dest->stack_len != 0) {
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic(
                     "[VM] SRECV: stack '%s' non vuoto prima della ricezione (Srecv-Err)\n", tokv[i]);
@@ -586,7 +607,25 @@ static inline void op_show_flush_char_line(VM *vm)
     }
 }
 
+static inline void op_show_unlocked(VM *vm, const char *frame_name);
+
+/* Uno show scrive la sua riga per intero anche quando due rami di par
+ * stampano insieme: stdout resta del thread per tutta l'istruzione. */
 static inline void op_show(VM *vm, const char *frame_name)
+{
+#ifndef DAP_MODE
+    flockfile(stdout);
+    op_show_unlocked(vm, frame_name);
+    funlockfile(stdout);
+#else
+    static pthread_mutex_t show_mtx = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&show_mtx);
+    op_show_unlocked(vm, frame_name);
+    pthread_mutex_unlock(&show_mtx);
+#endif
+}
+
+static inline void op_show_unlocked(VM *vm, const char *frame_name)
 {
     char *ID = strtok(NULL, " \t");
     if (!ID) vm_debug_panic("[VM] SHOW: manca il nome della variabile\n");
@@ -910,6 +949,8 @@ static inline void op_local(VM *vm, const char *frame_name)
             else
                 fill = (int64_t)strtoull(c_val, NULL, 10);
         }
+        if ((unsigned long)n > SIZE_MAX / sizeof(int64_t))
+            vm_debug_panic("[VM] LOCAL: array '%s' troppo grande (%ld celle)\n", Vname, n);
         dst->value = malloc((size_t)n * sizeof(int64_t));
         if (!dst->value) vm_debug_panic("[VM] LOCAL: malloc array fallita\n");
         for (long k = 0; k < n; k++) dst->value[k] = fill;

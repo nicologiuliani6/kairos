@@ -1,0 +1,12 @@
+// Errore di compilazione atteso: in quel blocco x e' uno stack, non un intero.
+procedure main()
+    int k
+    int r
+    local stack x = nil
+    r += x
+    show(r)
+    delocal stack x = nil
+    local int x = 1
+    x -= 1
+    x += 1
+    delocal int x = 1

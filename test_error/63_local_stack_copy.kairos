@@ -1,0 +1,13 @@
+// Errore di compilazione atteso: uno stack locale nasce vuoto (nil).
+procedure main()
+    stack t
+    int k
+    k += 4
+    push(k, t)
+    local stack s = t
+    show(s)
+    show(t)
+    pop(k, s)
+    show(s)
+    delocal stack s = nil
+    show(t)
