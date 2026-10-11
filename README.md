@@ -1,8 +1,8 @@
 # Kairos
 
-Kairos è un linguaggio **reversibile e concorrente** nella famiglia di [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29). Ogni programma si può eseguire in avanti e all'indietro: ogni comando ha un inverso definito, e `uncall` esegue una procedura al contrario. A Janus aggiunge il parallelismo esplicito (`par … and … rap`), i canali sincroni tipizzati con passaggio di canali (stile π-calcolo), gli stack, gli array e il costrutto `try … rollback … yrt`.
+Kairos is a **reversible, concurrent** programming language in the [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) family. Every program runs forwards and backwards: each command has a well-defined inverse, and `uncall` runs a procedure in reverse. Kairos follows Janus one-to-one on the reversible core (assignments, `if … fi`, `from … until`, `local … delocal`, `call`/`uncall`) and adds explicit parallelism (`par … and … rap`), typed synchronous channels with channel passing (π-calculus style), stacks, arrays and a `try … rollback … yrt` construct.
 
-Il frontend è in Python (PLY) e produce un bytecode testuale; la VM è in C e lo interpreta, sia in avanti sia all'indietro.
+The frontend is written in Python (PLY) and produces a textual bytecode; the VM is written in C and interprets it both forwards and backwards.
 
 ```kairos
 procedure fib(int n, int a, int b)
@@ -30,143 +30,165 @@ procedure main()
 
 ---
 
-## Indice
+## Contents
 
-1. [Avvio rapido](#avvio-rapido)
-2. [Comandi make](#comandi-make)
-3. [Struttura del repository](#struttura-del-repository)
-4. [Architettura](#architettura)
-5. [Il linguaggio](#il-linguaggio)
-6. [Reversibilità: regole e controlli](#reversibilità-regole-e-controlli)
-7. [Il bytecode](#il-bytecode)
-8. [Errori comuni](#errori-comuni)
-9. [Pacchetti, app e VS Code](#pacchetti-app-e-vs-code)
+1. [Quick start](#quick-start)
+2. [Linux packages](#linux-packages)
+3. [Make targets](#make-targets)
+4. [Repository layout](#repository-layout)
+5. [Architecture](#architecture)
+6. [The language](#the-language)
+7. [Reversibility: rules and checks](#reversibility-rules-and-checks)
+8. [The bytecode](#the-bytecode)
+9. [Common errors](#common-errors)
+10. [Debugger and VS Code](#debugger-and-vs-code)
 
 ---
 
-## Avvio rapido
+## Quick start
 
-Requisiti: `gcc`, `make`, Python ≥ 3.10 con il modulo `venv` (su Debian/Ubuntu: `sudo apt install build-essential python3 python3-venv`).
+Requirements: `gcc`, `make`, Python ≥ 3.10 with the `venv` module (Debian/Ubuntu: `sudo apt install build-essential python3 python3-venv`).
 
 ```bash
 git clone https://github.com/nicologiuliani6/kairos.git
 cd kairos
 make install-deps                     # venv + ply (+ pyinstaller)
-make                                  # compila build/libvm.so
-make run FILE=examples/fib.kairos     # esegue un programma
+make                                  # builds build/libvm.so
+make run FILE=examples/fib.kairos     # runs a program
 ```
 
-Oppure direttamente:
+Or directly:
 
 ```bash
 ./venv/bin/python -m src.kairos examples/fib.kairos [--dump-bytecode] [--vm-stats]
 ```
 
-`--dump-bytecode` scrive il bytecode in `bytecode.txt`; `--vm-stats` (o `KAIROS_VM_STATS=1`) stampa a fine esecuzione quante celle sono rimaste vive. Dopo aver modificato i sorgenti C della VM serve `make build-release`, altrimenti resta in uso il `libvm.so` precedente (il frontend lo segnala su stderr).
+`--dump-bytecode` writes the bytecode to `bytecode.txt`; `--vm-stats` (or `KAIROS_VM_STATS=1`) prints how many cells are still alive at the end. After editing the VM's C sources run `make build-release` again, otherwise the old `libvm.so` stays in use (the frontend warns about it on stderr).
 
 ---
 
-## Comandi make
+## Linux packages
 
-| Comando | Effetto |
+Every [release](https://github.com/nicologiuliani6/kairos/releases) ships ready-made packages of **KairosApp** (standalone frontend + VM, no Python needed) built by the `release` workflow:
+
+| Distribution | File | Install |
+|---|---|---|
+| Debian / Ubuntu | `kairosapp_<version>_amd64.deb` | `sudo apt install ./kairosapp_<version>_amd64.deb` |
+| Fedora / RHEL | `kairosapp-<version>-1.<dist>.x86_64.rpm` | `sudo dnf install ./kairosapp-<version>-1.<dist>.x86_64.rpm` |
+| Arch Linux | `kairosapp-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./kairosapp-<version>-1-x86_64.pkg.tar.zst` |
+
+The packages install `/usr/local/bin/kairosapp`, `/opt/kairosapp/KairosApp` and the debugger library `/usr/local/lib/kairosapp/dap.so`. Then:
+
+```bash
+kairosapp program.kairos
+```
+
+To build a package locally use `packaging/linux/build-deb.sh`, `build-rpm.sh` or `build-arch.sh` (details in `packaging/linux/README.md`). Pushing a tag `vX.Y.Z` builds all three and attaches them to the release.
+
+---
+
+## Make targets
+
+| Target | Effect |
 |---|---|
-| `make` / `make build-release` | `build/libvm.so` ottimizzata (`-O3 -march=native -flto`, non redistribuibile) |
-| `make build` | `libvm.so` portabile (`-O2`) |
-| `make build-dap` | `build/libvm_dap.so` per il debugger |
-| `make run FILE=f.kairos` | esegue un programma con `--dump-bytecode` |
-| `make test` | esegue `tests/`, `examples/` e `lossless/` (timeout 5 s ciascuno; `KAIROS_EXCLUDE` nel makefile per escludere file) |
-| `make release-app` | app standalone `build/dist/KairosApp` con PyInstaller |
-| `make install-deps` / `make check-system` | venv e dipendenze / controllo dei requisiti |
-| `make clean` | rimuove gli artefatti |
+| `make` / `make build-release` | optimised `build/libvm.so` (`-O3 -march=native -flto`, not redistributable) |
+| `make build` | portable `libvm.so` (`-O2`) |
+| `make build-dap` | `build/libvm_dap.so` for the debugger |
+| `make run FILE=f.kairos` | runs a program with `--dump-bytecode` |
+| `make test` | runs `tests/`, `examples/` and `lossless/` (5 s timeout each; `KAIROS_EXCLUDE` in the makefile excludes files) |
+| `make test-dap` | debugger smoke test (step, step back, streamed output) |
+| `make release-app` | standalone app `build/dist/KairosApp` (PyInstaller) |
+| `make install-deps` / `make check-system` | venv and dependencies / system requirements check |
+| `make clean` | removes build artefacts |
 
-I programmi che devono fallire (errori statici e di runtime attesi) sono in `test_error/`, uno per regola.
+Programs that must be rejected (expected static and runtime errors) live in `test_error/`, one per rule.
 
 ---
 
-## Struttura del repository
+## Repository layout
 
 ```
 src/
-  kairos.py            entry point: compila ed esegue
+  kairos.py            entry point: compile and run
   frontend/
-    lexer.py, parser.py   analisi lessicale e sintattica (PLY) + controlli statici
-    sessions.py           protocolli dei canali dentro i par
-    inverse.py            corpo inverso compilato delle procedure ricorsive
+    lexer.py, parser.py   lexing and parsing (PLY) + static checks + try desugaring
+    sessions.py           channel protocols inside par blocks
+    inverse.py            compiled inverse body of recursive procedures
     bytecode.py           AST → bytecode
   vm/
-    Janus.c               esecuzione in avanti (vm_run_BT), prima passata, dump
-    vm_invert.h           esecuzione inversa (uncall)
-    vm_ops.h, ops_arith.h istruzioni e loro inversi
-    vm_par.h, vm_channel.h, vm_session.h, vm_ref_lock.h   par, canali, sessioni, lock
-    vm_frames.h           frame clonati (ricorsione, thread)
-    Janus_dap.c           API per il debugger (step, step back, breakpoint)
-examples/   esempi (fib, producer/consumer, π-calcolo, try, SAT, janus1982/ …)
-lossless/   compressione reversibile (BWT) e misure
-tests/      programmi che devono girare senza errori
-test_error/ programmi che devono essere rifiutati
-packaging/  pacchetti .deb / .rpm / Arch
+    Janus.c               forward execution (vm_run_BT), first pass, dump
+    vm_invert.h           backward execution (uncall)
+    vm_ops.h, ops_arith.h instructions and their inverses
+    vm_par.h, vm_channel.h, vm_session.h, vm_ref_lock.h   par, channels, sessions, locks
+    vm_frames.h           cloned frames (recursion, threads)
+    Janus_dap.c           debugger API (step, step back, breakpoints)
+examples/   examples (fib, producer/consumer, π-calculus, try, SAT, janus1982/ …)
+lossless/   reversible compression (BWT) and measurements
+tests/      programs that must run without errors
+test_error/ programs that must be rejected
+packaging/  .deb / .rpm / Arch packages
 ```
 
 ---
 
-## Architettura
+## Architecture
 
 ```
-file.kairos ─▶ lexer ─▶ parser (+ controlli statici, desugar di try)
-            ─▶ inverse.py (p__inv per le procedure ricorsive)
-            ─▶ bytecode.py ─▶ stringa bytecode ─▶ libvm.so (ctypes)
-                                                   ├─ vm_exec        prima passata: frame, DECL, PARAM, LABEL
-                                                   ├─ vm_run_BT      esecuzione in avanti
-                                                   └─ invert_op_to_line   esecuzione inversa
+file.kairos ─▶ lexer ─▶ parser (+ static checks, try desugaring)
+            ─▶ inverse.py (p__inv for recursive procedures)
+            ─▶ bytecode.py ─▶ bytecode string ─▶ libvm.so (ctypes)
+                                                  ├─ vm_exec            first pass: frames, DECL, PARAM, LABEL
+                                                  ├─ vm_run_BT          forward execution
+                                                  └─ invert_op_to_line  backward execution
 ```
 
-Il bytecode passa alla VM in memoria, senza file intermedi. A fine esecuzione la VM stampa il dump delle variabili di `main` (`=== VM dump ===`).
+The bytecode reaches the VM in memory, with no intermediate file, and there is **a single copy** of it: every thread of a `par` reads the same read-only string, copying only the line it is executing. At the end the VM prints the variables of `main` (`=== VM dump ===`).
 
 ---
 
-## Il linguaggio
+## The language
 
-### Tipi
+### Types
 
-| Tipo | Valore iniziale | Note |
+| Type | Initial value | Notes |
 |---|---|---|
-| `int` | `0` | intero con segno a 64 bit |
-| `int a[n]` | `n` celle a `m` | lunghezza costante fissata alla dichiarazione |
-| `stack` | `nil` | lista LIFO di interi |
-| `channel` | `empty` | canale sincrono (rendez-vous) |
+| `int` | `0` | signed 64-bit integer |
+| `int a[n]` | `n` cells set to `m` | constant length fixed at declaration |
+| `stack` | `nil` | LIFO list of integers |
+| `channel` | `empty` | synchronous (rendez-vous) channel |
 
-### Dichiarazioni, `local` e `delocal`
+### Declarations, `local` and `delocal`
 
-In `main` una dichiarazione senza `local` (`int x`, `stack s`, `channel c`) crea una variabile del frame, inizialmente vuota. Altrove si usa la coppia `local`/`delocal`:
+In `main` a declaration without `local` (`int x`, `stack s`, `channel c`) creates a frame variable, initially empty. Elsewhere use `local`/`delocal`:
 
 ```kairos
 local int x = 0
-local int y = x          // y parte dal valore corrente di x
+local int y = x          // y starts from the current value of x
 local stack s = nil
 local channel c = empty
 ...
 delocal channel c = empty
-delocal stack s = nil    // s deve essere vuoto
-delocal int y = x        // y deve valere ancora x
+delocal stack s = nil    // s must be empty
+delocal int y = x        // y must still equal x
 delocal int x = 0
 ```
 
-`delocal` verifica a runtime il valore dichiarato (altrimenti errore) e le chiusure seguono l'ordine **LIFO** delle aperture. L'inverso di `local` è `delocal` e viceversa.
+As in Janus, `local x … delocal x` is a **block**: each `delocal` closes the most recent open `local` *of the same statement list*, and no `local` may stay open at the end of the list (a `then` branch, a loop body, a `par` branch, a procedure body). The frontend rejects anything else. At run time `delocal` checks the declared value. The inverse of `local` is `delocal` and vice versa.
 
-### Assegnamenti reversibili
+### Reversible assignments
 
-| Comando | Inverso |
+| Command | Inverse |
 |---|---|
 | `x += e` | `x -= e` |
 | `x -= e` | `x += e` |
-| `x ^= e` | se stesso |
-| `x <=> y` | se stesso |
+| `x ^= e` | itself |
+| `x <=> y` | itself |
 
-La variabile (o l'array) a sinistra **non può comparire** in `e`: `x += x` perderebbe l'informazione ed è rifiutato.
+The variable (or array) on the left **must not occur** in `e`: `x += x` would lose information and is rejected.
 
-### Espressioni
+### Expressions
 
-`+ - * / %` (divisione troncata verso zero e resto col segno del dividendo, come in C), confronti `== != < > <= >=` che valgono 1 o 0, connettivi `&& ||`, parentesi e celle di array. Una guardia è vera se diversa da zero. `* / %` esistono solo nelle espressioni; dividere per zero è un errore (`Div-Err`).
+`+ - * / %` (division truncates towards zero and the remainder takes the sign of the dividend, as in C), comparisons `== != < > <= >=` that evaluate to 1 or 0, connectives `&& ||`, parentheses and array cells. A guard is true when non-zero. `* / %` only exist inside expressions; division by zero is an error (`Div-Err`).
 
 ```kairos
 x += ((a * b) % c)
@@ -176,10 +198,10 @@ if (a == 0) && (b > 1) then
 fi r == 1
 ```
 
-### Array
+### Arrays
 
 ```kairos
-procedure riempi(int a[], int n)
+procedure fill(int a[], int n)
     local int i = 0
     from i == 0 do
         a[i] += (i * 2)
@@ -190,23 +212,23 @@ procedure riempi(int a[], int n)
 procedure main()
     local int v[4] = 0
     local int n = 4
-    call riempi(v, n)
+    call fill(v, n)
     v[0] <=> v[3]
     show(v)
     v[0] <=> v[3]
-    uncall riempi(v, n)
+    uncall fill(v, n)
     delocal int n = 4
-    delocal int v[4] = 0     // tutte le celle devono valere 0
+    delocal int v[4] = 0     // every cell must be 0
 ```
 
-- Una cella `a[i]` (indice = espressione) è un luogo come una variabile: `+= -= ^= <=>`.
-- Un indice fuori dai limiti è un errore (`Idx-Err`).
-- Gli array si passano alle procedure per riferimento (`int a[]`); non viaggiano sui canali.
-- Dove la sintassi vuole un identificatore (`push`, `show`, argomenti di `call`, payload dei canali) serve una variabile, non una cella.
+- A cell `a[i]` (index = expression) is a location like a variable: `+= -= ^= <=>`.
+- An out-of-bounds index is an error (`Idx-Err`).
+- Arrays are passed to procedures by reference (`int a[]`); they cannot travel on channels.
+- Where the syntax expects an identifier (`push`, `show`, `call` arguments, channel payloads) a variable is needed, not a cell.
 
-### Procedure, `call` e `uncall`
+### Procedures, `call` and `uncall`
 
-I parametri sono passati **per riferimento**. Ogni programma ha una `procedure main()` senza parametri.
+Parameters are passed **by reference**. Every program has a `procedure main()` with no parameters.
 
 ```kairos
 procedure increment(int x)
@@ -215,23 +237,23 @@ procedure increment(int x)
 procedure main()
     local int a = 0
     call increment(a)     // a = 5
-    uncall increment(a)   // a torna 0
+    uncall increment(a)   // a back to 0
     delocal int a = 0
 ```
 
-`uncall p` esegue `p` al contrario: comandi in ordine inverso, ciascuno sostituito dal suo inverso. Per le procedure **ricorsive** (anche mutuamente) il frontend compila il corpo inverso `p__inv` per induzione sulla sintassi (`inverse.py`): `uncall p` diventa una normale chiamata in avanti a `p__inv`, e così fa la VM quando inverte una `call p` dentro un'altra inversione.
+`uncall p` runs `p` backwards: commands in reverse order, each replaced by its inverse. For **recursive** procedures (mutual recursion included) the frontend compiles the inverse body `p__inv` by induction on the syntax (`inverse.py`): `uncall p` becomes an ordinary forward call to `p__inv`, and the VM does the same when it inverts a `call p` inside another inversion.
 
 ### `if … fi`
 
 ```kairos
-if <guardia d'ingresso> then
+if <entry guard> then
     ...
 else
     ...
-fi <guardia d'uscita>
+fi <exit assertion>
 ```
 
-La guardia d'uscita, valutata dopo il ramo, deve essere vera dopo il `then` e falsa dopo l'`else`: è ciò che permette all'inverso di sapere quale ramo era stato preso. La VM lo verifica (`IF/FI non reversibile`).
+As in Janus, the exit assertion, evaluated after the branch, must be true after `then` and false after `else`; it is what tells the inverse which branch was taken. The VM checks it on every `if`, forwards (`IF/FI non reversibile`) and backwards (the entry guard must agree with the branch chosen by the assertion).
 
 ### `from … do … loop … until`
 
@@ -243,7 +265,7 @@ loop
 until <b2>
 ```
 
-Traccia `c1 [c2 c1]*`: `b1` deve essere vera all'ingresso e falsa alle iterazioni successive; `b2` è valutata dopo ogni `c1`. L'inverso è `from b2 do I(c1) loop I(c2) until b1`.
+Trace `c1 [c2 c1]*`. As in Janus, `b1` must be true on entry (**LoopError1** otherwise) and false every time the loop is re-entered after `c2` (**LoopError2**); `b2` is evaluated after each `c1`. The inverse is `from b2 do I(c1) loop I(c2) until b1`.
 
 ```kairos
 local int i = 0
@@ -253,39 +275,39 @@ loop until i == n
 delocal int i = n
 ```
 
-### Clausole facoltative e `skip`
+### Optional clauses and `skip`
 
-Come in Janus, `then`, `else`, `do` e `loop` si possono omettere (valgono `skip`); `skip` è il comando vuoto. Le guardie `fi` e `until` sono obbligatorie.
+As in Janus, `then`, `else`, `do` and `loop` may be omitted (they mean `skip`); `skip` is the empty command. The `fi` and `until` conditions are mandatory.
 
 ### `try … rollback … yrt`
 
 ```kairos
-try x == 7          // condizione di commit, valutata dopo il body
+try x == 7          // commit condition, evaluated after the body
     x += 5
-rollback            // facoltativo
+rollback            // optional
     x += 99
-yrt x == 7
+yrt x == 7          // exit assertion
 ```
 
-Se dopo il body la condizione è vera il body resta; altrimenti il body viene annullato (eseguito al contrario) e si esegue il rollback. È zucchero sintattico: body e rollback diventano procedure `__try_body_N` / `__try_rb_N` sulle variabili libere, e il blocco un `call` seguito da un `if` con `uncall`. Niente `par` né canali dentro un `try`.
+If the condition holds after the body, the body is kept; otherwise the body is undone (run backwards) and the rollback runs. It is syntactic sugar: body and rollback become procedures `__try_body_N` / `__try_rb_N` over their free variables, and the block becomes a `call` followed by an ordinary `if` whose `else` does the `uncall`. The `yrt` condition is that `if`'s exit assertion, so the Janus rule applies: it must be true after a commit and false after a rollback (see `examples/try_backtracking.kairos`). No `par` and no channels inside a `try`.
 
-### Stack
+### Stacks
 
 ```kairos
-push(x, s)   // x in cima a s, x azzerato
-pop(x, s)    // cima di s in x; x deve valere 0 (Pop-Err2)
+push(x, s)   // x on top of s, x reset to 0
+pop(x, s)    // top of s into x; x must be 0 (Pop-Err2)
 ```
 
-Uno è l'inverso dell'altro. Un `pop` da uno stack vuoto è un errore.
+Each is the inverse of the other. Popping an empty stack is an error.
 
-### Canali
+### Channels
 
 ```kairos
-ssend(<v1, v2, …>, c)   // invia, azzerando/svuotando le sorgenti
-srecv(<d1, d2, …>, c)   // riceve; le destinazioni int devono valere 0 (Srecv-Err)
+ssend(<v1, v2, …>, c)   // send, zeroing/emptying the sources
+srecv(<d1, d2, …>, c)   // receive; int destinations must be 0 (Srecv-Err)
 ```
 
-Rendez-vous sincrono: `ssend` attende un `srecv` e viceversa; i valori in transito sono FIFO. Il payload può contenere `int`, `stack` (svuotato e concatenato) e `channel` (passaggio dell'endpoint, come nel π-calcolo). `ssend` e `srecv` sono l'uno l'inverso dell'altro. Dentro un `par` ogni canale è una **sessione binaria**: esattamente due rami lo usano, con protocolli complementari (controllo statico in `sessions.py` e dinamico nella VM).
+Synchronous rendez-vous: `ssend` waits for an `srecv` and vice versa; values in transit are FIFO. The payload can hold `int`, `stack` (emptied and concatenated) and `channel` (endpoint passing, as in the π-calculus). `ssend` and `srecv` are each other's inverse. Inside a `par` each channel is a **binary session**: exactly two branches use it, with complementary protocols (static check in `sessions.py`, dynamic check in the VM).
 
 ### `par … and … rap`
 
@@ -297,77 +319,80 @@ and
 rap
 ```
 
-Un `pthread` per ramo, tutti avviati insieme; il blocco termina quando terminano tutti. I `par` si possono annidare. L'inverso esegue l'inverso di ogni ramo (scambiando `ssend`/`srecv` e `call`/`uncall`).
+One `pthread` per branch, all started together; the block ends when all of them end. `par` blocks can be nested. The inverse runs the inverse of every branch (swapping `ssend`/`srecv` and `call`/`uncall`).
 
-I rami condividono il frame ma non la memoria scrivibile: il frontend rifiuta stack usati da più rami e ogni `int` o array **scritto** in un ramo e **usato** in un altro, anche indirettamente (scritture fatte da procedure chiamate, analisi a punto fisso sul grafo delle chiamate; `pop`/`srecv` contano come scritture). Un `int` letto da più rami è ammesso. A runtime, mutazioni concorrenti della stessa cella vengono comunque intercettate (`vm_ref_lock.h`).
+Branches share the frame but not writable memory: the frontend rejects stacks used by more than one branch and any `int` or array **written** in one branch and **used** in another, even indirectly (writes made by called procedures, fixed-point analysis over the call graph; `pop`/`srecv` count as writes). An `int` only read by several branches is allowed. At run time concurrent mutations of the same cell are still caught (`vm_ref_lock.h`).
 
 ### `show`
 
-L'output non fa parte del modello reversibile: è un supporto allo sviluppo, ignorato quando si esegue all'indietro.
+Output is not part of the reversible model: it is a development aid and is ignored when running backwards.
 
 ```kairos
 show(x)          // "x: 42"  (int, stack, channel, array)
-show(x, char)    // un solo carattere: il byte basso di x, senza newline
+show(x, char)    // a single character: the low byte of x, no newline
 ```
 
-### Commenti
+### Comments
 
-`// fino a fine riga`. Non ci sono commenti multiriga.
+`// to end of line`. There are no multi-line comments.
 
 ---
 
-## Reversibilità: regole e controlli
+## Reversibility: rules and checks
 
-Il frontend rifiuta con `[STATIC]`:
+The frontend rejects with `[STATIC]` / `[LOCAL]`:
 
-- `x += e`, `x -= e`, `x ^= e` con `x` in `e` (anche per gli array);
+- `x += e`, `x -= e`, `x ^= e` with `x` in `e` (arrays included);
 - `delocal int x = x`;
-- in un `par`: lo stesso `stack` in più rami; un `int`/array scritto in un ramo e usato in un altro; una `call` a un nome che non è né una procedura né una builtin (non se ne conoscerebbero le scritture); canali usati da un solo ramo, da più di due o con protocolli incompatibili.
+- a `delocal` that does not close the most recent `local` of the same block, or a `local` left open;
+- in a `par`: the same `stack` in several branches; an `int`/array written in one branch and used in another; a `call` to a name that is neither a procedure nor a builtin (its writes would be unknown); channels used by a single branch, by more than two, or with incompatible protocols.
 
-Emette un warning (il programma gira, ma l'inverso può fallire) quando una guardia di `if` è modificata nel suo corpo o quando la sorgente di un `local int y = x` cambia prima del `delocal`.
+It warns (the program runs, but the inverse may fail) when an `if` guard is modified inside its own body or when the source of a `local int y = x` changes before the `delocal`.
 
-A runtime la VM verifica: valore e ordine LIFO dei `delocal`, la guardia d'uscita di `if`, `from`/`until`, `pop` e `srecv` su destinazioni non nulle, stack vuoti, indici e divisioni, sessioni dei canali. Ogni regola ha un esempio in `test_error/`.
+At run time the VM checks, exactly as Janus does: the value of every `delocal`, the exit assertion of every `if` (forwards) and its entry guard (backwards), the `from` guard on entry (LoopError1) and on re-entry (LoopError2); and beyond Janus: `pop` and `srecv` into non-zero destinations, empty stacks, indices and divisions, channel sessions. Every rule has an example in `test_error/`.
 
 ---
 
-## Il bytecode
+## The bytecode
 
-Una riga per istruzione, `NNNN @SRC OPCODE argomenti`, dove `@SRC` è la riga sorgente (usata dal debugger).
+One line per instruction, `@SRC OPCODE arguments`, where `@SRC` is the source line (used by the debugger).
 
-| Istruzione | Significato |
+| Instruction | Meaning |
 |---|---|
-| `START` / `HALT` | inizio / fine programma |
-| `PROC p` / `END_PROC p` | procedura |
-| `PARAM tipo nome`, `DECL tipo nome` | parametro, variabile di frame |
-| `LOCAL tipo nome val` / `DELOCAL tipo nome val` | apertura / chiusura con verifica |
-| `PUSHEQ v e` / `MINEQ v e` / `XOREQ v e` / `SWAP a b` | assegnamenti |
-| `PUSH v s` / `POP v s` | stack |
-| `SSEND … c` / `SRECV … c` | canali |
-| `EVAL l op r`, `JMPF lbl`, `JMP lbl`, `LABEL lbl`, `ASSERT l op r` | controllo |
-| `CALL p args` / `UNCALL p args` | chiamata in avanti / inversa |
+| `START` / `HALT` | program start / end |
+| `PROC p` / `END_PROC p` | procedure |
+| `PARAM type name`, `DECL type name` | parameter, frame variable |
+| `LOCAL type name val` / `DELOCAL type name val` | open / close with check |
+| `PUSHEQ v e` / `MINEQ v e` / `XOREQ v e` / `SWAP a b` | assignments |
+| `PUSH v s` / `POP v s` | stacks |
+| `SSEND … c` / `SRECV … c` | channels |
+| `EVAL l op r`, `JMPF lbl`, `JMP lbl`, `LABEL lbl`, `ASSERT l op r` | control flow and assertions |
+| `CALL p args` / `UNCALL p args` | forward / backward call |
 | `SHOW v` / `SHOW v char` | output |
-| `PAR_START`, `THREAD_N`, `PAR_END` | blocco parallelo |
+| `PAR_START`, `THREAD_N`, `PAR_END` | parallel block |
 
 ---
 
-## Errori comuni
+## Common errors
 
-| Messaggio | Causa |
+| Message | Cause |
 |---|---|
-| `DELOCAL: valore finale errato` | la variabile non vale quanto dichiarato nella `delocal` |
-| `DELOCAL: ordine errato` | `local`/`delocal` non annidati LIFO |
-| `DELOCAL: … non è nil/empty` | stack o canale non vuoto alla chiusura |
-| `IF/FI non reversibile` | la guardia d'uscita non corrisponde al ramo eseguito |
-| `POP: destinazione … non è zero (Pop-Err2)` | `pop` su una variabile non nulla |
-| `Idx-Err` / `Div-Err` | indice fuori dai limiti / divisione per zero |
-| `[STATIC] race su int nel PAR` | scrittura in un ramo, accesso in un altro: usa variabili distinte o un canale |
-| `[VM] SESSIONE: …` | canale usato da più di due rami o protocollo bloccato |
-| `cannot open shared object file: libvm.so` | manca `make build-release` |
+| `DELOCAL: valore finale errato` | the variable does not hold the value declared in `delocal` |
+| `[LOCAL] … non chiude il local aperto più di recente` | `local`/`delocal` are not a block (Janus rule) |
+| `DELOCAL: … non è nil/empty` | stack or channel not empty when closed |
+| `IF/FI non reversibile` | the exit assertion does not match the branch taken |
+| `FROM: … (LoopError1)` / `(LoopError2)` | loop entry guard false on entry / true on re-entry |
+| `POP: destinazione … non è zero (Pop-Err2)` | `pop` into a non-zero variable |
+| `Idx-Err` / `Div-Err` | index out of bounds / division by zero |
+| `[STATIC] race su int nel PAR` | written in one branch, used in another: use distinct variables or a channel |
+| `[VM] SESSIONE: …` | channel used by more than two branches, or a stuck protocol |
+| `cannot open shared object file: libvm.so` | run `make build-release` |
+
+Diagnostics are printed in Italian.
 
 ---
 
-## Pacchetti, app e VS Code
+## Debugger and VS Code
 
-- **Pacchetti Linux**: `packaging/linux/build-deb.sh` (Debian/Ubuntu), `build-rpm.sh`, `build-arch.sh`; dettagli in `packaging/linux/README.md`. Il `.deb` installa `/usr/local/bin/kairosapp`, `/opt/kairosapp/KairosApp` e `/usr/local/lib/kairosapp/dap.so`.
-- **App standalone**: `make release-app`.
-- **Debugger VS Code**: estensione in [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), con step avanti e indietro (`Step Back`, `Reverse Continue`). Con il pacchetto installato: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
+- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
+- **Standalone app**: `make release-app`.

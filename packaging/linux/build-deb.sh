@@ -49,7 +49,13 @@ fi
 MAJOR="${BASH_REMATCH[1]}"
 MINOR="${BASH_REMATCH[2]}"
 PATCH="${BASH_REMATCH[3]}"
-PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+# PKG_VERSION dall'ambiente (es. la CI di release, dal tag vX.Y.Z) vince sul
+# file VERSION, che in quel caso non viene toccato.
+BUMP_VERSION_FILE=0
+if [[ -z "${PKG_VERSION:-}" ]]; then
+  PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+  BUMP_VERSION_FILE=1
+fi
 STAGE_DIR="${BUILD_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
 DEBIAN_DIR="${STAGE_DIR}/DEBIAN"
 
@@ -113,7 +119,7 @@ ln -s "/opt/kairosapp/KairosApp" "${STAGE_DIR}/usr/local/bin/kairosapp"
 
 PKG_FILE="${ROOT_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.deb"
 dpkg-deb --build "${STAGE_DIR}" "${PKG_FILE}"
-echo "${PKG_VERSION}" > "${VERSION_FILE}"
+if [[ "${BUMP_VERSION_FILE}" -eq 1 ]]; then echo "${PKG_VERSION}" > "${VERSION_FILE}"; fi
 
 echo
 echo "Package created:"

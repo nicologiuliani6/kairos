@@ -50,7 +50,13 @@ fi
 MAJOR="${BASH_REMATCH[1]}"
 MINOR="${BASH_REMATCH[2]}"
 PATCH="${BASH_REMATCH[3]}"
-PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+# PKG_VERSION dall'ambiente (es. la CI di release, dal tag vX.Y.Z) vince sul
+# file VERSION, che in quel caso non viene toccato.
+BUMP_VERSION_FILE=0
+if [[ -z "${PKG_VERSION:-}" ]]; then
+  PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+  BUMP_VERSION_FILE=1
+fi
 
 APP_SRC="${PROJECT_ROOT}/build/dist/KairosApp"
 DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
@@ -58,7 +64,7 @@ DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
-(cd "${PROJECT_ROOT}" && make release && make build-dap)
+(cd "${PROJECT_ROOT}" && make release-app && make build-dap)
 
 if [[ ! -f "${APP_SRC}" ]]; then
   echo "Missing file after build: ${APP_SRC}"
@@ -102,7 +108,7 @@ EOF
   PKGDEST="${ROOT_DIR}" makepkg -f --nodeps --cleanbuild
 )
 
-echo "${PKG_VERSION}" > "${VERSION_FILE}"
+if [[ "${BUMP_VERSION_FILE}" -eq 1 ]]; then echo "${PKG_VERSION}" > "${VERSION_FILE}"; fi
 
 ARCH_FILE="$(ls -1 "${ROOT_DIR}/${PKG_NAME}-${PKG_VERSION}-${PKG_REL}-"*.pkg.tar.zst | head -n 1)"
 

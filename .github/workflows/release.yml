@@ -1,0 +1,93 @@
+# Builds the Linux packages of KairosApp and attaches them to a GitHub release.
+# Runs when a tag vX.Y.Z is pushed (or by hand, giving the tag).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  deb:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 python3-venv dpkg-dev
+      - name: Build .deb
+        run: |
+          make install-deps
+          make test
+          PKG_VERSION="${TAG#v}" packaging/linux/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: packaging/linux/*.deb
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:41
+    steps:
+      - name: System packages
+        run: dnf install -y gcc make python3 rpm-build git findutils binutils
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build .rpm
+        run: |
+          make install-deps
+          PKG_VERSION="${TAG#v}" packaging/linux/build-rpm.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: packaging/linux/*.rpm
+
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: System packages
+        run: |
+          pacman -Syu --noconfirm base-devel python git
+          useradd -m builder
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build .pkg.tar.zst
+        # makepkg refuses to run as root.
+        run: |
+          chown -R builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE' && make install-deps && PKG_VERSION='${TAG#v}' packaging/linux/build-arch.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: packaging/linux/*.pkg.tar.zst
+
+  publish:
+    needs: [deb, rpm, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "Kairos $TAG" --generate-notes
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber

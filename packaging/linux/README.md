@@ -1,23 +1,27 @@
-# KairosApp Linux Packaging
+# KairosApp Linux packaging
 
-Tooling per generare pacchetti Linux di KairosApp.
+Scripts that build Linux packages of KairosApp. Releases get them automatically
+from `.github/workflows/release.yml` when a tag `vX.Y.Z` is pushed.
 
-Output installato dai pacchetti:
+The packages install:
 
 - `KairosApp` in `/opt/kairosapp/KairosApp`
 - `dap.so` in `/usr/local/lib/kairosapp/dap.so`
-- link CLI `/usr/local/bin/kairosapp`
+- the CLI link `/usr/local/bin/kairosapp`
 
-In fase di installazione viene eseguito `ldconfig` e viene creato
-`/etc/ld.so.conf.d/kairosapp.conf` con il path della libreria.
+On installation `ldconfig` runs and `/etc/ld.so.conf.d/kairosapp.conf` is
+created with the library path.
 
-## 1) Clean generale
+## 1) Clean
 
 ```bash
 ./clean.sh
 ```
 
-## 2) Genera il pacchetto
+## 2) Build a package
+
+Prerequisite for all three: `make install-deps` in the repository root (venv
+with `ply` and `pyinstaller`).
 
 ### Debian/Ubuntu (`.deb`)
 
@@ -25,19 +29,12 @@ In fase di installazione viene eseguito `ldconfig` e viene creato
 ./build-deb.sh
 ```
 
-Lo script esegue automaticamente:
-
-- `make release`
-- `make build-dap`
-- incremento automatico versione patch da file `VERSION`
-
-e prende i file da:
+The script runs `make release-app` and `make build-dap`, then packages:
 
 - `build/dist/KairosApp`
-- `build/libvm_dap.so` (impacchettato come `dap.so`)
+- `build/libvm_dap.so` (shipped as `dap.so`)
 
-Output: `./kairosapp_<nuova-versione>_<arch>.deb`  
-Esempio: `kairosapp_1.0.4_amd64.deb`
+Output: `./kairosapp_<version>_<arch>.deb`, e.g. `kairosapp_1.0.4_amd64.deb`.
 
 ### Fedora/RHEL (`.rpm`)
 
@@ -45,9 +42,8 @@ Esempio: `kairosapp_1.0.4_amd64.deb`
 ./build-rpm.sh
 ```
 
-Output: `./kairosapp-<nuova-versione>-1.<arch>.rpm`
-
-Prerequisito: `rpmbuild` installato (`rpm-build`/`rpm`)
+Output: `./kairosapp-<version>-1.<dist>.<arch>.rpm`. Requires `rpmbuild`
+(`rpm-build`).
 
 ### Arch Linux (`.pkg.tar.zst`)
 
@@ -55,63 +51,44 @@ Prerequisito: `rpmbuild` installato (`rpm-build`/`rpm`)
 ./build-arch.sh
 ```
 
-Output: `./kairosapp-<nuova-versione>-1-<arch>.pkg.tar.zst`
+Output: `./kairosapp-<version>-1-<arch>.pkg.tar.zst`. Requires `makepkg`
+(`base-devel`); `makepkg` refuses to run as root.
 
-Prerequisito: `makepkg` installato (`base-devel`)
+### Version
 
-## 3) Installa
+By default every build bumps the patch number stored in `VERSION`. Setting
+`PKG_VERSION` uses that version instead and leaves `VERSION` untouched (this is
+what the release workflow does with the tag):
 
 ```bash
-sudo dpkg -i ./kairosapp_<nuova-versione>_amd64.deb
+PKG_VERSION=1.2.0 ./build-deb.sh
 ```
 
-Alternativa con apt:
+## 3) Install
 
 ```bash
-sudo apt install ./kairosapp_<nuova-versione>_amd64.deb
+sudo apt install ./kairosapp_<version>_amd64.deb
+sudo dnf install ./kairosapp-<version>-1.<dist>.x86_64.rpm
+sudo pacman -U ./kairosapp-<version>-1-x86_64.pkg.tar.zst
 ```
 
-RPM:
+## 4) Check
 
 ```bash
-sudo rpm -Uvh ./kairosapp-<nuova-versione>-1.<arch>.rpm
-```
-
-Arch:
-
-```bash
-sudo pacman -U ./kairosapp-<nuova-versione>-1-<arch>.pkg.tar.zst
-```
-
-## 4) Verifica
-
-```bash
-kairosapp --help
-ldconfig -p | rg dap
+kairosapp            # prints the usage line
+ldconfig -p | grep dap
 ls -l /usr/local/bin/kairosapp /opt/kairosapp/KairosApp /usr/local/lib/kairosapp/dap.so
 ```
 
-## 5) Rimozione
+## 5) Remove
 
 ```bash
-sudo dpkg -r kairosapp
+sudo dpkg -r kairosapp      # or: sudo dpkg -P kairosapp (also config files)
+sudo dnf remove kairosapp
+sudo pacman -R kairosapp
 ```
 
-Rimozione completa (inclusi file di configurazione):
-
-```bash
-sudo dpkg -P kairosapp
-```
-
-Per reinstallare subito:
-
-```bash
-sudo dpkg -i ./kairosapp_<nuova-versione>_amd64.deb
-```
-
-## Opzioni utili
-
-Puoi sovrascrivere metadata durante la build:
+## Metadata overrides
 
 ```bash
 PKG_NAME=kairosapp \
@@ -120,9 +97,3 @@ MAINTAINER="Nicolo Giuliani <nicolo.giuliani6@studio.unibo.it>" \
 DESCRIPTION="KairosApp with dap shared library" \
 ./build-deb.sh
 ```
-
-## Note importanti
-
-- La versione cresce automaticamente (patch) a ogni build tramite file `VERSION`.
-- Se cambi host/utente non usare path hardcoded in home dentro tooling o estensioni.
-- Per Ubuntu, `.deb` e' il formato nativo consigliato.
