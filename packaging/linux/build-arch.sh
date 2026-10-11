@@ -87,6 +87,7 @@ pkgdesc="${DESCRIPTION}"
 arch=('x86_64' 'aarch64')
 license=('custom')
 depends=('glibc')
+options=('!debug' '!strip')
 source=()
 sha256sums=()
 pkgdir_ref="${ARCH_BUILD_DIR}/pkgdir"
