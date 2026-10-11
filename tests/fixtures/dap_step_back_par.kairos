@@ -1,0 +1,22 @@
+// Fixture di tests/test-dap/test_dap_step_back_inverse.c: un par completato si
+// disfa per intero col passo indietro, uno show si disfa ristampando.
+procedure main()
+    local int p = 0
+    local int q = 0
+    p += 1
+    par
+        p += 3
+        show(p)
+    and
+        q += 4
+    rap
+    show(q)
+    q += p
+    local int k = 0
+    from k == 0 do
+        k += 1
+    loop until k == 100
+    delocal int k = 100
+    q -= p
+    delocal int q = 4
+    delocal int p = 4

@@ -1,0 +1,7 @@
+// Errore VM atteso (Srecv-Err): la destinazione non e' vuota; l'errore va
+// segnalato anche se nessun mittente arriva sul canale.
+procedure main()
+    int x
+    channel c
+    x += 1
+    srecv(<x>, c)

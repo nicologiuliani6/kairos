@@ -1,0 +1,10 @@
+// Errore di compilazione atteso: gli argomenti di una chiamata sono passati per
+// riferimento e devono essere distinti (con f(x, x) il corpo fa x += x).
+procedure add(int a, int b)
+    a += b
+
+procedure main()
+    int x
+    x += 3
+    call add(x, x)
+    show(x)

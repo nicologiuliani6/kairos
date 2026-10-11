@@ -139,10 +139,6 @@ static inline void dbg_record(VMDebugState *dbg,
         strncmp(op, "THREAD_", 7) == 0) {
         return;
     }
-    /* SHOW non modifica lo stato: escluderlo evita history enormi (loop + DAP)
-       e memmove O(n) ad ogni istruzione quando il buffer è pieno. */
-    if (!strcmp(op, "SHOW"))
-        return;
 
     int idx = dbg->history_top + 1;
     if (idx >= dbg->history_cap) {

@@ -1,0 +1,17 @@
+// Errore di compilazione atteso: il corpo di un try non puo' contenere par,
+// neanche attraverso una procedura chiamata.
+procedure two(int a, int b)
+    par
+        a += 1
+    and
+        b += 1
+    rap
+
+procedure main()
+    int a
+    int b
+    try a == 1
+        call two(a, b)
+    rollback
+        b += 5
+    yrt a == 1

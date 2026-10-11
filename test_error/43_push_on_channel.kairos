@@ -1,0 +1,7 @@
+// Errore VM atteso: push/pop valgono solo per gli stack; su un canale si usano
+// ssend/srecv.
+procedure main()
+    int x
+    channel c
+    x += 1
+    push(x, c)

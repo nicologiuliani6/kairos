@@ -1,0 +1,4 @@
+// Errore di compilazione atteso: il delocal ha un tipo diverso dal local che chiude.
+procedure main()
+    local int x = 0
+    delocal stack x = nil

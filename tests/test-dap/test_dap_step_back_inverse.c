@@ -4,7 +4,9 @@
  * (tutti i frame, in JSON) dopo ogni passo; poi si torna indietro un passo alla
  * volta. Ogni stato raggiunto all'indietro dev'essere uno degli stati gia'
  * visti in avanti, e si torna esattamente allo stato iniziale. Poi si riparte
- * in avanti: il programma deve arrivare in fondo senza errori. */
+ * in avanti: il programma deve arrivare in fondo senza errori. Lo stesso su
+ * tests/fixtures/dap_step_back_par.kairos, dove si torna indietro anche
+ * attraverso un par completato e uno show. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,11 +54,11 @@ static char *state(VMDebugState *d)
     return out;
 }
 
-int main(void)
+static int run(const char *fixture)
 {
-    setvbuf(stdout, NULL, _IONBF, 0);
-    char *bc = compile("tests/fixtures/dap_step_back.kairos");
-    if (!bc) { fprintf(stderr, "compilazione fallita\n"); return 2; }
+    printf("== %s\n", fixture);
+    char *bc = compile(fixture);
+    if (!bc) { fprintf(stderr, "compilazione fallita\n"); return 0; }
     VMDebugState *d = vm_debug_new();
     vm_debug_start(bc, d);
 
@@ -101,5 +103,13 @@ int main(void)
     printf("RESULT: %s\n", pass ? "PASS" : "FAIL");
     vm_debug_stop(d);
     vm_debug_free(d);
-    return pass ? 0 : 1;
+    return pass;
+}
+
+int main(void)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    int ok = run("tests/fixtures/dap_step_back.kairos");
+    ok &= run("tests/fixtures/dap_step_back_par.kairos");
+    return ok ? 0 : 1;
 }

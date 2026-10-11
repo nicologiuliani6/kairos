@@ -1,0 +1,26 @@
+// Ogni ramo di par apre e chiude i propri local: i due blocchi local/delocal
+// non si intrecciano, in avanti e nell'uncall, qualunque sia l'ordine dei thread.
+procedure w(int x, int y)
+    par
+        local int a = 1
+        local int b = 2
+        x += (a + b)
+        delocal int b = 2
+        delocal int a = 1
+    and
+        local int c = 10
+        local int d = 20
+        y += (c + d)
+        delocal int d = 20
+        delocal int c = 10
+    rap
+
+procedure main()
+    int x
+    int y
+    call w(x, y)
+    show(x)
+    show(y)
+    uncall w(x, y)
+    show(x)
+    show(y)

@@ -188,7 +188,7 @@ The variable (or array) on the left **must not occur** in `e`, nor in the index 
 
 ### Expressions
 
-`+ - * / %` (division truncates towards zero and the remainder takes the sign of the dividend, as in C), comparisons `== != < > <= >=` that evaluate to 1 or 0, connectives `&& ||`, parentheses and array cells. A guard is true when non-zero. `* / %` only exist inside expressions; division by zero is an error (`Div-Err`).
+`+ - * / %` (division truncates towards zero and the remainder takes the sign of the dividend, as in C), comparisons `== != < > <= >=` that evaluate to 1 or 0, connectives `&& ||`, parentheses and array cells. A guard is true when non-zero. `* / %` only exist inside expressions; division by zero is an error (`Div-Err`). `&&` and `||` do not short-circuit: both operands are always evaluated. Reading a variable that is not declared is a compile error.
 
 ```kairos
 x += ((a * b) % c)
@@ -228,7 +228,7 @@ procedure main()
 
 ### Procedures, `call` and `uncall`
 
-Parameters are passed **by reference**. Every program has a `procedure main()` with no parameters; it runs once all procedures are registered, so the order of procedures in the file does not matter.
+Parameters are passed **by reference**, so, as in Janus, the arguments of one call must be distinct variables and match the parameters in number. `f(x)` without `call` is the same as `call f(x)`. Every program has a `procedure main()` with no parameters; it runs once all procedures are registered, so the order of procedures in the file does not matter.
 
 ```kairos
 procedure increment(int x)
@@ -289,13 +289,14 @@ rollback            // optional
 yrt x == 7          // exit assertion
 ```
 
-If the condition holds after the body, the body is kept; otherwise the body is undone (run backwards) and the rollback runs. It is syntactic sugar: body and rollback become procedures `__try_body_N` / `__try_rb_N` over their free variables, and the block becomes a `call` followed by an ordinary `if` whose `else` does the `uncall`. The `yrt` condition is that `if`'s exit assertion, so the Janus rule applies: it must be true after a commit and false after a rollback (see `examples/try_backtracking.kairos`). No `par` and no channels inside a `try`.
+If the condition holds after the body, the body is kept; otherwise the body is undone (run backwards) and the rollback runs. It is syntactic sugar: body and rollback become procedures `__try_body_N` / `__try_rb_N` over their free variables, and the block becomes a `call` followed by an ordinary `if` whose `else` does the `uncall`. The `yrt` condition is that `if`'s exit assertion, so the Janus rule applies: it must be true after a commit and false after a rollback (see `examples/try_backtracking.kairos`). No `par` and no channels inside a `try`, not even through a called procedure.
 
 ### Stacks
 
 ```kairos
 push(x, s)   // x on top of s, x reset to 0
 pop(x, s)    // top of s into x; x must be 0 (Pop-Err2)
+// push/pop work on stacks only; channels use ssend/srecv
 ```
 
 Each is the inverse of the other. Popping an empty stack is an error.
@@ -321,7 +322,7 @@ rap
 
 One `pthread` per branch, all started together; the block ends when all of them end. `par` blocks can be nested. The inverse runs the inverse of every branch (swapping `ssend`/`srecv` and `call`/`uncall`).
 
-Branches share the frame but not writable memory: the frontend rejects stacks used by more than one branch and any `int` or array **written** in one branch and **used** in another, even indirectly (writes made by called procedures, fixed-point analysis over the call graph; `pop`/`srecv` count as writes). An `int` only read by several branches is allowed. At run time concurrent mutations of the same cell are still caught (`vm_ref_lock.h`).
+Branches share the frame but not writable memory; each branch has its own stack of open `local`s, so `local … delocal` blocks in different branches never interleave: the frontend rejects stacks used by more than one branch and any `int` or array **written** in one branch and **used** in another, even indirectly (writes made by called procedures, fixed-point analysis over the call graph; `pop`/`srecv` count as writes). An `int` only read by several branches is allowed. At run time the VM also reports two simultaneous updates of the same `int` when it sees them (`vm_ref_lock.h`); this is a best-effort check, the guarantee is the static one.
 
 ### `show`
 
@@ -345,8 +346,11 @@ The frontend rejects with `[STATIC]` / `[LOCAL]`:
 - `x += e`, `x -= e`, `x ^= e` with `x` in `e` (arrays included), or with an index that reads the array being written;
 - `delocal int x = x`;
 - a `delocal` that does not close the most recent `local` of the same block, a `local` left open, or a `local` that redeclares a parameter or an open local;
-- a `call`/`uncall` of a procedure that does not exist;
-- in a `par`: the same `stack` in several branches; an `int`/array written in one branch and used in another; a `call` to a name that is neither a procedure nor a builtin (its writes would be unknown); channels used by a single branch, by more than two, or with incompatible protocols.
+- a `delocal` whose type differs from its `local`;
+- a variable used but not declared (parameter, declaration or open local);
+- a `call`/`uncall` of a procedure that does not exist, with the wrong number of arguments, or with the same variable passed twice;
+- in a `par`: the same `stack` in several branches; an `int`/array written in one branch and used in another; a `call` to a name that is neither a procedure nor a builtin (its writes would be unknown); two branches using a channel with incompatible protocols (a channel used by one branch only, or by more than two, is caught at run time);
+- a `par`, `ssend` or `srecv` inside a `try` body or rollback, also through called procedures.
 
 It warns (the program runs, but the inverse may fail) when an `if` guard is modified inside its own body or when the source of a `local int y = x` changes before the `delocal`.
 
@@ -395,5 +399,5 @@ Diagnostics are printed in Italian.
 
 ## Debugger and VS Code
 
-- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter (a completed call is undone as a whole with its inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, inside `par` branches, or over `ssend`/`srecv` is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
+- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter: a completed call or `par` is undone as a whole with its inverse, and a `show` is undone by printing again (it is its own inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, or inside the branches of a running `par`, is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
 - **Standalone app**: `make release-app`.

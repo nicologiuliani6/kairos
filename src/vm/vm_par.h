@@ -95,19 +95,6 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     pthread_mutex_t done_mtx  = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t  done_cond = PTHREAD_COND_INITIALIZER;
 
-    /* I rami che fanno local girano tutti nel frame del par e spingono sullo
-     * stesso stack dei local: lo si dimensiona qui, prima che partano, così
-     * nessun ramo deve riallocarlo mentre un altro lo usa. I local aperti
-     * insieme nel frame sono al più quelli già aperti più i LOCAL del testo
-     * della procedura (locals_hint); il doppio copre anche un par annidato in
-     * un ramo, che ne riserva al più altrettanti partendo da più in alto. */
-    {
-        uint pfi = get_findex(frame_name);
-        Frame *pf = vm->frames[pfi];
-        stack_reserve(&pf->LocalVariables,
-                      pf->LocalVariables.top + 1 + 2 * (pf->locals_hint + 1));
-    }
-
     ThreadArgs **args = (ThreadArgs **)calloc((size_t)(pb->count ? pb->count : 1),
                                               sizeof(ThreadArgs *));
     if (!args) vm_debug_panic("[VM] PAR: memoria esaurita\n");
@@ -189,6 +176,10 @@ static void *thread_entry(void *arg)
     const char *fname = args->frame_name;   /* vive quanto il thread */
     current_thread_args = args;
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
+    Stack branch_locals;
+    stack_init(&branch_locals);
+    g_branch_locals_fi = get_findex(fname);
+    g_branch_locals = &branch_locals;
 
     if (args->is_inverse) {
         /* Le righe del ramo, quante sono: il vettore cresce su richiesta. */
@@ -350,6 +341,8 @@ static void *thread_entry(void *arg)
         ptr = nl + 1;
     }
 thread_exit:
+    g_branch_locals = NULL;
+    stack_release(&branch_locals);
     vm_if_free_branch_stack();   /* vettori __thread di questo thread */
     vm_invert_free_cache();
     /* Sveglia sender pendente prima di terminare */

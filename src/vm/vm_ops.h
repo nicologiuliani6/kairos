@@ -92,6 +92,19 @@ static inline void vm_if_free_branch_stack(void)
     if_branch_top = -1;
 }
 
+/* Pila dei local di un ramo di par. I rami girano nel frame della procedura
+ * che contiene il par, ma ognuno apre e chiude i propri local: ogni thread di
+ * ramo ha la sua pila (impostata da thread_entry), le procedure chiamate dal
+ * ramo usano quella del loro frame. */
+static __thread Stack *g_branch_locals    = NULL;
+static __thread uint   g_branch_locals_fi = 0;
+
+static inline Stack *frame_locals(VM *vm, uint fi)
+{
+    if (g_branch_locals && fi == g_branch_locals_fi) return g_branch_locals;
+    return &vm->frames[fi]->LocalVariables;
+}
+
 #define CHANNEL_REF_MARKER (-1001)
 
 /* Canali delocal'd ancora condivisi, da ripristinare se il LOCAL inverso li
@@ -241,22 +254,10 @@ static inline void op_push(VM *vm, const char *frame_name)
 
     uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
     Var  *sv = vm->frames[fi]->vars[si];
-    if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL)
-        vm_debug_panic("[VM] PUSH: destinazione '%s' non e' stack/channel (T=%d) frame=%s\n",
-            C_stack, sv->T, frame_name);
-
-    if (sv->T == TYPE_STACK) {
-        var_stack_push(sv, val);
-    } else {
-        pthread_mutex_lock(&sv->channel->mtx);
-        sv->channel->buf = realloc(sv->channel->buf, (sv->channel->buf_len + 1) * sizeof(int64_t));
-        if (!sv->channel->buf) vm_debug_panic("realloc failed\n");
-        sv->channel->buf[sv->channel->buf_len++] = val;
-        pthread_mutex_unlock(&sv->channel->mtx);
-        int w = op_wait(sv->channel, 1);
-        if (w == 1)
-            wait_for_turn_done(current_thread_args);
-    }
+    if (sv->T != TYPE_STACK)
+        vm_debug_panic("[VM] PUSH: '%s' non e' uno stack (su un canale si usano ssend/srecv) frame=%s\n",
+            C_stack, frame_name);
+    var_stack_push(sv, val);
 }
 
 static inline void op_pop(VM *vm, const char *frame_name)
@@ -272,44 +273,13 @@ static inline void op_pop(VM *vm, const char *frame_name)
     uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
     Var  *sv = vm->frames[fi]->vars[si];
 
-    if (sv->T != TYPE_STACK && sv->T != TYPE_CHANNEL) vm_debug_panic("[VM] POP: sorgente non è stack/channel!\n");
-    if (sv->T == TYPE_STACK && sv->stack_len == 0)
+    if (sv->T != TYPE_STACK)
+        vm_debug_panic("[VM] POP: '%s' non e' uno stack (su un canale si usano ssend/srecv) frame=%s\n",
+                       C_stack, frame_name);
+    if (sv->stack_len == 0)
         vm_debug_panic("[VM] POP: stack vuoto! (frame=%s dest=%s stack=%s inv=%d)\n",
                        frame_name, C_dest, C_stack, vm->inversion_depth);
-
-    ThreadArgs *sender_to_wake = NULL;
-    int64_t       popped;
-
-    if (sv->T == TYPE_CHANNEL) {
-        /* op_wait abbina questo recv al sender giusto e imposta sender_args.
-           Non leggere send_q_head prima: con più SSEND paralleli la coda dei
-           waiter non coincide col FIFO del buffer; notificare il thread
-           sbagliato corrompeva lo stato (es. malloc.kairos intermittente).
-           Leggere sender_args e fare il pop FIFO sotto lo stesso mtx: altrimenti
-           un altro SSEND può intercalare tra le due e far leggere una cella
-           non ancora valorizzata (buffer malloc non azzerato). */
-        op_wait(sv->channel, 0);
-        pthread_mutex_lock(&sv->channel->mtx);
-        sender_to_wake = sv->channel->sender_args;
-        sv->channel->sender_args = NULL;
-        if (!sender_to_wake) {
-            pthread_mutex_unlock(&sv->channel->mtx);
-            vm_debug_panic("[VM] POP: channel sender_args nullo dopo rendezvous\n");
-        }
-        if (sv->channel->buf_len == 0) {
-            pthread_mutex_unlock(&sv->channel->mtx);
-            vm_debug_panic("[VM] POP: channel vuoto dopo op_wait!\n");
-        }
-        popped = sv->channel->buf[0];
-        sv->channel->buf_len--;
-        if (sv->channel->buf_len > 0)
-            memmove(sv->channel->buf, sv->channel->buf + 1, sv->channel->buf_len * sizeof(int64_t));
-        if (sv->channel->buf_len > 0)
-            sv->channel->buf = realloc(sv->channel->buf, sv->channel->buf_len * sizeof(int64_t));
-        pthread_mutex_unlock(&sv->channel->mtx);
-    } else {
-        popped = sv->value[--sv->stack_len];   /* la capacità resta per i push */
-    }
+    int64_t popped = sv->value[--sv->stack_len];   /* la capacità resta per i push */
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
     var_par_mut_acquire(dest);
@@ -327,9 +297,6 @@ static inline void op_pop(VM *vm, const char *frame_name)
     }
     *(dest->value) += popped;
     var_par_mut_release(dest);
-
-    if (sv->T == TYPE_CHANNEL && sender_to_wake)
-        notify_sender_turn_done(sender_to_wake);
 }
 
 /* Token di SSEND/SRECV (valori del payload più il canale): quanti sono. Sullo
@@ -466,6 +433,19 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     if (!chv || chv->T != TYPE_CHANNEL)
         vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
     session_acquire(chv->channel, ch_name);
+
+    /* Srecv-Err prima del rendez-vous: una destinazione già piena è un errore
+       del ricevente e va segnalata anche quando il mittente non arriva mai. */
+    for (int i = 0; i < recv_count; i++) {
+        Var *dest = get_var(vm, fi, tokv[i], "SRECV");
+        if (dest->T == TYPE_INT && *(dest->value) != 0)
+            vm_debug_panic(
+                "[VM] SRECV: destinazione '%s' non è zero prima della ricezione (Srecv-Err, valore attuale=%lld)\n",
+                tokv[i], (long long)*(dest->value));
+        if (dest->T == TYPE_STACK && dest->stack_len != 0)
+            vm_debug_panic(
+                "[VM] SRECV: stack '%s' non vuoto prima della ricezione (Srecv-Err)\n", tokv[i]);
+    }
 
     op_wait(chv->channel, 0);
 
@@ -901,8 +881,12 @@ static inline void op_local(VM *vm, const char *frame_name)
     if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: malloc fallita\n");
     alloc_var(vm->frames[fi]->vars[vi], Vtype, Vname);
 
-    if (vi >= (uint)vm->frames[fi]->var_count)
-        vm->frames[fi]->var_count = vi + 1;
+    /* Massimo atomico: due rami di par possono aprire local nello stesso frame. */
+    int vc = __atomic_load_n(&vm->frames[fi]->var_count, __ATOMIC_RELAXED);
+    while ((int)vi >= vc &&
+           !__atomic_compare_exchange_n(&vm->frames[fi]->var_count, &vc, (int)vi + 1, 0,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+        ;
 
     Var *dst = vm->frames[fi]->vars[vi];
 
@@ -952,7 +936,7 @@ static inline void op_local(VM *vm, const char *frame_name)
         }
     }
 
-    stack_push(&vm->frames[fi]->LocalVariables, dst);
+    stack_push(frame_locals(vm, fi), dst);
 }
 
 static inline void op_delocal(VM *vm, const char *frame_name)
@@ -974,7 +958,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     }
 
     /* ── 2. Pop ── */
-    Var *V = stack_pop(&vm->frames[fi]->LocalVariables);
+    Var *V = stack_pop(frame_locals(vm, fi));
 
     /* ── 3. Ordine LIFO ── */
     if (strcmp(V->name, Vname) != 0) {

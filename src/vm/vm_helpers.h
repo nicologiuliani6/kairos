@@ -134,12 +134,15 @@ static inline int64_t resolve_atom(VM *vm, uint fi, const char *s)
     }
     int idx = char_id_map_lookup(&vm->frames[fi]->VarIndexer, s);
     if (idx >= 0) {
-        /* Slot delocal'd ma ancora nell'indexer: evita NULL-deref (ritorna 0). */
+        /* Slot già delocal'd ma ancora nell'indexer. */
         Var *v = vm->frames[fi]->vars[idx];
         if (v && v->value)
             return *(v->value);
-        return 0;
+        vm_debug_panic("[VM] lettura: variabile '%s' fuori dal suo blocco local/delocal\n", s);
     }
+    const char *c = (*s == '-') ? s + 1 : s;
+    if (!(*c >= '0' && *c <= '9'))
+        vm_debug_panic("[VM] lettura: variabile '%s' non definita!\n", s);
     /* strtoull preserva bit-pattern per costanti unsigned > 2^63 (es. 0x8...
      * stored come 0x8000000000000000 = INT64_MIN). strtoll saturerebbe a
      * INT64_MAX perdendo l'high bit. Per "-N" strtoull accetta segno e

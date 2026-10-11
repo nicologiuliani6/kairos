@@ -1721,12 +1721,12 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
  *  esegue l'inversa sullo store corrente, si riallinea lo stack dei rami degli
  *  if aperti alla nuova posizione e si ritorna il puntatore alla sua riga: il
  *  ciclo riparte da li' e il debugger vi si ferma. La storia del debugger tiene
- *  solo posizioni, nessun dato.
+ *  solo posizioni, nessun dato. Un show si disfa ristampando (Inv(show) =
+ *  show); un par completato si disfa per intero, come una call.
  *
- *  Restano fuori, con un messaggio in last_error: risalire oltre l'inizio
- *  della procedura (richiede il record di attivazione del chiamante, che non
- *  e' parte dello store), le istruzioni dei rami di un par e ssend/srecv,
- *  il cui inverso richiede il partner.
+ *  Resta fuori, con un messaggio in last_error, risalire oltre l'inizio
+ *  della procedura: richiede il record di attivazione del chiamante, che non
+ *  e' parte dello store.
  * ====================================================================== */
 static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_ptr,
                                 int floor)
@@ -1745,19 +1745,47 @@ static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_
         why = "passo indietro oltre l'inizio della procedura: il record di attivazione "
               "del chiamante non fa parte dello store";
     uint phys = 0;
+    ParRange par = { 0, 0 };   /* par completato da disfare per intero */
     if (!why) {
         phys = (uint)atoi(d->history[k].instr);
         uint fi0 = get_findex(fname);
         ParRange *pars = NULL;
         int npars = collect_par_ranges(buf, vm->frames[fi0]->addr + 1,
                                        vm->frames[fi0]->end_addr, &pars);
-        if (line_is_inside_par(phys, pars, npars))
-            why = "passo indietro dentro un blocco par: non supportato";
+        /* il par piu' esterno che contiene la riga */
+        for (int i = 0; i < npars; i++)
+            if (phys > pars[i].start_line && phys <= pars[i].end_line &&
+                (!par.start_line || pars[i].start_line < par.start_line))
+                par = pars[i];
         free(pars);
     }
+    if (par.start_line) {
+        /* Come una call completata, un par completato si disfa per intero:
+         * l'inversa di par c1 and c2 rap e' par I(c1) and I(c2) rap. Si
+         * scartano i record dei rami e ci si ferma sulla riga del par. */
+        pthread_mutex_lock(&d->pause_mtx);
+        d->mode = VM_MODE_CONTINUE_INV;
+        pthread_mutex_unlock(&d->pause_mtx);
+        dbg_set_error(d, NULL);
+        /* l'inverter svuota la pila dei local del frame: quella dei local
+         * aperti fuori dal par va conservata */
+        uint pfi = get_findex(fname);
+        Stack slv = vm->frames[pfi]->LocalVariables;
+        stack_init(&vm->frames[pfi]->LocalVariables);
+        invert_op_to_line(vm, fname, buf, par.end_line, par.start_line - 1, 1);
+        stack_restore(&vm->frames[pfi]->LocalVariables, slv);
+        while (k > floor) {
+            uint lk = (uint)atoi(d->history[k].instr);
+            if (!strcmp(d->history[k].frame, fname) &&
+                !(lk > par.start_line && lk <= par.end_line))
+                break;
+            k--;
+        }
+        phys = par.start_line;
+    }
     char *fw = NULL;
-    VM_LINE_COPY(ins, why ? "" : d->history[k].instr);
-    if (!why) {
+    VM_LINE_COPY(ins, (why || par.start_line) ? "" : d->history[k].instr);
+    if (!why && !par.start_line) {
         fw = strtok(skip_lineno(ins), " \t");
         if (fw && *fw == '@') fw = strtok(NULL, " \t");
         if (!fw)
@@ -1773,6 +1801,7 @@ static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_
     dbg_set_error(d, NULL);
 
     uint cfi = get_findex(fname);
+    if (par.start_line) fw = "";   /* gia' disfatto sopra */
     /* Mentre si esegue l'inversa (che per una call attraversa tutto il corpo)
      * il debugger non si ferma; si ferma dopo, sulla riga disfatta. */
     pthread_mutex_lock(&d->pause_mtx);
@@ -1788,6 +1817,7 @@ static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_
     else if (!strcmp(fw, "POP"))     op_push      (vm, fname);
     else if (!strcmp(fw, "LOCAL"))   op_delocal   (vm, fname);
     else if (!strcmp(fw, "DELOCAL")) op_local     (vm, fname);
+    else if (!strcmp(fw, "SHOW"))    op_show      (vm, fname);   /* Inv(show) = show */
 
     /* Rami degli if aperti: alla posizione p lo sono gli if del frame il cui
      * JMPF e' prima di p e il cui ASSERT non e' ancora stato eseguito. */
@@ -1818,7 +1848,9 @@ static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_
     pthread_mutex_lock(&d->pause_mtx);
     d->mode = VM_MODE_STEP_BACK;
     pthread_mutex_unlock(&d->pause_mtx);
-    d->history_top = k - 1;   /* la riga disfatta si registra arrivandoci */
+    /* la riga disfatta si registra arrivandoci; per un par restano i record
+     * fino a quello prima del par */
+    d->history_top = par.start_line ? k : k - 1;
     return go_to_line(buf, phys);
 }
 

@@ -1,0 +1,5 @@
+// Errore di compilazione atteso: 'y' non e' parametro, dichiarazione o local.
+procedure main()
+    int x
+    x += (y + 1)
+    show(x)

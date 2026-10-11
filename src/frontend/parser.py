@@ -1021,6 +1021,44 @@ def run_static_checks(program_ast):
         _ParStaticConfig.program_procedures = prev_procs
 
 
+def _stmt_own_ids(s):
+    """Identificatori letti o scritti da `s` stesso (non dai corpi annidati)."""
+    used = set()
+    tag = s[0]
+    if tag == 'local':
+        _collect_ids_in_expr(s[3], used)
+    elif tag == 'delocal':
+        used.add(s[2])
+        if s[3] is not None:
+            _collect_ids_in_expr(s[3], used)
+    elif tag == 'assign':
+        if isinstance(s[1], tuple):
+            _collect_ids_in_expr(s[1], used)
+        else:
+            used.add(s[1])
+        _collect_ids_in_expr(s[3], used)
+    elif tag in ('call', 'uncall', 'call_direct'):
+        for a in s[2]:
+            if a not in ('char', 'nil', 'empty'):
+                _collect_ids_in_expr(a, used)
+    elif tag == 'if':
+        _collect_cond_var_ids(s[1], used)
+        _collect_cond_var_ids(s[4], used)
+    elif tag == 'from':
+        _collect_cond_var_ids(s[1], used)
+        _collect_cond_var_ids(s[3], used)
+    return used
+
+
+def _check_ids_declared(s, proc_name, scope):
+    """Ogni identificatore usato da `s` dev'essere nello store: parametro,
+    variabile dichiarata o local aperto."""
+    for name in sorted(_stmt_own_ids(s)):
+        if name not in scope:
+            raise KairosCompileError(
+                "STATIC", f"riga {s[-1]}: variabile '{name}' in {proc_name} non dichiarata")
+
+
 def _check_local_blocks(stmts, proc_name, in_scope=()):
     """Come in Janus, `local x … delocal x` e' un blocco: ogni delocal chiude
     il local aperto piu' di recente nella stessa lista di istruzioni, e a fine
@@ -1032,16 +1070,22 @@ def _check_local_blocks(stmts, proc_name, in_scope=()):
         if not isinstance(s, tuple) or not s:
             continue
         tag = s[0]
+        _check_ids_declared(s, proc_name, tuple(in_scope) + tuple(o[0] for o in open_))
         if tag == 'decl':
             in_scope = tuple(in_scope) + (s[2],)
         elif tag == 'local':
-            if s[2] in in_scope or any(n == s[2] for n, _ in open_):
+            if s[2] in in_scope or any(o[0] == s[2] for o in open_):
                 raise KairosCompileError(
                     "LOCAL",
                     f"riga {s[-1]}: local '{s[2]}' in {proc_name}: il nome e' gia' in uso "
                     f"(parametro o local aperto) nella stessa attivazione (Local-Err)")
-            open_.append((s[2], s[-1]))
+            open_.append((s[2], s[-1], s[1]))
         elif tag == 'delocal':
+            if open_ and open_[-1][0] == s[2] and open_[-1][2] != s[1]:
+                raise KairosCompileError(
+                    "LOCAL",
+                    f"riga {s[-1]}: delocal {s[1]} '{s[2]}' in {proc_name} chiude un "
+                    f"local {open_[-1][2]}")
             if not open_ or open_[-1][0] != s[2]:
                 atteso = f"'{open_[-1][0]}'" if open_ else "nessuno"
                 raise KairosCompileError(
@@ -1050,7 +1094,7 @@ def _check_local_blocks(stmts, proc_name, in_scope=()):
                     f"aperto più di recente nello stesso blocco (atteso: {atteso})")
             open_.pop()
         else:
-            inner = tuple(in_scope) + tuple(n for n, _ in open_)
+            inner = tuple(in_scope) + tuple(o[0] for o in open_)
             if tag == 'if':
                 _check_local_blocks(s[2], proc_name, inner)
                 _check_local_blocks(s[3], proc_name, inner)
@@ -1062,7 +1106,7 @@ def _check_local_blocks(stmts, proc_name, in_scope=()):
                 for b in s[1]:
                     _check_local_blocks(b, proc_name, inner)
     if open_:
-        name, ln = open_[-1]
+        name, ln, _t = open_[-1]
         raise KairosCompileError(
             "LOCAL", f"riga {ln}: local '{name}' in {proc_name} senza delocal nello stesso blocco")
 
@@ -1076,6 +1120,22 @@ def _check_callees_defined(stmts, procs):
         if tag in ('call', 'uncall') and s[1] not in procs:
             raise KairosCompileError(
                 "STATIC", f"riga {s[-1]}: {tag} di '{s[1]}', procedura non definita")
+        if (tag in ('call', 'uncall') or (tag == 'call_direct' and s[1] in procs)) \
+                and len(s[2]) != len(procs[s[1]]):
+            raise KairosCompileError(
+                "STATIC", f"riga {s[-1]}: {s[1]} vuole {len(procs[s[1]])} argomenti, "
+                f"ne riceve {len(s[2])}")
+        if tag in ('call', 'uncall') or (tag == 'call_direct' and s[1] in procs):
+            # Come in Janus gli argomenti sono passati per riferimento e devono
+            # essere distinti: con f(x, x) il corpo vedrebbe `a += b` diventare
+            # `x += x`, che non e' invertibile.
+            seen = set()
+            for a in s[2]:
+                if isinstance(a, str) and a in seen:
+                    raise KairosCompileError(
+                        "STATIC", f"riga {s[-1]}: '{a}' passato due volte a '{s[1]}': "
+                        "gli argomenti di una chiamata devono essere distinti")
+                seen.add(a)
         if tag == 'if':
             _check_callees_defined(s[2], procs)
             _check_callees_defined(s[3], procs)
@@ -1138,7 +1198,7 @@ _FORBIDDEN_IN_TRY = ('par',)  # v1: niente par/canali dentro il body del try
 
 
 def _proc_contains_ssend_srecv(name, proc_bodies, cache, visiting):
-    """ssend/srecv raggiungibili dal corpo della procedura `name`, anche
+    """par, ssend o srecv raggiungibili dal corpo della procedura `name`, anche
     attraverso call/uncall annidate (per il divieto try/rollback: vedi
     _try_assert_no_forbidden). Memoizzato; `visiting` evita loop su
     ricorsione/mutua ricorsione tra procedure."""
@@ -1177,9 +1237,7 @@ def _stmts_contain_ssend_srecv(stmts, proc_bodies, cache, visiting):
             if _stmts_contain_ssend_srecv(from_second_body(s), proc_bodies, cache, visiting):
                 return True
         elif tag == 'par':
-            for branch in s[1]:
-                if _stmts_contain_ssend_srecv(branch, proc_bodies, cache, visiting):
-                    return True
+            return True   # anche un par raggiunto tramite call e' vietato nel try
     return False
 
 
@@ -1247,7 +1305,7 @@ def _try_assert_no_forbidden(stmts, lineno, proc_bodies, ssend_srecv_cache):
             raise KairosCompileError(
                 "PARSER",
                 f"riga {lineno}: '{s[0]} {s[1]}' non ammesso nel body di un blocco try (v1): "
-                f"'{s[1]}' contiene ssend/srecv, anche indirettamente — un try/rollback non può "
+                f"'{s[1]}' contiene par o ssend/srecv, anche indirettamente — un try/rollback non può "
                 "disfare un rendez-vous già consumato dal partner senza la sua cooperazione",
             )
         if s[0] == 'if':

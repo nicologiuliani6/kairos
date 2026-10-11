@@ -41,17 +41,6 @@ static inline void op_mineq(VM *vm, const char *frame_name)
     if (expr_is_bare_ident(expr) && !strcmp(ID, expr))
         vm_debug_panic("[VM] MINEQ: `%s -= %s` non reversibile (perde informazione)\n", ID, expr);
     var_par_mut_acquire(v);
-    /* UNCALL: saved_r+=r / ts+=t sono snapshot pre-corpo; r/t post-loop non sono il valore da sottrarre. */
-    if (vm->inversion_depth > 0 && !strcmp(ID, "saved_r") && !strcmp(expr, "r")) {
-        *cell = 0;
-        var_par_mut_release(v);
-        return;
-    }
-    if (vm->inversion_depth > 0 && !strcmp(ID, "ts") && !strcmp(expr, "t")) {
-        *cell = 0;
-        var_par_mut_release(v);
-        return;
-    }
     *cell -= resolve_value(vm, Findex, expr);
     var_par_mut_release(v);
 }

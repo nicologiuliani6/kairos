@@ -1,0 +1,7 @@
+// Errore di compilazione atteso: la chiamata ha meno argomenti dei parametri.
+procedure add(int a, int b)
+    a += b
+
+procedure main()
+    int x
+    call add(x)
