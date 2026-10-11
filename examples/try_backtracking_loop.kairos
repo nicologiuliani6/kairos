@@ -9,6 +9,9 @@
 //
 // budget = 10, N = 6. Traccia dei load: 1,3,6,10 (accettati), poi 15 e 16
 // rifiutati → backtrack a 10. Risultato: load=10, oggetti presi=4.
+//
+// `yrt taken == i` distingue i due esiti: i pesi 1..4 vengono tutti presi
+// (taken == i dopo il commit), mentre dopo un rollback taken resta indietro.
 
 procedure add_weight(int load, int w)
     load += w
@@ -25,7 +28,7 @@ procedure main()
         try load <= budget
             call add_weight(load, i)
             taken += 1
-        yrt load <= budget
+        yrt taken == i
     loop until i == N
 
     show(load)               // atteso: 10

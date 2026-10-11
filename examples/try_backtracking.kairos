@@ -7,6 +7,10 @@
 //   - falsa → la mossa sfora il budget: il body viene ANNULLATO (rollback),
 //             come un backtrack che disfa la scelta e prova la successiva.
 //
+// L'asserzione `yrt` deve distinguere i due esiti, come il `fi` di un if:
+// vera dopo il commit, falsa dopo il rollback. Qui la dà il contatore
+// `taken`, che cresce solo se la mossa viene confermata.
+//
 // Traccia: 0 +6=6 (ok) ; 6 +5=11 (>10 → backtrack) ; 6 +4=10 (ok).
 // Risultato: load=10, oggetti presi=2 (il 6 e il 4, scartato il 5).
 
@@ -19,19 +23,19 @@ procedure main()
     try load <= budget
         load += 6
         taken += 1
-    yrt load <= budget
+    yrt taken == 1
 
     // oggetto 2: peso 5  → 6+5 = 11 > 10 → mossa annullata
     try load <= budget
         load += 5
         taken += 1
-    yrt load <= budget
+    yrt taken == 2
 
     // oggetto 3: peso 4  → 6+4 = 10 <= 10 → mossa confermata
     try load <= budget
         load += 4
         taken += 1
-    yrt load <= budget
+    yrt taken == 2
 
     show(load)               // atteso: 10
     show(taken)              // atteso: 2

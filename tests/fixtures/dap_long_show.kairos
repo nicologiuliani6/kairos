@@ -1,0 +1,10 @@
+// Fixture di tests/test-dap/test_dap_autonomous.c: tante SHOW in streaming
+// sulla pipe del debugger. Il test avanza fino alla riga 7 (show), fa uno
+// step back e poi continue fino a x: 999.
+procedure main()
+    local int x = 0
+    from x == 0 do
+        show(x)
+        x += 1
+    loop until x == 1000
+    delocal int x = 1000

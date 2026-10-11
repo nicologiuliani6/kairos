@@ -1,0 +1,9 @@
+// Errore VM atteso (LoopError2, come in Janus): al rientro nel ciclo la
+// guardia `from` dev'essere falsa, altrimenti l'inverso non saprebbe dove
+// fermarsi. Qui `x != 3` resta vera anche alla seconda iterata.
+procedure main()
+    local int x = 0
+    from x != 3 do
+        x += 1
+    loop until x == 3
+    delocal int x = 3

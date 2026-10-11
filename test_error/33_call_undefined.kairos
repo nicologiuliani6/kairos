@@ -1,0 +1,5 @@
+// Errore di compilazione atteso: call di una procedura che non esiste.
+procedure main()
+    local int x = 0
+    call manca(x)
+    delocal int x = 0

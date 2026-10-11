@@ -1,0 +1,29 @@
+// Invertire un ramo di if che contiene un if annidato e una uncall: la uncall
+// del ramo, all'indietro, diventa una chiamata in avanti e non va saltata.
+procedure dup(int a, int r)
+    r += a
+
+procedure f(int c, int x, int y)
+    if c == 1 then
+        x += 1
+    else
+        local int t = 0
+        call dup(x, t)
+        if t == 3 then
+            y += 1
+        fi t == 3
+        uncall dup(x, t)
+        delocal int t = 0
+    fi c == 1
+
+procedure main()
+    local int c = 0
+    local int x = 3
+    local int y = 0
+    call f(c, x, y)
+    show(y)
+    uncall f(c, x, y)
+    show(y)
+    delocal int y = 0
+    delocal int x = 3
+    delocal int c = 0

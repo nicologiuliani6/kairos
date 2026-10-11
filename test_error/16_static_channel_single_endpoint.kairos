@@ -14,3 +14,7 @@ procedure main()
     and
         x += 1
     rap
+    delocal int x = 1
+    v -= 1
+    delocal int v = 0
+    delocal channel c = empty

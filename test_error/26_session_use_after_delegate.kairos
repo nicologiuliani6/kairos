@@ -28,3 +28,8 @@ procedure main()
         srecv(<d>, preso)
         delocal channel preso = empty
     rap
+    delocal int d = 1
+    delocal int b = 0
+    delocal int a = 0
+    delocal channel t = empty
+    delocal channel c = empty

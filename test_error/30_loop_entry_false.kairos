@@ -1,0 +1,8 @@
+// Errore VM atteso (LoopError1, come in Janus): all'ingresso del ciclo la
+// guardia `from` dev'essere vera.
+procedure main()
+    local int x = 1
+    from x == 0 do
+        x += 1
+    loop until x == 3
+    delocal int x = 3

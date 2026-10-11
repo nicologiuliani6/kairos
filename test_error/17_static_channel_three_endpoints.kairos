@@ -18,3 +18,8 @@ procedure main()
     and
         srecv(<b>, c)
     rap
+    delocal int b = 0
+    delocal int a = 1
+    v -= 1
+    delocal int v = 0
+    delocal channel c = empty

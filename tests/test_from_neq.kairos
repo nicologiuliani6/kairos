@@ -1,8 +1,10 @@
-// FROM con condizione !=
+// FROM con condizione != (guardia d'uscita).
+// Come in Janus la guardia d'ingresso è vera solo all'ingresso
+// e quella d'uscita decide quando fermarsi.
 procedure main()
     local int x = 0
-    from x != 3 do
+    from x == 0 do
         x += 1
-    loop until x == 3
+    loop until x != 1 && x != 2
     show(x)
     delocal int x = 3

@@ -290,7 +290,6 @@ static void *thread_entry(void *arg)
             continue;
         }
         else if (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL")) {
-            vm_if_mark_call();
             /* Quando is_inverse=1, CALL e UNCALL si scambiano di ruolo:
                CALL  → esegue invert_op_to_line  (come UNCALL)
                UNCALL→ esegue vm_run_BT           (come CALL)
@@ -324,8 +323,9 @@ static void *thread_entry(void *arg)
             stack_restore(&vm->frames[cfi]->LocalVariables, slv);
             VM_PARAM_SAVE_FREE(sv);
         }
+        else if (!strcmp(fw, "LABEL"))  op_label(vm, fname, args->buffer);
         else if (!strcmp(fw, "START") ||
-                 !strcmp(fw, "DECL") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL")) { /* skip */ }
+                 !strcmp(fw, "DECL") || !strcmp(fw, "PARAM")) { /* skip */ }
         else { vm_debug_panic("[THREAD] op sconosciuta: '%s'\n", fw); }
 
         ptr = nl + 1;

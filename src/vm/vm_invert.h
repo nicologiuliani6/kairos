@@ -637,37 +637,6 @@ static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
     thread_val_IF = eval_cond(lval, op, rval);
 }
 
-/* IF su snapshot local (saved_r, ts, …): in inversa il delocal può azzerare la copia
-   prima del JMPF; usare il parametro sorgente ancora intatto (a, t, …). */
-static inline int64_t invert_if_entry_lval(VM *vm, uint fi, const char *id, int64_t current)
-{
-    if (!strcmp(id, "saved_r")) {
-        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "saved_r")) {
-            uint si = char_id_map_get(&vm->frames[fi]->VarIndexer, "saved_r");
-            Var *sv = vm->frames[fi]->vars[si];
-            if (sv)
-                return *(sv->value);
-        }
-        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "a")) {
-            uint ai = char_id_map_get(&vm->frames[fi]->VarIndexer, "a");
-            return *(vm->frames[fi]->vars[ai]->value);
-        }
-    }
-    if (!strcmp(id, "ts")) {
-        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "ts")) {
-            uint tsi = char_id_map_get(&vm->frames[fi]->VarIndexer, "ts");
-            Var *tsv = vm->frames[fi]->vars[tsi];
-            if (tsv)
-                return *(tsv->value);
-        }
-        if (char_id_map_exists(&vm->frames[fi]->VarIndexer, "t")) {
-            uint ti = char_id_map_get(&vm->frames[fi]->VarIndexer, "t");
-            return *(vm->frames[fi]->vars[ti]->value);
-        }
-    }
-    return current;
-}
-
 static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char *op,
                                     const char *val)
 {
@@ -688,9 +657,9 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
         int vil = char_id_map_lookup(&vm->frames[fi]->VarIndexer, id);
         Var *gv = (vil >= 0) ? vm->frames[fi]->vars[vil] : NULL;
         if (gv && gv->value)
-            lval = invert_if_entry_lval(vm, fi, id, *(gv->value));
+            lval = *(gv->value);
         else
-            lval = invert_if_entry_lval(vm, fi, id, 0);
+            lval = 0;
     }
     int64_t rval = resolve_expr(vm, fi, val);
     thread_val_IF = eval_cond(lval, op, rval);
@@ -735,9 +704,6 @@ static inline void check_if_entry_inverse(VM *vm, uint fi,
     /* Senza asserzione d'uscita il ramo e' stato dedotto dalla guardia stessa:
      * riverificarla sarebbe una tautologia. */
     if (vm_name_get(d->eval_exit_id)[0] == '\0' || vm_name_get(d->eval_entry_id)[0] == '\0') return;
-    /* Nei rami di par altri thread possono mutare gli int condivisi fra la
-     * valutazione e il controllo, come gia' fa op_assert in avanti. */
-    if (current_thread_args != NULL) return;
 
     int64_t lval = resolve_value(vm, fi, vm_name_get(d->eval_entry_id));
     int64_t rval = resolve_value(vm, fi, vm_name_get(d->eval_entry_val));
@@ -890,9 +856,8 @@ static inline int line_is_inside_par(uint line, ParRange *pars, int npars)
 
 /* Inverso di `CALL pn args` quando il frontend ha compilato il corpo inverso
  * `<pn>__inv` (procedure ricorsive, src/frontend/inverse.py): lo si esegue in
- * avanti, come una `uncall` scritta nel sorgente. Il replay dinamico per
- * recursion_depth non regge tutte le forme di ricorsione (es. ramo then
- * ricorsivo, else caso base). Legge gli argomenti con strtok. 1 = gestita. */
+ * avanti, come una `uncall` scritta nel sorgente. Legge gli argomenti con
+ * strtok. 1 = gestita. */
 static int invert_call_via_compiled_inverse(VM *vm, char *buf, uint caller_fi, const char *pn)
 {
     if (!pn) return 0;
@@ -930,8 +895,7 @@ static int invert_call_via_compiled_inverse(VM *vm, char *buf, uint caller_fi, c
 
 static void exec_branch_inverse(VM *vm, char *original_buffer,
                                 const char *frame_name,
-                                uint from_line, uint to_line,
-                                uint caller_fi);
+                                uint from_line, uint to_line);
 
 
 /* ======================================================================
@@ -1203,54 +1167,31 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             { i--; continue; }
 
         if (iz == IF_ZONE_JMPF_ELSE) {
-            int depth = vm->frames[fi_reset]->recursion_depth;
-            if (depth > 0) {
-                /* Recursive procedure: the entry guard can be overwritten by nested calls.
-                   Use recorded recursion depth to replay ELSE inversions, then base THEN. */
-                for (int d = 0; d < depth; d++) {
-                    uint else_from = ifs[ii].else_label_line + 1;
-                    uint else_to = ifs[ii].fi_label_line;
-                    if (else_from >= else_to) break;
-                    Stack sv = vm->frames[fi]->LocalVariables;
-                    stack_init(&vm->frames[fi]->LocalVariables);
-                    exec_branch_inverse(vm, orig, cur_frame, else_from, else_to, fi);
-                    stack_restore(&vm->frames[fi]->LocalVariables, sv);
-                }
-                uint then_from = ifs[ii].jmpf_else_line + 1;
-                uint then_to = ifs[ii].jmp_fi_line;
-                if (then_from < then_to) {
-                    Stack sv = vm->frames[fi]->LocalVariables;
-                    stack_init(&vm->frames[fi]->LocalVariables);
-                    exec_branch_inverse(vm, orig, cur_frame, then_from, then_to, fi);
-                    stack_restore(&vm->frames[fi]->LocalVariables, sv);
-                }
+            do_eval_if_branch(vm, fi, &ifs[ii]);
+            /* exec_branch_inverse puo' rivalutare thread_val_IF (if annidati). */
+            int took_then_inv = thread_val_IF ? 1 : 0;
+            uint branch_from = 0, branch_to = 0;
+            if (thread_val_IF) {
+                /* Forward IF condition true: invert only THEN branch. */
+                branch_from = ifs[ii].jmpf_else_line + 1;
+                branch_to = ifs[ii].jmp_fi_line;
             } else {
-                do_eval_if_branch(vm, fi, &ifs[ii]);
-                /* exec_branch_inverse puo' rivalutare thread_val_IF (if annidati). */
-                int took_then_inv = thread_val_IF ? 1 : 0;
-                uint branch_from = 0, branch_to = 0;
-                if (thread_val_IF) {
-                    /* Forward IF condition true: invert only THEN branch. */
-                    branch_from = ifs[ii].jmpf_else_line + 1;
-                    branch_to = ifs[ii].jmp_fi_line;
-                } else {
-                    /* Forward IF condition false: invert only ELSE branch. */
-                    branch_from = ifs[ii].else_label_line + 1;
-                    branch_to = ifs[ii].fi_label_line;
-                }
-                if (branch_from >= branch_to) {
-                    check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
-                    int t = -1;
-                    for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
-                    i = (t >= 0) ? t - 1 : i - 1;
-                    continue;
-                }
-                Stack sv = vm->frames[fi]->LocalVariables;
-                stack_init(&vm->frames[fi]->LocalVariables);
-                exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to, fi);
-                stack_restore(&vm->frames[fi]->LocalVariables, sv);
-                check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
+                /* Forward IF condition false: invert only ELSE branch. */
+                branch_from = ifs[ii].else_label_line + 1;
+                branch_to = ifs[ii].fi_label_line;
             }
+            if (branch_from >= branch_to) {
+                check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
+                int t = -1;
+                for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
+                i = (t >= 0) ? t - 1 : i - 1;
+                continue;
+            }
+            Stack sv = vm->frames[fi]->LocalVariables;
+            stack_init(&vm->frames[fi]->LocalVariables);
+            exec_branch_inverse(vm, orig, cur_frame, branch_from, branch_to);
+            stack_restore(&vm->frames[fi]->LocalVariables, sv);
+            check_if_entry_inverse(vm, fi, &ifs[ii], took_then_inv);
             int t = -1;
             for (int j = i - 1; j >= 0; j--) if (ln[j] == ifs[ii].eval_entry_line) { t = j; break; }
             i = (t >= 0) ? t - 1 : i - 1;
@@ -1463,26 +1404,61 @@ static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_l
     return 0;
 }
 
-static inline int branch_span_has_call(char *buf, uint from_line, uint to_line)
+/* Inverso di `UNCALL pn args` dentro un ramo che si sta invertendo: esegue pn
+ * in avanti con gli argomenti presi (con strtok) dalla riga corrente. */
+static void branch_inverse_uncall(VM *vm, char *buf, const char *frame_name, uint cfi)
 {
-    char *ptr = go_to_line(buf, from_line);
-    if (!ptr) return 0;
-    while (ptr && *ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break;
-        uint cur = (uint)atoi(ptr);
-        if (cur >= to_line) break;
-        VM_LINE_DUP(lb, ptr, nl);
-        char *fw = strtok(skip_lineno(lb), " \t");
-        if (fw && (!strcmp(fw, "CALL") || !strcmp(fw, "UNCALL"))) return 1;
-        ptr = nl + 1;
+    char *pn = strtok(NULL, " \t");
+    /* Ricorsiva se pn è il nome base del frame corrente. */
+    int is_rec = vm_base_eq(frame_name, pn);
+    int new_depth = 0;
+    if (is_rec) {
+        const char *atf = strchr(frame_name, '@');
+        if (atf) {
+            const char *us = strrchr(frame_name, '_');
+            if (us && us > atf) new_depth = atoi(us + 1);
+            else new_depth = atoi(atf + 1);
+        }
+        new_depth++;
     }
-    return 0;
+    uint callee_fi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
+                            : (current_thread_args ? clone_frame_for_thread(vm, pn)
+                                                   : char_id_map_get(&FrameIndexer, pn));
+    int  pc = vm->frames[callee_fi]->param_count, *pi = vm->frames[callee_fi]->param_indices;
+    VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi]->vars[pi[k]];
+    Stack slv = vm->frames[callee_fi]->LocalVariables;
+    stack_init(&vm->frames[callee_fi]->LocalVariables);
+    char *p3 = NULL; int jj = 0;
+    while ((p3 = strtok(NULL, " \t")) && jj < pc) {
+        int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3);
+        vm->frames[callee_fi]->vars[pi[jj++]] = vm->frames[cfi]->vars[si];
+    }
+    VM_FRAME_KEY_BUF(cn, pn);
+    if (is_rec && current_thread_args) {
+        make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
+    } else if (is_rec) {
+        make_frame_key(pn, new_depth, cn, sizeof(cn));
+    } else if (current_thread_args) {
+        make_thread_frame_key(pn, cn, sizeof(cn));
+    } else {
+        strncpy(cn, pn, sizeof(cn) - 1);
+        cn[sizeof(cn) - 1] = '\0';
+    }
+    int saved_inv = vm->inversion_depth;
+    int ss = vm->suppress_show;
+    vm->inversion_depth       = 0;
+    vm->suppress_show = 1;
+    vm_run_BT(vm, buf, cn);
+    vm->inversion_depth       = saved_inv;
+    vm->suppress_show = ss;
+    for (int k = 0; k < pc; k++) vm->frames[callee_fi]->vars[pi[k]] = sv[k];
+    stack_restore(&vm->frames[callee_fi]->LocalVariables, slv);
+    VM_PARAM_SAVE_FREE(sv);
 }
 
 static void exec_branch_inverse(VM *vm, char *original_buffer,
                                 const char *frame_name,
-                                uint from_line, uint to_line,
-                                uint caller_fi)
+                                uint from_line, uint to_line)
 {
     if (from_line >= to_line) return;
 
@@ -1493,15 +1469,6 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     memcpy(saved, vm->frames[cfi]->vars, sizeof(Var *) * (size_t)_vcap);
     Stack saved_lv = vm->frames[cfi]->LocalVariables;
     stack_init(&vm->frames[cfi]->LocalVariables);
-
-    for (int p = 0; p < vm->frames[cfi]->param_count; p++) {
-        int   pidx  = vm->frames[cfi]->param_indices[p];
-        char *pname = saved[pidx]->name;
-        if (char_id_map_exists(&vm->frames[caller_fi]->VarIndexer, pname)) {
-            int src = char_id_map_get(&vm->frames[caller_fi]->VarIndexer, pname);
-            vm->frames[cfi]->vars[pidx] = vm->frames[caller_fi]->vars[src];
-        }
-    }
 
     Var **tmp_alloc = (Var **)calloc((size_t)_vcap, sizeof(Var *));
     for (int v = 0; v < vm->frames[cfi]->var_count; v++) {
@@ -1606,7 +1573,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 if (bf < bt) {
                     Stack sv2 = vm->frames[cfi]->LocalVariables;
                     stack_init(&vm->frames[cfi]->LocalVariables);
-                    exec_branch_inverse(vm, original_buffer, frame_name, bf, bt, caller_fi);
+                    exec_branch_inverse(vm, original_buffer, frame_name, bf, bt);
                     stack_restore(&vm->frames[cfi]->LocalVariables, sv2);
                 }
                 /* Jump idx a prima dell'EVAL del nested IF. */
@@ -1636,7 +1603,6 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
 
             /* Linear inverse della op come prima. */
             if (!strcmp(fw, "CALL")) {
-                vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
                 if (invert_call_via_compiled_inverse(vm, original_buffer, cfi, pn)) { idx--; continue; }
                 /* Ricorsiva se pn è il nome base del frame corrente. */
@@ -1678,6 +1644,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 stack_restore(&vm->frames[callee_fi_c]->LocalVariables, slv_c);
                 VM_PARAM_SAVE_FREE(sv_c);
             }
+            else if (!strcmp(fw, "UNCALL")) branch_inverse_uncall(vm, original_buffer, frame_name, cfi);
             else if (!strcmp(fw, "PUSHEQ")) op_pusheq_inv(vm, frame_name);
             else if (!strcmp(fw, "MINEQ"))  op_mineq_inv (vm, frame_name);
             else if (!strcmp(fw, "XOREQ"))  op_xoreq_inv (vm, frame_name);
@@ -1717,7 +1684,6 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
                 /* Inverti la procedura chiamata (anche ricorsiva): mirror del
                    path in invert_op_to_line per CALL. Per ricorsiva calcola
                    new_depth dal frame_name (@1, @_1, …) e usa clone_frame_for_depth. */
-                vm_if_mark_call();
                 char *pn = strtok(NULL, " \t");
                 if (invert_call_via_compiled_inverse(vm, original_buffer, cfi, pn)) continue;
                 /* Ricorsiva se pn è il nome base del frame corrente. */
@@ -1768,53 +1734,7 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             }
 
             if (!strcmp(fw, "UNCALL")) {
-                vm_if_mark_call();
-                char *pn = strtok(NULL, " \t");
-                /* Ricorsiva se pn è il nome base del frame corrente. */
-                int is_rec = vm_base_eq(frame_name, pn);
-                int new_depth = 0;
-                if (is_rec) {
-                    const char *atf = strchr(frame_name, '@');
-                    if (atf) {
-                        const char *us = strrchr(frame_name, '_');
-                        if (us && us > atf) new_depth = atoi(us + 1);
-                        else new_depth = atoi(atf + 1);
-                    }
-                    new_depth++;
-                }
-                uint callee_fi = is_rec ? clone_frame_for_depth(vm, pn, new_depth)
-                                        : (current_thread_args ? clone_frame_for_thread(vm, pn)
-                                                               : char_id_map_get(&FrameIndexer, pn));
-                int  pc = vm->frames[callee_fi]->param_count, *pi = vm->frames[callee_fi]->param_indices;
-                VM_PARAM_SAVE(sv, pc); for (int k = 0; k < pc; k++) sv[k] = vm->frames[callee_fi]->vars[pi[k]];
-                Stack slv = vm->frames[callee_fi]->LocalVariables;
-                stack_init(&vm->frames[callee_fi]->LocalVariables);
-                char *p3 = NULL; int jj = 0;
-                while ((p3 = strtok(NULL, " \t")) && jj < pc) {
-                    int si = char_id_map_get(&vm->frames[cfi]->VarIndexer, p3);
-                    vm->frames[callee_fi]->vars[pi[jj++]] = vm->frames[cfi]->vars[si];
-                }
-                VM_FRAME_KEY_BUF(cn, pn);
-                if (is_rec && current_thread_args) {
-                    make_frame_key_par_rec(pn, new_depth, cn, sizeof(cn));
-                } else if (is_rec) {
-                    make_frame_key(pn, new_depth, cn, sizeof(cn));
-                } else if (current_thread_args) {
-                    make_thread_frame_key(pn, cn, sizeof(cn));
-                } else {
-                    strncpy(cn, pn, sizeof(cn) - 1);
-                    cn[sizeof(cn) - 1] = '\0';
-                }
-                int saved_inv = vm->inversion_depth;
-                int ss = vm->suppress_show;
-                vm->inversion_depth       = 0;
-                vm->suppress_show = 1;
-                vm_run_BT(vm, original_buffer, cn);
-                vm->inversion_depth       = saved_inv;
-                vm->suppress_show = ss;
-                for (int k = 0; k < pc; k++) vm->frames[callee_fi]->vars[pi[k]] = sv[k];
-                stack_restore(&vm->frames[callee_fi]->LocalVariables, slv);
-                VM_PARAM_SAVE_FREE(sv);
+                branch_inverse_uncall(vm, original_buffer, frame_name, cfi);
                 continue;
             }
 
@@ -1840,16 +1760,9 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             vm->frames[cfi]->vars[v] = NULL;
         }
 
-    /* Restore SOLO gli slot param relinkati al caller (vedi 1525-1531).
-     * Il vecchio blanket `memcpy(vars, saved)` reinstaurava OGNI slot,
-     * inclusi quelli che il branch ha legittimamente liberato via op_delocal
-     * (op_local/op_delocal fanno free+realloc del Var): sotto la recursion
-     * annidata `exec_branch_inverse → invert_op_to_line → exec_branch_inverse`
-     * lo snapshot raw `saved[v]` puntava al Var dell'outer poi liberato dal
-     * branch interno → restore reinstaurava un puntatore freed → use-after-free
-     * al successivo op_local (SIGSEGV su loop annidati). Gli slot non-param
-     * vanno lasciati com'è il branch li ha lasciati (op_delocal li ha già
-     * messi a NULL; i tmp sono stati liberati sopra). */
+    /* Ripristina solo gli slot dei parametri. Gli altri restano come il ramo
+     * li ha lasciati: op_local/op_delocal liberano e riallocano le Var, e
+     * reinstaurare il vecchio puntatore ne userebbe uno già liberato. */
     for (int p = 0; p < vm->frames[cfi]->param_count; p++) {
         int pidx = vm->frames[cfi]->param_indices[p];
         if (pidx < _vcap)

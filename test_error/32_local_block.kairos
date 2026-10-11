@@ -1,0 +1,10 @@
+// Errore di compilazione atteso: come in Janus `local x … delocal x` e' un
+// blocco, quindi il delocal deve stare nella stessa lista di istruzioni del
+// local che chiude.
+procedure main()
+    local int c = 1
+    local int y = 0
+    if c == 1 then
+        delocal int y = 0
+    fi c == 1
+    delocal int c = 1

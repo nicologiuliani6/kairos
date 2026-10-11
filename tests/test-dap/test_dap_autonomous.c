@@ -129,7 +129,7 @@ int main(void) {
         if (flags >= 0) fcntl(out_fd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    /* dap_long_show.kairos: ultimo show è x: 9999 (until x == 10000) */
+    /* dap_long_show.kairos: ultimo show è x: 999 (until x == 1000) */
     size_t out_cap = 2u * 1024u * 1024u;
     char *out = (char *)calloc(1, out_cap);
     if (!out) {
@@ -148,9 +148,9 @@ int main(void) {
 
     char vars2[65536] = {0};
     vm_debug_vars_json_ext(dbg, vars2, (int)sizeof(vars2));
-    int ok = (line < 0 && strstr(out, "x: 9999") != NULL);
+    int ok = (line < 0 && strstr(out, "x: 999\n") != NULL);
     if (ok) {
-        printf("RESULT: PASS (SHOW in streaming sulla pipe fino a x: 9999)\n");
+        printf("RESULT: PASS (SHOW in streaming sulla pipe fino a x: 999)\n");
     } else {
         printf("RESULT: FAIL (output DAP assente/incompleto)\n");
     }

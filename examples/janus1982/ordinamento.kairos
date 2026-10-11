@@ -41,3 +41,15 @@ procedure main()
     call sort(list, perm, n, i, j)
     show(list)
     show(perm)
+    uncall sort(list, perm, n, i, j)
+    uncall makeidperm(perm, n, i)
+    list[4] -= 3
+    list[3] -= 1
+    list[2] -= 5
+    list[1] -= 2
+    list[0] -= 4
+    delocal int j = 0
+    delocal int i = 0
+    delocal int n = 5
+    delocal int perm[5] = 0
+    delocal int list[5] = 0

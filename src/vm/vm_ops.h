@@ -61,21 +61,14 @@ static void vm_dap_printf(const char *fmt, ...)
 
 /* Stack per-thread dei rami presi dagli IF in corso (per il controllo del FI
  * in op_assert). La profondità è quella di annidamento a run time, ricorsione
- * compresa: nessun massimo, i due vettori crescono raddoppiando. */
+ * compresa: nessun massimo, il vettore cresce raddoppiando. */
 static __thread int *if_branch_stack          = NULL;
-static __thread int *if_branch_has_call_stack = NULL;
 static __thread int  if_branch_cap            = 0;
 static __thread int  if_branch_top            = -1;
 
 static inline void vm_if_reset_branch_stack(void)
 {
     if_branch_top = -1;
-}
-
-static inline void vm_if_mark_call(void)
-{
-    if (if_branch_top >= 0)
-        if_branch_has_call_stack[if_branch_top] = 1;
 }
 
 static inline void vm_if_push_branch(int took_then)
@@ -85,21 +78,16 @@ static inline void vm_if_push_branch(int took_then)
         int *a = (int *)realloc(if_branch_stack, sizeof(int) * (size_t)nc);
         if (!a) vm_debug_panic("[VM] IF: memoria esaurita\n");
         if_branch_stack = a;
-        int *b = (int *)realloc(if_branch_has_call_stack, sizeof(int) * (size_t)nc);
-        if (!b) vm_debug_panic("[VM] IF: memoria esaurita\n");
-        if_branch_has_call_stack = b;
         if_branch_cap = nc;
     }
     if_branch_stack[++if_branch_top] = took_then;
-    if_branch_has_call_stack[if_branch_top] = 0;
 }
 
-/* Alla fine di un thread: i vettori sono __thread, li libera chi li ha creati. */
+/* Alla fine di un thread: il vettore è __thread, lo libera chi l'ha creato. */
 static inline void vm_if_free_branch_stack(void)
 {
     free(if_branch_stack);
-    free(if_branch_has_call_stack);
-    if_branch_stack = if_branch_has_call_stack = NULL;
+    if_branch_stack = NULL;
     if_branch_cap = 0;
     if_branch_top = -1;
 }
@@ -735,27 +723,19 @@ static inline void op_assert(VM *vm, const char *frame_name)
        è la condizione FI appena valutata. */
     int fi_result = (int)thread_val_IF;
 
-    /* Regola runtime richiesta: se abbiamo seguito il ramo ELSE e, a fine IF,
-       la condizione FI risulta vera, segnaliamo errore.
-       Nei casi con call/uncall nel blocco IF (es. ricorsione), manteniamo il
-       comportamento storico per non introdurre regressioni.
-       Nei thread worker di PAR_START, altri pthread possono mutare i PARAM/int
-       condivisi tra i rami: la condizione può cambiare tra JMPF e ASSERT (race
-       legittima con KAIROS_ALLOW_PAR_SHARED_INT / busy-wait). Non imporre
-       allora il vincolo IF/FI single-thread. */
+    /* Come in Janus: dopo il ramo then la condizione FI dev'essere vera, dopo il
+       ramo else falsa. */
     if (if_branch_top >= 0) {
         int took_then = if_branch_stack[if_branch_top--];
-        int has_call  = if_branch_has_call_stack[if_branch_top + 1];
-        int par_worker = (current_thread_args != NULL);
-        if (!has_call && !took_then && fi_result && !par_worker) {
+        if (!took_then && fi_result) {
             vm_debug_panic(
-                "[VM] IF/FI non reversibile: ramo else ma condizione fi=vera (frame=%s lhs=%s op=%s rhs=%s fi=%d call=%d)\n",
-                frame_name, lhs_tok, op_tok, rhs, fi_result, has_call);
+                "[VM] IF/FI non reversibile: ramo else ma condizione fi=vera (frame=%s lhs=%s op=%s rhs=%s)\n",
+                frame_name, lhs_tok, op_tok, rhs);
         }
-        if (!has_call && took_then && !fi_result && !par_worker) {
+        if (took_then && !fi_result) {
             vm_debug_panic(
-                "[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa (frame=%s lhs=%s op=%s rhs=%s fi=%d call=%d)\n",
-                frame_name, lhs_tok, op_tok, rhs, fi_result, has_call);
+                "[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa (frame=%s lhs=%s op=%s rhs=%s)\n",
+                frame_name, lhs_tok, op_tok, rhs);
         }
         return;
     }
@@ -784,6 +764,64 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
     return newptr;
 }
 
+/* Guardia d'ingresso b1 del ciclo `from b1 do c1 loop c2 until b2` di etichette
+ * `_<uid>`, valutata nello stato corrente. La riga `EVAL b1` ha posizione fissa
+ * rispetto alle etichette del ciclo: due righe prima di LABEL FROM_START nel
+ * layout a un corpo, tre righe prima di LABEL FROM_BACK in quello a due. */
+static inline int loop_entry_guard(VM *vm, const char *fname, char *buf, const char *uid)
+{
+    uint fi = get_findex(fname);
+    size_t ul = strlen(uid);
+    char lbl[ul + sizeof("FROM_START_")];
+    memcpy(lbl, "FROM_BACK_", sizeof("FROM_BACK_") - 1);
+    memcpy(lbl + sizeof("FROM_BACK_") - 1, uid, ul + 1);
+    uint back = 3;
+    if (!char_id_map_exists(&vm->frames[fi]->LabelIndexer, lbl)) {
+        memcpy(lbl, "FROM_START_", sizeof("FROM_START_") - 1);
+        memcpy(lbl + sizeof("FROM_START_") - 1, uid, ul + 1);
+        back = 2;
+    }
+    uint li  = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);
+    char *ln = go_to_line(buf, vm->frames[fi]->label[li] - back);
+    char *nl = ln ? strchr(ln, '\n') : NULL;
+    if (!nl) vm_debug_panic("[VM] FROM: guardia d'ingresso del ciclo %s non trovata\n", uid);
+    VM_LINE_DUP(line, ln, nl);
+    char *fw = strtok(skip_lineno(line), " \t");
+    if (!fw || strcmp(fw, "EVAL") != 0)
+        vm_debug_panic("[VM] FROM: guardia d'ingresso del ciclo %s non trovata\n", uid);
+    uint saved = thread_val_IF;
+    op_eval(vm, fname);
+    int b1 = thread_val_IF ? 1 : 0;
+    thread_val_IF = saved;
+    return b1;
+}
+
+/* LoopError2: al rientro nel ciclo (dopo c2) la guardia d'ingresso dev'essere
+ * falsa, come in Janus; e' cio' che permette all'inverso di sapere quando
+ * fermarsi. */
+static inline void loop_check_reentry(VM *vm, const char *fname, char *buf, const char *uid)
+{
+    if (loop_entry_guard(vm, fname, buf, uid))
+        vm_debug_panic("[VM] FROM: guardia d'ingresso vera al rientro nel ciclo "
+                       "(LoopError2, frame=%s)\n", fname);
+}
+
+/* `LABEL FROM_START_<uid>` raggiunta in sequenza: nel layout a due corpi vuol
+ * dire che si rientra nel ciclo dopo c2 (all'ingresso la si scavalca con JMP). */
+static inline void op_label(VM *vm, const char *fname, char *buf)
+{
+    char *lbl = strtok(NULL, " \t");
+    if (!lbl || strncmp(lbl, "FROM_START_", 11) != 0) return;
+    const char *uid = lbl + 11;
+    uint fi = get_findex(fname);
+    size_t ul = strlen(uid);
+    char back[ul + sizeof("FROM_BACK_")];
+    memcpy(back, "FROM_BACK_", sizeof("FROM_BACK_") - 1);
+    memcpy(back + sizeof("FROM_BACK_") - 1, uid, ul + 1);
+    if (char_id_map_exists(&vm->frames[fi]->LabelIndexer, back))
+        loop_check_reentry(vm, fname, buf, uid);
+}
+
 static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
 {
     char *lbl = strtok(NULL, " \t");
@@ -795,6 +833,13 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
     }
 
     if (thread_val_IF) return NULL;
+    /* LoopError1: la guardia d'ingresso di un ciclo dev'essere vera all'ingresso. */
+    if (lbl && !strncmp(lbl, "FROM_ERR_", 9))
+        vm_debug_panic("[VM] FROM: guardia d'ingresso falsa all'ingresso del ciclo "
+                       "(LoopError1, frame=%s)\n", fname);
+    /* Ciclo a un corpo: il back-edge e' il rientro, la guardia dev'essere falsa. */
+    if (lbl && !strncmp(lbl, "FROM_START_", 11))
+        loop_check_reentry(vm, fname, buf, lbl + 11);
     uint fi = get_findex(fname);
     if (!char_id_map_exists(&vm->frames[fi]->LabelIndexer, lbl)) vm_debug_panic("EXIT_FAILURE");
     uint  li     = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);

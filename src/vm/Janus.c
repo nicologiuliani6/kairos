@@ -170,7 +170,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             continue;
         }
         else if (!strcmp(fw, "CALL")) {
-            vm_if_mark_call();
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
             int   is_rec    = vm_base_eq(fname, pn);
@@ -241,13 +240,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             if (is_rec) {
                 vm->frames[cfi]->recursion_depth = new_depth;
-                /* invert_op_to_line spesso riceve solo il nome base (UNCALL): il frame
-                 * template deve riflettere la profondità corrente. Nei worker PAR non
-                 * aggiorniamo il template condiviso (altri thread / altre proc). */
-                if (!current_thread_args) {
-                    uint bfi = char_id_map_get(&FrameIndexer, pn);
-                    vm->frames[bfi]->recursion_depth = new_depth;
-                }
             }
             VM_FRAME_KEY_BUF(nfname, pn);
             if (is_rec) {
@@ -271,7 +263,6 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             continue;
         }
         else if (!strcmp(fw, "UNCALL")) {
-            vm_if_mark_call();
             char *pn  = strtok(NULL, " \t");
             VMLOG("[UNCALL] chiamato per '%s'\n", pn ? pn : "NULL");
             uint  cfi = current_thread_args ? clone_frame_for_thread(vm, pn)
@@ -334,8 +325,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else if (!strcmp(fw, "JMP")) {
             ptr = op_jmp(vm, fname, orig); continue;
         }
+        else if (!strcmp(fw, "LABEL"))  op_label (vm, fname, orig);
         else if (!strcmp(fw, "START") ||
-                 !strcmp(fw, "PROC") || !strcmp(fw, "PARAM") || !strcmp(fw, "LABEL") ||
+                 !strcmp(fw, "PROC") || !strcmp(fw, "PARAM") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "HALT"))  { /* skip */ }
         /* Dopo END_PROC il return_ptr può cadere su THREAD_* o PAR_END: è la fine
          * del branch fisico nel bytecode. thread_entry salta così; qui vm_run_BT

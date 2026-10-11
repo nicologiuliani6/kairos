@@ -1010,6 +1010,62 @@ def run_static_checks(program_ast):
         _ParStaticConfig.program_procedures = prev_procs
 
 
+def _check_local_blocks(stmts, proc_name):
+    """Come in Janus, `local x … delocal x` e' un blocco: ogni delocal chiude
+    il local aperto piu' di recente nella stessa lista di istruzioni, e a fine
+    lista non resta nessun local aperto."""
+    open_ = []
+    for s in stmts or []:
+        if not isinstance(s, tuple) or not s:
+            continue
+        tag = s[0]
+        if tag == 'local':
+            open_.append((s[2], s[-1]))
+        elif tag == 'delocal':
+            if not open_ or open_[-1][0] != s[2]:
+                atteso = f"'{open_[-1][0]}'" if open_ else "nessuno"
+                raise KairosCompileError(
+                    "LOCAL",
+                    f"riga {s[-1]}: delocal '{s[2]}' in {proc_name} non chiude il local "
+                    f"aperto più di recente nello stesso blocco (atteso: {atteso})")
+            open_.pop()
+        elif tag == 'if':
+            _check_local_blocks(s[2], proc_name)
+            _check_local_blocks(s[3], proc_name)
+        elif tag == 'from':
+            _check_local_blocks(s[2], proc_name)
+            if len(s) >= 7:
+                _check_local_blocks(s[6], proc_name)
+        elif tag == 'par':
+            for b in s[1]:
+                _check_local_blocks(b, proc_name)
+    if open_:
+        name, ln = open_[-1]
+        raise KairosCompileError(
+            "LOCAL", f"riga {ln}: local '{name}' in {proc_name} senza delocal nello stesso blocco")
+
+
+def _check_callees_defined(stmts, procs):
+    """Ogni `call`/`uncall` deve nominare una procedura del programma."""
+    for s in stmts or []:
+        if not isinstance(s, tuple) or not s:
+            continue
+        tag = s[0]
+        if tag in ('call', 'uncall') and s[1] not in procs:
+            raise KairosCompileError(
+                "STATIC", f"riga {s[-1]}: {tag} di '{s[1]}', procedura non definita")
+        if tag == 'if':
+            _check_callees_defined(s[2], procs)
+            _check_callees_defined(s[3], procs)
+        elif tag == 'from':
+            _check_callees_defined(s[2], procs)
+            if len(s) >= 7:
+                _check_callees_defined(s[6], procs)
+        elif tag == 'par':
+            for b in s[1]:
+                _check_callees_defined(b, procs)
+
+
 def _run_static_checks_body(program_ast):
     procedures = program_ast[1] if len(program_ast) > 1 else []
     proc_signatures = {}
@@ -1027,6 +1083,8 @@ def _run_static_checks_body(program_ast):
             continue
         declared_types = _collect_declared_types(proc)
         body = proc[3] or []
+        _check_local_blocks(body, proc[1])
+        _check_callees_defined(body, proc_signatures)
         for stmt in body:
             _check_stmt_reversibility(
                 stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
@@ -1050,9 +1108,9 @@ def _run_static_checks_body(program_ast):
 #
 # I parametri sono le *free variable* del blocco (id usati ma non dichiarati
 # `local` al suo interno): CALL le linka per riferimento (aliasing), quindi la
-# procedura sintetica muta le celle del chiamante in-place. L'`else` contiene
-# call/uncall → la VM imposta has_call e salta il check di reversibilità del
-# `fi` (vm_ops.h:op_assert), così la condizione del `fi` resta solo sintattica.
+# procedura sintetica muta le celle del chiamante in-place. Il risultato è un
+# `if` qualunque: la condizione `yrt` è la sua asserzione d'uscita e, come in
+# Janus, dev'essere vera dopo il commit e falsa dopo il rollback.
 
 _FORBIDDEN_IN_TRY = ('par',)  # v1: niente par/canali dentro il body del try
 
@@ -1223,8 +1281,8 @@ def _desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache):
             new_procs.append(('procedure', rb_name,
                               [('int', v) for v in fv_rb], rb_body, ln))
             else_body.append(('call', rb_name, list(fv_rb), ln))
-        # entry_cond decide il commit (valutata dopo il body); exit_cond è il
-        # mirror del `fi` (soppresso da has_call perché l'else contiene call).
+        # entry_cond decide il commit (valutata dopo il body); exit_cond è
+        # l'asserzione del `fi`: vera dopo il commit, falsa dopo il rollback.
         return [
             ('call', try_name, list(fv_body), ln),
             ('if', entry_cond, [], else_body, exit_cond, ln),
