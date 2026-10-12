@@ -78,7 +78,7 @@ static inline ParBlock scan_par_block(char *par_ptr)
                 if (pb.count == pb.cap) {
                     pb.cap = pb.cap ? pb.cap * 2 : 8;
                     char **n = (char **)realloc(pb.starts, sizeof(char *) * (size_t)pb.cap);
-                    if (!n) vm_debug_panic("[VM] PAR: memoria esaurita\n");
+                    if (!n) vm_debug_panic("[VM] PAR: out of memory\n");
                     pb.starts = n;
                 }
                 pb.starts[pb.count++] = nl + 1;
@@ -97,7 +97,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
 
     ThreadArgs **args = (ThreadArgs **)calloc((size_t)(pb->count ? pb->count : 1),
                                               sizeof(ThreadArgs *));
-    if (!args) vm_debug_panic("[VM] PAR: memoria esaurita\n");
+    if (!args) vm_debug_panic("[VM] PAR: out of memory\n");
     for (int t = 0; t < pb->count; t++) {
         args[t] = calloc(1, sizeof(ThreadArgs));
         args[t]->vm        = vm;
@@ -109,7 +109,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t]->frame_name  = char_id_strdup(frame_name);
         size_t pl = strlen(g_branch_path) + 24;
         args[t]->branch_path = (char *)malloc(pl);
-        if (!args[t]->branch_path) vm_debug_panic("[VM] PAR: memoria esaurita\n");
+        if (!args[t]->branch_path) vm_debug_panic("[VM] PAR: out of memory\n");
         snprintf(args[t]->branch_path, pl, "%s/%d", g_branch_path, t);
         args[t]->inversion_depth = g_inversion_depth;
     }
@@ -121,8 +121,8 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     run_dec();
     for (int t = 0; t < pb->count; t++)
         if (pthread_create(&args[t]->tid, NULL, thread_entry, args[t]) != 0)
-            vm_debug_panic("[VM] PAR: impossibile creare il thread del ramo %d di %d "
-                           "(memoria del sistema esaurita)\n", t, pb->count);
+            vm_debug_panic("[VM] PAR: cannot create the thread of branch %d of %d "
+                           "(system out of memory)\n", t, pb->count);
 
     pthread_mutex_lock(&done_mtx);
     for (;;) {
@@ -156,9 +156,9 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
                     __atomic_load_n(&g_progress, __ATOMIC_SEQ_CST) == prog) {
                     pthread_mutex_unlock(&done_mtx);
                     vm_debug_panic(
-                        "[VM] SESSIONE: stallo, tutti i thread del par sono fermi in attesa "
-                        "su canale e nessun partner puo' piu' arrivare; manca il thread con "
-                        "cui sincronizzarsi, oppure i due lati offrono la stessa direzione\n");
+                        "[VM] SESSION: deadlock, every thread of the par is waiting "
+                        "on a channel and no partner can arrive any more; the thread to synchronize "
+                        "with is missing, or both sides offer the same direction\n");
                 }
             }
             continue;
@@ -242,7 +242,7 @@ static void *thread_entry(void *arg)
                 else if (!strcmp(fw, "SHOW"))   op_show(vm, fname);
                 else if (!strcmp(fw, "START") || !strcmp(fw, "PARAM") ||
                          !strcmp(fw, "LABEL") || !strcmp(fw, "DECL")) { /* skip */ }
-                else { vm_debug_panic("[THREAD-INV] op sconosciuta: '%s'\n", fw); }
+                else { vm_debug_panic("[THREAD-INV] unknown op: '%s'\n", fw); }
             }
             for (int k = 0; k < nlines; k++) free(lines[k]);
             free(lines);
@@ -354,7 +354,7 @@ static void *thread_entry(void *arg)
         else if (!strcmp(fw, "LABEL"))  op_label(vm, fname, args->buffer);
         else if (!strcmp(fw, "START") ||
                  !strcmp(fw, "DECL") || !strcmp(fw, "PARAM")) { /* skip */ }
-        else { vm_debug_panic("[THREAD] op sconosciuta: '%s'\n", fw); }
+        else { vm_debug_panic("[THREAD] unknown op: '%s'\n", fw); }
 
         ptr = nl + 1;
     }

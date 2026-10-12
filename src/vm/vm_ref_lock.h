@@ -39,7 +39,7 @@ static inline void var_par_mut_acquire(Var *v)
        altro thread, e allora il programma viola la disgiunzione. */
     if (!pthread_equal(v->ref_lock_owner, self)) {
         vm_debug_panic(
-            "[VM] mutazione concorrente sulla variabile int '%s' da un altro thread\n",
+            "[VM] concurrent update of int variable '%s' from another thread\n",
             v->name);
     }
     __atomic_fetch_add(&v->ref_lock_depth, 1, __ATOMIC_ACQ_REL);
@@ -50,7 +50,7 @@ static inline void var_par_mut_release(Var *v)
     if (!current_thread_args || !v || v->T != TYPE_INT) return;
     int prima = __atomic_fetch_sub(&v->ref_lock_depth, 1, __ATOMIC_ACQ_REL);
     if (prima <= 0)
-        vm_debug_panic("[VM] unlock par-mut inconsistente per '%s'\n", v->name);
+        vm_debug_panic("[VM] inconsistent par-mut unlock for '%s'\n", v->name);
 }
 
 static inline void var_par_mut_acquire2(Var *a, Var *b)

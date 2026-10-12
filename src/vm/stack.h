@@ -62,7 +62,7 @@ static inline void stack_reserve(Stack* s, int n) {
     int nc = s->cap ? s->cap : STACK_INIT_CAP;
     while (nc < n) nc *= 2;
     Var **nd = (Var **)realloc(s->data, sizeof(Var *) * (size_t)nc);
-    if (!nd) vm_debug_panic("[VM] Stack: memoria esaurita\n");
+    if (!nd) vm_debug_panic("[VM] Stack: out of memory\n");
     s->data = nd;
     s->cap  = nc;
 }
@@ -76,7 +76,7 @@ static inline void stack_push(Stack* s, Var* v) {
 // pop (ritorna il puntatore, NON libera)
 static inline Var* stack_pop(Stack* s) {
     if (stack_is_empty(s)) {
-        vm_debug_panic("DELOCAL su variabile non local!\n");
+        vm_debug_panic("DELOCAL of a variable that is not local\n");
     }
     return s->data[s->top--];
 }

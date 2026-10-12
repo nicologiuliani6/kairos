@@ -62,7 +62,7 @@ def t_NUMBER(t):
     # scrivono anche le costanti senza segno fino a 2^64 - 1), oltre e' un errore.
     if t.value >= 1 << 64:
         raise KairosCompileError(
-            "LEXER", f"riga {t.lineno}: letterale {t.value} oltre i 64 bit")
+            "LEXER", f"line {t.lineno}: literal {t.value} does not fit in 64 bits")
     return t
 
 def t_INVALID_NUMBER_SUFFIX(t):
@@ -70,8 +70,8 @@ def t_INVALID_NUMBER_SUFFIX(t):
     raise KairosCompileError(
         "LEXER",
         (
-            f"riga {t.lexer.lineno}: numero non valido '{t.value}' "
-            "(rimuovi il suffisso o separa con spazi/operatori)"
+            f"line {t.lexer.lineno}: invalid number '{t.value}' "
+            "(remove the suffix or separate it with spaces/operators)"
         ),
     )
 
@@ -159,14 +159,14 @@ t_ignore = ' \t'
 def t_error(t):
     raise KairosCompileError(
         "LEXER",
-        f"riga {t.lexer.lineno}: carattere non riconosciuto '{t.value[0]}'",
+        f"line {t.lexer.lineno}: unrecognized character '{t.value[0]}'",
     )
 
 lexer = lex.lex()
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Uso: python Jlexer.py <file>")
+        print("Usage: python lexer.py <file>")
         sys.exit(1)
     with open(sys.argv[1], 'r') as f:
         source = f.read()

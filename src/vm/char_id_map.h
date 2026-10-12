@@ -74,7 +74,7 @@ static inline char *char_id_strdup(const char *s)
 {
     size_t l = strlen(s) + 1;
     char *d = (char *)malloc(l);
-    if (!d) { fprintf(stderr, "[VM] CharIdMap: memoria esaurita\n"); exit(1); }
+    if (!d) { fprintf(stderr, "[VM] CharIdMap: out of memory\n"); exit(1); }
     memcpy(d, s, l);
     return d;
 }
@@ -85,7 +85,7 @@ static inline CharIdVec *char_id_vec_new(int cap)
     CharIdVec *v = (CharIdVec *)malloc(sizeof(CharIdVec)
                                        + sizeof(char *)   * (size_t)cap
                                        + sizeof(uint32_t) * (size_t)cap);
-    if (!v) { fprintf(stderr, "[VM] CharIdMap: memoria esaurita\n"); exit(1); }
+    if (!v) { fprintf(stderr, "[VM] CharIdMap: out of memory\n"); exit(1); }
     v->prev = NULL;
     v->cap  = cap;
     v->name = (char **)(v + 1);
@@ -96,7 +96,7 @@ static inline CharIdVec *char_id_vec_new(int cap)
 static inline CharIdTab *char_id_tab_new(uint32_t size)
 {
     CharIdTab *t = (CharIdTab *)malloc(sizeof(CharIdTab) + sizeof(int32_t) * (size_t)size);
-    if (!t) { fprintf(stderr, "[VM] CharIdMap: memoria esaurita\n"); exit(1); }
+    if (!t) { fprintf(stderr, "[VM] CharIdMap: out of memory\n"); exit(1); }
     t->prev = NULL;
     t->mask = size - 1;
     t->slot = (int32_t *)(t + 1);

@@ -88,7 +88,7 @@ def p_param(p):
     # gli stack); la lunghezza e' quella dell'array dichiarato dal chiamante.
     if len(p) == 5:
         if p[1] != 'int':
-            raise KairosCompileError("PARSER", f"riga {p.lineno(2)}: solo gli int possono essere array")
+            raise KairosCompileError("PARSER", f"line {p.lineno(2)}: only int can be arrays")
         p[0] = ('array', p[2])
     else:
         p[0] = (p[1], p[2])
@@ -203,7 +203,7 @@ def p_assign(p):
     if p[2] == '<=>' and not (isinstance(p[3], str) or
                               (isinstance(p[3], tuple) and p[3][0] == 'index')):
         raise KairosCompileError(
-            "PARSER", f"riga {p.lineno(2)}: '<=>' scambia due luoghi (variabile o cella)")
+            "PARSER", f"line {p.lineno(2)}: '<=>' swaps two places (variable or cell)")
     p[0] = ('assign', p[1], p[2], p[3], p.lineno(2))
 
 def p_lvalue(p):
@@ -220,16 +220,16 @@ def p_local(p):
 def p_local_array(p):
     '''statement : LOCAL type ID LBRACKET NUMBER RBRACKET EQUALS value'''
     if p[2] != 'int':
-        raise KairosCompileError("PARSER", f"riga {p.lineno(1)}: solo gli int possono essere array")
+        raise KairosCompileError("PARSER", f"line {p.lineno(1)}: only int can be arrays")
     if p[5] <= 0:
-        raise KairosCompileError("PARSER", f"riga {p.lineno(1)}: lunghezza array non valida {p[5]}")
+        raise KairosCompileError("PARSER", f"line {p.lineno(1)}: invalid array length {p[5]}")
     # La lunghezza viaggia nel tipo ('array:N'): la tupla resta di 5 elementi.
     p[0] = ('local', f'array:{p[5]}', p[3], p[8], p.lineno(1))
 
 def p_delocal_array(p):
     '''statement : DELOCAL type ID LBRACKET NUMBER RBRACKET EQUALS value'''
     if p[2] != 'int':
-        raise KairosCompileError("PARSER", f"riga {p.lineno(1)}: solo gli int possono essere array")
+        raise KairosCompileError("PARSER", f"line {p.lineno(1)}: only int can be arrays")
     p[0] = ('delocal', f'array:{p[5]}', p[3], p[8], p.lineno(1))
 
 def p_delocal(p):
@@ -242,7 +242,7 @@ def p_delocal(p):
         # Come in Janus il delocal dice il valore atteso: e' cio' che rende
         # l'allocazione invertibile.
         raise KairosCompileError(
-            "PARSER", f"riga {p.lineno(1)}: delocal {p[2]} {p[3]} senza il valore atteso")
+            "PARSER", f"line {p.lineno(1)}: delocal {p[2]} {p[3]} without the expected value")
         if VERBOSE: print(f"delocal: {p[3]} ({p[2]})")
 
 # ── Liste argomenti ─────────────────────────────────────────────────────────
@@ -281,7 +281,7 @@ def p_call_direct(p):
         if name.lower() not in ('ssend', 'srecv'):
             raise KairosCompileError(
                 "PARSER",
-                f"riga {p.lineno(1)}: sintassi '<...>' supportata solo per ssend/srecv",
+                f"line {p.lineno(1)}: the '<...>' syntax is only for ssend/srecv",
             )
         args = p[3] + [p[5]]
         p[0] = ('call_direct', name, args, p.lineno(1))
@@ -367,9 +367,9 @@ def p_try(p):
 # ── Errore ───────────────────────────────────────────────────────────────────
 def p_error(p):
     if p:
-        raise KairosCompileError("PARSER", f"riga {p.lineno}: token non atteso '{p.value}'")
+        raise KairosCompileError("PARSER", f"line {p.lineno}: unexpected token '{p.value}'")
     else:
-        raise KairosCompileError("PARSER", "errore sintattico: fine file inattesa")
+        raise KairosCompileError("PARSER", "syntax error: unexpected end of file")
 
 def _lv_base(lv):
     """Nome della variabile bersaglio: `x` per `x`, `a` per la cella `a[e]`."""
@@ -519,10 +519,10 @@ def _raise_unresolved_par_callee(name, lineno):
     raise KairosCompileError(
         "STATIC",
         (
-            f"riga {lineno}: chiamata a '{name}' non risolvibile in blocco PAR "
-            f"(non è né una procedura dichiarata né una builtin): "
-            f"impossibile stabilire quali int '{name}' scrive; "
-            "correggi il nome o dichiara la procedura"
+            f"line {lineno}: call to '{name}' cannot be resolved in a PAR block "
+            f"(it is neither a declared procedure nor a builtin): "
+            f"cannot tell which ints '{name}' writes; "
+            "fix the name or declare the procedure"
         ),
     )
 
@@ -881,14 +881,14 @@ def _check_stmt_reversibility(
                 if any(_expr_contains_var(lv[2], w) for w in written):
                     raise KairosCompileError(
                         "STATIC",
-                        f"riga {lineno}: l'indice di '{_lv_text(lv)}' dipende da una variabile "
-                        f"scritta dalla stessa istruzione (operazione non reversibile)")
+                        f"line {lineno}: the index of '{_lv_text(lv)}' depends on a variable "
+                        f"written by the same statement (not reversible)")
         if op in ('+=', '-=', '^=') and _expr_contains_var(expr, var_name):
             raise KairosCompileError(
                 "STATIC",
                 (
-                    f"riga {lineno}: operazione non reversibile '{_lv_text(var_name)} {op} ...' "
-                    f"(la variabile a sinistra compare anche nell'espressione a destra)"
+                    f"line {lineno}: not reversible: '{_lv_text(var_name)} {op} ...' "
+                    f"(the variable on the left also appears on the right)"
                 ),
             )
         return
@@ -899,9 +899,9 @@ def _check_stmt_reversibility(
             raise KairosCompileError(
                 "STATIC",
                 (
-                    f"riga {lineno}: DELOCAL non ammesso '{name} = {val}': il valore atteso "
-                    f"non può essere lo stesso identificatore (vincolo banale, inversione non "
-                    f"determinata). Usa un letterale o un altro nome di variabile."
+                    f"line {lineno}: DELOCAL '{name} = {val}' not allowed: the expected value "
+                    f"cannot be the same identifier (trivial check, the inverse would be "
+                    f"undetermined). Use a literal or another variable."
                 ),
             )
         return
@@ -912,19 +912,19 @@ def _check_stmt_reversibility(
             if not args:
                 raise KairosCompileError(
                     "STATIC",
-                    f"riga {lineno}: show richiede almeno un argomento (variabile int)",
+                    f"line {lineno}: show needs at least one argument (a variable)",
                 )
             if len(args) > 2:
                 raise KairosCompileError(
                     "STATIC",
-                    f"riga {lineno}: show accetta al massimo due argomenti",
+                    f"line {lineno}: show takes at most two arguments",
                 )
             if len(args) == 2 and args[1] != 'char':
                 raise KairosCompileError(
                     "STATIC",
                     (
-                        f"riga {lineno}: secondo argomento di show deve essere il "
-                        f"formato letterale 'char' (es. show(x, char))"
+                        f"line {lineno}: the second argument of show must be the "
+                        f"literal format 'char' (e.g. show(x, char))"
                     ),
                 )
         return
@@ -985,9 +985,9 @@ def _check_stmt_reversibility(
                 raise KairosCompileError(
                     "STATIC",
                     (
-                        f"riga {lineno}: uso non reversibile di stack condiviso '{var_name}' "
-                        f"in blocco PAR (branch: {branches_txt}); "
-                        "usa channel/ssend/srecv o separa le strutture tra i branch"
+                        f"line {lineno}: stack '{var_name}' shared between branches "
+                        f"of a PAR block (branches: {branches_txt}); "
+                        "use a channel (ssend/srecv) or separate stacks per branch"
                     ),
                 )
 
@@ -1007,8 +1007,8 @@ def _check_stmt_reversibility(
                     raise KairosCompileError(
                         "STATIC",
                         (
-                            f"riga {lineno}: race su int nel PAR (scrittura vs accesso, anche tramite call): "
-                            f"{names} (usa channel/ssend/srecv o variabili distinte per branch)"
+                            f"line {lineno}: race on int in PAR (written in one branch, used in another, also through calls): "
+                            f"{names} (use a channel (ssend/srecv) or separate variables per branch)"
                         ),
                     )
 
@@ -1081,7 +1081,7 @@ def _check_list_reversibility(
 
 def run_static_checks(program_ast):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
-        raise KairosCompileError("PARSER", "AST del programma non valido")
+        raise KairosCompileError("PARSER", "invalid program AST")
 
     prev_procs = _ParStaticConfig.program_procedures
     _ParStaticConfig.program_procedures = tuple(program_ast[1] or [])
@@ -1126,7 +1126,7 @@ def _check_ids_declared(s, proc_name, scope):
     for name in sorted(_stmt_own_ids(s)):
         if name not in scope:
             raise KairosCompileError(
-                "STATIC", f"riga {s[-1]}: variabile '{name}' in {proc_name} non dichiarata")
+                "STATIC", f"line {s[-1]}: variable '{name}' in {proc_name} is not declared")
 
 
 def _check_local_blocks(stmts, proc_name, in_scope=()):
@@ -1147,21 +1147,21 @@ def _check_local_blocks(stmts, proc_name, in_scope=()):
             if s[2] in in_scope or any(o[0] == s[2] for o in open_):
                 raise KairosCompileError(
                     "LOCAL",
-                    f"riga {s[-1]}: local '{s[2]}' in {proc_name}: il nome e' gia' in uso "
-                    f"(parametro o local aperto) nella stessa attivazione (Local-Err)")
+                    f"line {s[-1]}: local '{s[2]}' in {proc_name}: the name is already in use "
+                    f"(parameter or open local) in the same activation (Local-Err)")
             open_.append((s[2], s[-1], s[1]))
         elif tag == 'delocal':
             if open_ and open_[-1][0] == s[2] and open_[-1][2] != s[1]:
                 raise KairosCompileError(
                     "LOCAL",
-                    f"riga {s[-1]}: delocal {s[1]} '{s[2]}' in {proc_name} chiude un "
+                    f"line {s[-1]}: delocal {s[1]} '{s[2]}' in {proc_name} closes a "
                     f"local {open_[-1][2]}")
             if not open_ or open_[-1][0] != s[2]:
-                atteso = f"'{open_[-1][0]}'" if open_ else "nessuno"
+                atteso = f"'{open_[-1][0]}'" if open_ else "none"
                 raise KairosCompileError(
                     "LOCAL",
-                    f"riga {s[-1]}: delocal '{s[2]}' in {proc_name} non chiude il local "
-                    f"aperto più di recente nello stesso blocco (atteso: {atteso})")
+                    f"line {s[-1]}: delocal '{s[2]}' in {proc_name} does not close the local "
+                    f"opened most recently in the same block (expected: {atteso})")
             open_.pop()
         else:
             inner = tuple(in_scope) + tuple(o[0] for o in open_)
@@ -1178,7 +1178,7 @@ def _check_local_blocks(stmts, proc_name, in_scope=()):
     if open_:
         name, ln, _t = open_[-1]
         raise KairosCompileError(
-            "LOCAL", f"riga {ln}: local '{name}' in {proc_name} senza delocal nello stesso blocco")
+            "LOCAL", f"line {ln}: local '{name}' in {proc_name} without delocal in the same block")
 
 
 def _check_callees_defined(stmts, procs):
@@ -1189,12 +1189,12 @@ def _check_callees_defined(stmts, procs):
         tag = s[0]
         if tag in ('call', 'uncall') and s[1] not in procs:
             raise KairosCompileError(
-                "STATIC", f"riga {s[-1]}: {tag} di '{s[1]}', procedura non definita")
+                "STATIC", f"line {s[-1]}: {tag} of '{s[1]}', procedure not defined")
         if (tag in ('call', 'uncall') or (tag == 'call_direct' and s[1] in procs)) \
                 and len(s[2]) != len(procs[s[1]]):
             raise KairosCompileError(
-                "STATIC", f"riga {s[-1]}: {s[1]} vuole {len(procs[s[1]])} argomenti, "
-                f"ne riceve {len(s[2])}")
+                "STATIC", f"line {s[-1]}: {s[1]} takes {len(procs[s[1]])} arguments, "
+                f"it gets {len(s[2])}")
         if tag in ('call', 'uncall') or (tag == 'call_direct' and s[1] in procs):
             # Come in Janus gli argomenti sono passati per riferimento e devono
             # essere distinti: con f(x, x) il corpo vedrebbe `a += b` diventare
@@ -1203,8 +1203,8 @@ def _check_callees_defined(stmts, procs):
             for a in s[2]:
                 if isinstance(a, str) and a in seen:
                     raise KairosCompileError(
-                        "STATIC", f"riga {s[-1]}: '{a}' passato due volte a '{s[1]}': "
-                        "gli argomenti di una chiamata devono essere distinti")
+                        "STATIC", f"line {s[-1]}: '{a}' passed twice to '{s[1]}': "
+                        "the arguments of a call must be distinct")
                 seen.add(a)
         if tag == 'if':
             _check_callees_defined(s[2], procs)
@@ -1233,17 +1233,17 @@ def _check_expr_types(e, declared, ln):
         _check_expr_types(e[3], declared, ln)
     elif isinstance(e, tuple) and e and e[0] == 'index':
         if _kind(declared.get(e[1])) != 'array':
-            raise KairosCompileError("STATIC", f"riga {ln}: '{e[1]}' non e' un array")
+            raise KairosCompileError("STATIC", f"line {ln}: '{e[1]}' is not an array")
         _check_expr_types(e[2], declared, ln)
     elif isinstance(e, str) and not _is_number_literal(e):
         if e.lower() in ('nil', 'empty'):
             raise KairosCompileError(
-                "STATIC", f"riga {ln}: '{e}' e' il valore di uno stack o di un canale, "
-                "qui serve un intero")
+                "STATIC", f"line {ln}: '{e}' is the value of a stack or a channel, "
+                "an integer is needed here")
         k = _kind(declared.get(e))
         if k not in (None, 'int'):
             raise KairosCompileError(
-                "STATIC", f"riga {ln}: '{e}' e' {k}, in un'espressione serve un intero")
+                "STATIC", f"line {ln}: '{e}' is a {k}, an expression needs an integer")
 
 
 def _check_types(stmts, env, proc_name, signatures):
@@ -1261,15 +1261,15 @@ def _check_types(stmts, env, proc_name, signatures):
         if tag == 'decl':
             if proc_name != 'main':
                 raise KairosCompileError(
-                    "STATIC", f"riga {ln}: '{x[1]} {x[2]}' in {proc_name}: fuori da main le "
-                    "variabili si introducono con local/delocal")
+                    "STATIC", f"line {ln}: '{x[1]} {x[2]}' in {proc_name}: outside main, "
+                    "variables are introduced with local/delocal")
             env[x[2]] = x[1]
         elif tag == 'assign':
             _, lv, op, e, _ = x
             for side in [lv] + ([e] if op == '<=>' else []):
                 if isinstance(side, str) and _kind(env.get(side)) not in (None, 'int'):
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: '{side}' non e' un intero")
+                        "STATIC", f"line {ln}: '{side}' is not an integer")
                 _check_expr_types(side, env, ln)
             if op != '<=>':
                 _check_expr_types(e, env, ln)
@@ -1279,10 +1279,10 @@ def _check_types(stmts, env, proc_name, signatures):
                 _check_expr_types(val, env, ln)
             elif k == 'stack' and val != 'nil':
                 raise KairosCompileError(
-                    "STATIC", f"riga {ln}: {tag} stack {x[2]}: il valore e' nil (stack vuoto)")
+                    "STATIC", f"line {ln}: {tag} stack {x[2]}: the value is nil (empty stack)")
             elif k == 'channel' and val != 'empty':
                 raise KairosCompileError(
-                    "STATIC", f"riga {ln}: {tag} channel {x[2]}: il valore e' empty")
+                    "STATIC", f"line {ln}: {tag} channel {x[2]}: the value is empty")
             if tag == 'local':
                 env[x[2]] = x[1]
             else:
@@ -1293,34 +1293,34 @@ def _check_types(stmts, env, proc_name, signatures):
                 ka, kp = _kind(env.get(a)), _kind(pt)
                 if ka is not None and ka != kp:
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {x[1]}: '{a}' e' {ka}, il parametro e' {kp}")
+                        "STATIC", f"line {ln}: {x[1]}: '{a}' is a {ka}, the parameter is a {kp}")
         elif tag == 'call_direct':
             name, args = x[1].lower(), x[2]
             if name in ('push', 'pop'):
                 if len(args) != 2:
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {name} vuole due argomenti, una variabile e uno stack")
+                        "STATIC", f"line {ln}: {name} takes two arguments, a variable and a stack")
                 if _kind(env.get(args[0])) != 'int' or _kind(env.get(args[1])) != 'stack':
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {name}({args[0]}, {args[1]}): il primo argomento "
-                        "e' una variabile intera, il secondo uno stack")
+                        "STATIC", f"line {ln}: {name}({args[0]}, {args[1]}): the first argument "
+                        "is an int variable, the second a stack")
             elif name in ('ssend', 'srecv'):
                 payload, ch = args[:-1], args[-1] if args else None
                 if _kind(env.get(ch)) != 'channel':
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {name}: '{ch}' non e' un canale")
+                        "STATIC", f"line {ln}: {name}: '{ch}' is not a channel")
                 if not payload:
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {name}: il messaggio e' vuoto")
+                        "STATIC", f"line {ln}: {name}: empty message")
                 if len(set(payload)) != len(payload) or ch in payload:
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {name}: le variabili del messaggio devono essere "
-                        "distinte fra loro e dal canale")
+                        "STATIC", f"line {ln}: {name}: the variables of a message must be "
+                        "distinct from each other and from the channel")
                 for v in payload:
                     if _kind(env.get(v)) not in ('int', 'stack', 'channel'):
                         raise KairosCompileError(
-                            "STATIC", f"riga {ln}: {name}: '{v}' non si puo' spedire "
-                            "(un messaggio porta interi, stack o canali)")
+                            "STATIC", f"line {ln}: {name}: '{v}' cannot be sent "
+                            "(a message carries ints, stacks or channels)")
         elif tag == 'if':
             for c in (x[1], x[4]):
                 _check_expr_types(c[2], env, ln)
@@ -1348,10 +1348,10 @@ def _run_static_checks_body(program_ast):
         params = proc[2] or []
         if proc_name in proc_signatures:
             raise KairosCompileError(
-                "STATIC", f"procedura '{proc_name}' definita due volte")
+                "STATIC", f"procedure '{proc_name}' defined twice")
         if proc_name == 'main' and params:
             raise KairosCompileError(
-                "STATIC", "main non ha parametri: le sue variabili si dichiarano nel corpo")
+                "STATIC", "main has no parameters: declare its variables in its body")
         proc_signatures[proc_name] = [ptype for ptype, _pname in params]
 
     proc_param_lists, proc_int_mutated_formals = _compute_proc_int_mutated_formals(procedures)
@@ -1492,17 +1492,17 @@ def _try_assert_no_forbidden(stmts, lineno, proc_bodies, ssend_srecv_cache):
         if s[0] in _FORBIDDEN_IN_TRY or s[0] == 'call_direct' and s[1].lower() in ('ssend', 'srecv'):
             raise KairosCompileError(
                 "PARSER",
-                f"riga {lineno}: '{s[0] if s[0]!='call_direct' else s[1]}' non ammesso "
-                "nel body di un blocco try (v1)",
+                f"line {lineno}: '{s[0] if s[0]!='call_direct' else s[1]}' not allowed "
+                "in the body of a try block",
             )
         if s[0] in ('call', 'uncall') and _proc_contains_ssend_srecv(
             s[1], proc_bodies, ssend_srecv_cache, set()
         ):
             raise KairosCompileError(
                 "PARSER",
-                f"riga {lineno}: '{s[0]} {s[1]}' non ammesso nel body di un blocco try (v1): "
-                f"'{s[1]}' contiene par o ssend/srecv, anche indirettamente — un try/rollback non può "
-                "disfare un rendez-vous già consumato dal partner senza la sua cooperazione",
+                f"line {lineno}: '{s[0]} {s[1]}' not allowed in the body of a try block: "
+                f"'{s[1]}' contains par or ssend/srecv, also indirectly: a try/rollback cannot "
+                "undo a rendezvous already completed by the partner without its cooperation",
             )
         if s[0] == 'if':
             _try_assert_no_forbidden(s[2], lineno, proc_bodies, ssend_srecv_cache)
@@ -1598,8 +1598,8 @@ def _normalize_calls(procedures):
             n = proc[1]
             if n.lower() in _BUILTIN_CALL_OPCODES or n.endswith('__inv') or n.startswith('__try_'):
                 raise KairosCompileError(
-                    "STATIC", f"'{n}' non e' un nome di procedura ammesso "
-                    "(builtin o nome riservato al compilatore)")
+                    "STATIC", f"'{n}' is not an allowed procedure name "
+                    "(builtin or name reserved for the compiler)")
             names.add(n)
 
     def stmts(lst):
@@ -1614,8 +1614,8 @@ def _normalize_calls(procedures):
                 return ('call', x[1], x[2], x[3])
             if x[1].lower() not in _BUILTIN_CALL_OPCODES:
                 raise KairosCompileError(
-                    "STATIC", f"riga {x[3]}: '{x[1]}' non e' una procedura del programma "
-                    "ne' una builtin")
+                    "STATIC", f"line {x[3]}: '{x[1]}' is neither a procedure of the program "
+                    "nor a builtin")
             return x
         if tag == 'if':
             return ('if', x[1], stmts(x[2]), stmts(x[3]), x[4], x[5])
@@ -1690,7 +1690,7 @@ parser = yacc.yacc(
 if __name__ == '__main__':
     VERBOSE = True
     if len(sys.argv) < 2:
-        print("Uso: python Jparser.py <file>")
+        print("Usage: python parser.py <file>")
         sys.exit(1)
     with open(sys.argv[1], 'r') as f:
         source = f.read()

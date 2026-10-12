@@ -26,7 +26,7 @@ static pthread_t g_debug_tid;
 static void *debug_exec_thread(void *arg)
 {
     FILE *f = fopen("/tmp/kairos-vm.log", "a");
-    if (f) { fprintf(f, "debug_exec_thread AVVIATO\n"); fclose(f); }
+    if (f) { fprintf(f, "debug_exec_thread started\n"); fclose(f); }
 
     (void)arg;
     vm_exec(g_debug_vm, g_debug_buf);
@@ -103,7 +103,7 @@ void vm_debug_start(const char *bytecode, VMDebugState *dbg)
 
     char *normalized = normalize_bytecode_physical_lines(bytecode);
     if (!normalized) {
-        vm_debug_panic("[DAP] normalizzazione bytecode fallita\n");
+        vm_debug_panic("[DAP] normalizzazione bytecode failed\n");
         return;
     }
 

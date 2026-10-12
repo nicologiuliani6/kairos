@@ -76,7 +76,7 @@ static inline void vm_if_push_branch(int took_then)
     if (if_branch_top + 1 >= if_branch_cap) {
         int nc = if_branch_cap ? if_branch_cap * 2 : 64;
         int *a = (int *)realloc(if_branch_stack, sizeof(int) * (size_t)nc);
-        if (!a) vm_debug_panic("[VM] IF: memoria esaurita\n");
+        if (!a) vm_debug_panic("[VM] IF: out of memory\n");
         if_branch_stack = a;
         if_branch_cap = nc;
     }
@@ -135,7 +135,7 @@ static inline char *channel_restore_key(const char *frame_name)
     VM_FRAME_BASE(proc, frame_name);
     size_t a = strlen(g_branch_path), b = strlen(proc);
     char *k = (char *)malloc(a + b + 2);
-    if (!k) vm_debug_panic("[VM] channel restore: memoria esaurita\n");
+    if (!k) vm_debug_panic("[VM] channel restore: out of memory\n");
     memcpy(k, g_branch_path, a); k[a] = '|'; memcpy(k + a + 1, proc, b + 1);
     return k;
 }
@@ -151,7 +151,7 @@ static inline void channel_restore_push(const char *frame_name, const char *var_
             g_channel_restore, sizeof(ChannelRestoreEntry) * (size_t)nc);
         if (!n) {
             pthread_mutex_unlock(&g_channel_restore_mtx);
-            vm_debug_panic("[VM] channel restore: memoria esaurita\n");
+            vm_debug_panic("[VM] channel restore: out of memory\n");
         }
         g_channel_restore = n;
         g_channel_restore_cap = nc;
@@ -256,7 +256,7 @@ static inline void op_push(VM *vm, const char *frame_name)
 {
     char *C_val   = strtok(NULL, " \t");
     char *C_stack = strtok(NULL, " \t");
-    if (strtok(NULL, " \t")) vm_debug_panic("[VM] PUSH: troppi parametri!\n");
+    if (strtok(NULL, " \t")) vm_debug_panic("[VM] PUSH: too many arguments\n");
 
     uint fi  = get_findex(frame_name);
     int64_t val;
@@ -272,12 +272,12 @@ static inline void op_push(VM *vm, const char *frame_name)
     }
 
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, C_stack))
-        vm_debug_panic("[VM] PUSH: stack destinazione non trovato!\n");
+        vm_debug_panic("[VM] PUSH: destination stack not found\n");
 
     uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
     Var  *sv = vm->frames[fi]->vars[si];
     if (sv->T != TYPE_STACK)
-        vm_debug_panic("[VM] PUSH: '%s' non e' uno stack (su un canale si usano ssend/srecv) frame=%s\n",
+        vm_debug_panic("[VM] PUSH: '%s' is not a stack (channels use ssend/srecv) frame=%s\n",
             C_stack, frame_name);
     var_stack_push(sv, val);
 }
@@ -286,20 +286,20 @@ static inline void op_pop(VM *vm, const char *frame_name)
 {
     char *C_dest  = strtok(NULL, " \t");
     char *C_stack = strtok(NULL, " \t");
-    if (strtok(NULL, " \t")) vm_debug_panic("[VM] POP: troppi parametri!\n");
+    if (strtok(NULL, " \t")) vm_debug_panic("[VM] POP: too many arguments\n");
 
     uint fi = get_findex(frame_name);
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, C_stack))
-        vm_debug_panic("[VM] POP: stack non trovato!\n");
+        vm_debug_panic("[VM] POP: stack not found\n");
 
     uint  si = char_id_map_get(&vm->frames[fi]->VarIndexer, C_stack);
     Var  *sv = vm->frames[fi]->vars[si];
 
     if (sv->T != TYPE_STACK)
-        vm_debug_panic("[VM] POP: '%s' non e' uno stack (su un canale si usano ssend/srecv) frame=%s\n",
+        vm_debug_panic("[VM] POP: '%s' is not a stack (channels use ssend/srecv) frame=%s\n",
                        C_stack, frame_name);
     if (sv->stack_len == 0)
-        vm_debug_panic("[VM] POP: stack vuoto! (frame=%s dest=%s stack=%s inv=%d)\n",
+        vm_debug_panic("[VM] POP: empty stack (Pop-Err, frame=%s dest=%s stack=%s inv=%d)\n",
                        frame_name, C_dest, C_stack, g_inversion_depth);
     int64_t popped = sv->value[--sv->stack_len];   /* la capacità resta per i push */
 
@@ -314,7 +314,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
     if (dest->T == TYPE_INT && *(dest->value) != 0) {
         var_par_mut_release(dest);
         vm_debug_panic(
-            "[VM] POP: destinazione '%s' non è zero prima del pop (Pop-Err2, valore attuale=%lld) frame=%s\n",
+            "[VM] POP: destination '%s' is not zero before the pop (Pop-Err2, current value=%lld) frame=%s\n",
             C_dest, (long long)*(dest->value), frame_name);
     }
     *(dest->value) += popped;
@@ -331,7 +331,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
     for (char *_t; (_t = strtok(NULL, " \t")); ) { \
         if (ntok == tokv##_cap) { \
             char **_n = (char **)malloc(sizeof(char *) * (size_t)tokv##_cap * 2); \
-            if (!_n) vm_debug_panic("[VM] payload: memoria esaurita\n"); \
+            if (!_n) vm_debug_panic("[VM] payload: out of memory\n"); \
             memcpy(_n, tokv, sizeof(char *) * (size_t)ntok); \
             if (tokv != tokv##_small) free(tokv); \
             tokv = _n; tokv##_cap *= 2; \
@@ -345,25 +345,25 @@ static inline void op_ssend(VM *vm, const char *frame_name)
     VM_TOKV_COLLECT(tokv, ntok);
 
     if (ntok < 2)
-        vm_debug_panic("[VM] SSEND: formato errato (atteso SSEND <v1 ...> <channel>)\n");
+        vm_debug_panic("[VM] SSEND: bad format (expected SSEND <v1 ...> <channel>)\n");
 
     char *ch_name = tokv[ntok - 1];
     int payload_count = ntok - 1;
     uint fi = get_findex(frame_name);
 
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, ch_name))
-        vm_debug_panic("[VM] SSEND: canale non trovato!\n");
+        vm_debug_panic("[VM] SSEND: channel not found\n");
     uint chi = char_id_map_get(&vm->frames[fi]->VarIndexer, ch_name);
     Var *chv = vm->frames[fi]->vars[chi];
     if (!chv || chv->T != TYPE_CHANNEL)
-        vm_debug_panic("[VM] SSEND: destinazione non è channel!\n");
+        vm_debug_panic("[VM] SSEND: destination is not a channel\n");
     session_acquire(chv->channel, ch_name);
 
     int encoded_len = 0;
     int encoded_cap = 16;
     int64_t *encoded = malloc((size_t)encoded_cap * sizeof(int64_t));
     if (!encoded)
-        vm_debug_panic("[VM] SSEND: malloc fallita\n");
+        vm_debug_panic("[VM] SSEND: malloc failed\n");
 
 #define ENC_PUSH(_v) do { \
         if (encoded_len >= encoded_cap) { \
@@ -381,7 +381,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
             Var *src = get_var(vm, fi, src_tok, "SSEND");
             if (src == chv) {
                 free(encoded);
-                vm_debug_panic("[VM] SSEND: non puoi inviare il canale su se stesso\n");
+                vm_debug_panic("[VM] SSEND: a channel cannot be sent over itself\n");
             }
             if (src->T == TYPE_INT) {
                 int64_t val;
@@ -406,7 +406,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
                 ENC_PUSH((int)(uint32_t)((p >> 32) & 0xffffffffu));
             } else {
                 free(encoded);
-                vm_debug_panic("[VM] SSEND: parametro non linkato\n");
+                vm_debug_panic("[VM] SSEND: unlinked parameter\n");
             }
         } else {
             ENC_PUSH((int)TYPE_INT);
@@ -442,18 +442,18 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     VM_TOKV_COLLECT(tokv, ntok);
 
     if (ntok < 2)
-        vm_debug_panic("[VM] SRECV: formato errato (atteso SRECV <v1 ...> <channel>)\n");
+        vm_debug_panic("[VM] SRECV: bad format (expected SRECV <v1 ...> <channel>)\n");
 
     char *ch_name = tokv[ntok - 1];
     int recv_count = ntok - 1;
     uint fi = get_findex(frame_name);
 
     if (!char_id_map_exists(&vm->frames[fi]->VarIndexer, ch_name))
-        vm_debug_panic("[VM] SRECV: channel non trovato!\n");
+        vm_debug_panic("[VM] SRECV: channel not found\n");
     uint chi = char_id_map_get(&vm->frames[fi]->VarIndexer, ch_name);
     Var *chv = vm->frames[fi]->vars[chi];
     if (!chv || chv->T != TYPE_CHANNEL)
-        vm_debug_panic("[VM] SRECV: sorgente non è channel!\n");
+        vm_debug_panic("[VM] SRECV: source is not a channel\n");
     session_acquire(chv->channel, ch_name);
 
     /* Srecv-Err prima del rendez-vous: una destinazione già piena è un errore
@@ -462,11 +462,11 @@ static inline void op_srecv(VM *vm, const char *frame_name)
         Var *dest = get_var(vm, fi, tokv[i], "SRECV");
         if (dest->T == TYPE_INT && *(dest->value) != 0)
             vm_debug_panic(
-                "[VM] SRECV: destinazione '%s' non è zero prima della ricezione (Srecv-Err, valore attuale=%lld)\n",
+                "[VM] SRECV: destination '%s' is not zero before receiving (Srecv-Err, current value=%lld)\n",
                 tokv[i], (long long)*(dest->value));
         if (dest->T == TYPE_STACK && dest->stack_len != 0)
             vm_debug_panic(
-                "[VM] SRECV: stack '%s' non vuoto prima della ricezione (Srecv-Err)\n", tokv[i]);
+                "[VM] SRECV: stack '%s' is not empty before receiving (Srecv-Err)\n", tokv[i]);
     }
 
     op_wait(chv->channel, 0);
@@ -476,25 +476,25 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     chv->channel->sender_args = NULL;
     if (!sender_to_wake) {
         pthread_mutex_unlock(&chv->channel->mtx);
-        vm_debug_panic("[VM] SRECV: sender_args nullo dopo rendezvous\n");
+        vm_debug_panic("[VM] SRECV: null sender_args after the rendezvous\n");
     }
     size_t read_idx = 0;
     for (int i = 0; i < recv_count; i++) {
         Var *dest = get_var(vm, fi, tokv[i], "SRECV");
         if (read_idx >= chv->channel->buf_len) {
             pthread_mutex_unlock(&chv->channel->mtx);
-            vm_debug_panic("[VM] SRECV: payload insufficiente sul channel\n");
+            vm_debug_panic("[VM] SRECV: not enough values on the channel\n");
         }
         int marker = chv->channel->buf[read_idx++];
         if (marker == (int)TYPE_INT) {
             if (read_idx >= chv->channel->buf_len) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload int incompleto\n");
+                vm_debug_panic("[VM] SRECV: incomplete int payload\n");
             }
             int64_t popped = chv->channel->buf[read_idx++];   /* era int: troncava i valori a 32 bit */
             if (dest->T != TYPE_INT) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload int richiede destinazione int\n");
+                vm_debug_panic("[VM] SRECV: an int payload needs an int destination\n");
             }
             var_par_mut_acquire(dest);
             /* Srecv-Err (convenzione zero-cleared): srecv(<w...>, ch) richiede
@@ -507,7 +507,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
                 var_par_mut_release(dest);
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic(
-                    "[VM] SRECV: destinazione '%s' non è zero prima della ricezione (Srecv-Err, valore attuale=%lld)\n",
+                    "[VM] SRECV: destination '%s' is not zero before receiving (Srecv-Err, current value=%lld)\n",
                     tokv[i], (long long)*(dest->value));
             }
             *(dest->value) += popped;
@@ -515,7 +515,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
         } else if (marker == CHANNEL_REF_MARKER) {
             if (read_idx + 1 >= chv->channel->buf_len) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload channel-ref incompleto\n");
+                vm_debug_panic("[VM] SRECV: incomplete channel payload\n");
             }
             uint32_t lo = (uint32_t)chv->channel->buf[read_idx++];
             uint32_t hi = (uint32_t)chv->channel->buf[read_idx++];
@@ -523,13 +523,13 @@ static inline void op_srecv(VM *vm, const char *frame_name)
             Channel *shared = (Channel *)p;
             if (dest->T != TYPE_CHANNEL || !shared) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
+                vm_debug_panic("[VM] SRECV: a channel payload needs a channel destination\n");
             }
             if (dest->channel == chv->channel || shared == chv->channel) {
                 /* la destinazione e' il canale stesso su cui si riceve */
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: '%s' e' il canale su cui si riceve: non puo' "
-                               "essere anche la destinazione\n", tokv[i]);
+                vm_debug_panic("[VM] SRECV: '%s' is the channel being received on: it cannot "
+                               "also be the destination\n", tokv[i]);
             }
             session_delegate_acquire(shared, tokv[i]);
             if (dest->channel != shared) {
@@ -554,16 +554,16 @@ static inline void op_srecv(VM *vm, const char *frame_name)
         } else if (marker == (int)TYPE_STACK) {
             if (read_idx >= chv->channel->buf_len) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload collezione incompleto\n");
+                vm_debug_panic("[VM] SRECV: incomplete stack payload\n");
             }
             int64_t n = chv->channel->buf[read_idx++];
             if (n < 0 || read_idx + (size_t)n > chv->channel->buf_len) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: lunghezza payload non valida\n");
+                vm_debug_panic("[VM] SRECV: invalid payload length\n");
             }
             if (dest->T != TYPE_STACK) {
                 pthread_mutex_unlock(&chv->channel->mtx);
-                vm_debug_panic("[VM] SRECV: payload stack richiede destinazione stack ('%s' non lo e')\n",
+                vm_debug_panic("[VM] SRECV: a stack payload needs a stack destination ('%s' is not)\n",
                                tokv[i]);
             }
             /* Srecv-Err anche per le collezioni: la destinazione dev'essere
@@ -572,7 +572,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
             if (dest->stack_len != 0) {
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic(
-                    "[VM] SRECV: stack '%s' non vuoto prima della ricezione (Srecv-Err)\n", tokv[i]);
+                    "[VM] SRECV: stack '%s' is not empty before receiving (Srecv-Err)\n", tokv[i]);
             }
             if (n > 0) {
                 var_stack_reserve(dest, dest->stack_len + (size_t)n);
@@ -582,7 +582,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
             read_idx += (size_t)n;
         } else {
             pthread_mutex_unlock(&chv->channel->mtx);
-            vm_debug_panic("[VM] SRECV: marker payload sconosciuto\n");
+            vm_debug_panic("[VM] SRECV: unknown payload marker\n");
         }
     }
 
@@ -591,7 +591,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
         /* Un rendez-vous scambia un messaggio intero: il ricevente deve
            prendere tutti i valori che il mittente spedisce. */
         pthread_mutex_unlock(&chv->channel->mtx);
-        vm_debug_panic("[VM] SRECV: il mittente ha spedito piu' valori di quanti '%s' ne riceve\n",
+        vm_debug_panic("[VM] SRECV: the sender sent more values than '%s' receives\n",
                        ch_name);
     }
     if (remaining > 0)
@@ -643,17 +643,17 @@ static inline void op_show(VM *vm, const char *frame_name)
 static inline void op_show_unlocked(VM *vm, const char *frame_name)
 {
     char *ID = strtok(NULL, " \t");
-    if (!ID) vm_debug_panic("[VM] SHOW: manca il nome della variabile\n");
+    if (!ID) vm_debug_panic("[VM] SHOW: missing variable name\n");
     char *fmt = strtok(NULL, " \t");
     char *more = strtok(NULL, " \t");
-    if (more) vm_debug_panic("[VM] SHOW: troppi parametri!\n");
+    if (more) vm_debug_panic("[VM] SHOW: too many arguments\n");
 
     int as_char = 0;
     if (fmt) {
         if (strcmp(fmt, "char") != 0) {
             vm_debug_panic(
-                "[VM] SHOW: secondo argomento non riconosciuto "
-                "(solo 'char' oppure omettere per formato classico)\n"
+                "[VM] SHOW: unknown second argument "
+                "(only 'char', or omit it for the plain format)\n"
             );
         }
         as_char = 1;
@@ -674,7 +674,7 @@ static inline void op_show_unlocked(VM *vm, const char *frame_name)
         }
     } else if (v->T == TYPE_STACK || v->T == TYPE_ARRAY) {
         if (as_char)
-            vm_debug_panic("[VM] SHOW char: supportato solo per int\n");
+            vm_debug_panic("[VM] SHOW char: only for int\n");
         op_show_flush_char_line(vm);
         char open = '[';
         char clos = ']';
@@ -686,7 +686,7 @@ static inline void op_show_unlocked(VM *vm, const char *frame_name)
         vm_printf("%c\n", clos);
     } else if (v->T == TYPE_CHANNEL) {
         if (as_char)
-            vm_debug_panic("[VM] SHOW char: supportato solo per int\n");
+            vm_debug_panic("[VM] SHOW char: only for int\n");
         op_show_flush_char_line(vm);
         vm_printf("%s: <", ID);
         pthread_mutex_lock(&v->channel->mtx);
@@ -697,7 +697,7 @@ static inline void op_show_unlocked(VM *vm, const char *frame_name)
         pthread_mutex_unlock(&v->channel->mtx);
         vm_printf(">\n");
     } else {
-        vm_debug_panic("[VM] SHOW su variabile PARAM non linkata!\n");
+        vm_debug_panic("[VM] SHOW of an unlinked PARAM variable\n");
     }
 }
 
@@ -714,7 +714,7 @@ static inline int eval_cond(int64_t lval, const char *op, int64_t rval)
     if (!strcmp(op, "<=")) return lval <= rval;
     if (!strcmp(op, ">"))  return lval >  rval;
     if (!strcmp(op, "<"))  return lval <  rval;
-    vm_debug_panic("[VM] operatore di confronto sconosciuto: '%s'\n", op);
+    vm_debug_panic("[VM] unknown comparison operator: '%s'\n", op);
     return 0;
 }
 
@@ -733,7 +733,7 @@ static inline void op_eval(VM *vm, const char *frame_name)
     VM_REST_EXPR(rhs); /* espressione destra */
 
     if (!lhs_tok || !op_tok || rhs[0] == '\0') {
-        vm_debug_panic("[VM] EVAL: formato errato (atteso: EVAL <lhs> <op> <rhs>)\n");
+        vm_debug_panic("[VM] EVAL: bad format (expected: EVAL <lhs> <op> <rhs>)\n");
     }
 
     uint fi   = get_findex(frame_name);
@@ -757,7 +757,7 @@ static inline void op_assert(VM *vm, const char *frame_name)
     VM_REST_EXPR(rhs);
 
     if (!lhs_tok || !op_tok || rhs[0] == '\0') {
-        vm_debug_panic("[VM] ASSERT: formato errato (atteso: ASSERT <lhs> <op> <rhs>)\n");
+        vm_debug_panic("[VM] ASSERT: bad format (expected: ASSERT <lhs> <op> <rhs>)\n");
     }
 
     /* thread_val_IF contiene il risultato dell'ultimo EVAL, che nel caso IF/ELSE
@@ -770,12 +770,12 @@ static inline void op_assert(VM *vm, const char *frame_name)
         int took_then = if_branch_stack[if_branch_top--];
         if (!took_then && fi_result) {
             vm_debug_panic(
-                "[VM] IF/FI non reversibile: ramo else ma condizione fi=vera (frame=%s lhs=%s op=%s rhs=%s)\n",
+                "[VM] IF/FI not reversible: else branch taken but the fi assertion is true (IfError, frame=%s lhs=%s op=%s rhs=%s)\n",
                 frame_name, lhs_tok, op_tok, rhs);
         }
         if (took_then && !fi_result) {
             vm_debug_panic(
-                "[VM] IF/FI non reversibile: eseguito ramo then, ma guardia del FI falsa (frame=%s lhs=%s op=%s rhs=%s)\n",
+                "[VM] IF/FI not reversible: then branch taken but the fi assertion is false (IfError, frame=%s lhs=%s op=%s rhs=%s)\n",
                 frame_name, lhs_tok, op_tok, rhs);
         }
         return;
@@ -786,7 +786,7 @@ static inline void op_assert(VM *vm, const char *frame_name)
     int64_t lval = resolve_value(vm, fi, lhs_tok);
     int64_t rval = resolve_value(vm, fi, rhs);
     if (!eval_cond(lval, op_tok, rval)) {
-        vm_debug_panic("[VM] ASSERT fallita: %s %s %s\n", lhs_tok, op_tok, rhs);
+        vm_debug_panic("[VM] ASSERT failed: %s %s %s\n", lhs_tok, op_tok, rhs);
     }
 }
 
@@ -800,7 +800,7 @@ static inline char *op_jmp(VM *vm, const char *fname, char *buf)
     uint  fi     = get_findex(fname);
     uint  li     = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);
     char *newptr = go_to_line(buf, vm->frames[fi]->label[li] + 1);
-    if (!newptr) vm_debug_panic("[VM] JMP: label '%s' non trovata (frame='%s' fi=%u li=%u line=%u)!\n",
+    if (!newptr) vm_debug_panic("[VM] JMP: label '%s' not found (frame='%s' fi=%u li=%u line=%u)\n",
                                 lbl ? lbl : "(null)", fname, fi, li, vm->frames[fi]->label[li]);
     return newptr;
 }
@@ -825,11 +825,11 @@ static inline int loop_entry_guard(VM *vm, const char *fname, char *buf, const c
     uint li  = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);
     char *ln = go_to_line(buf, vm->frames[fi]->label[li] - back);
     char *nl = ln ? strchr(ln, '\n') : NULL;
-    if (!nl) vm_debug_panic("[VM] FROM: guardia d'ingresso del ciclo %s non trovata\n", uid);
+    if (!nl) vm_debug_panic("[VM] FROM: entry guard of loop %s not found\n", uid);
     VM_LINE_DUP(line, ln, nl);
     char *fw = strtok(skip_lineno(line), " \t");
     if (!fw || strcmp(fw, "EVAL") != 0)
-        vm_debug_panic("[VM] FROM: guardia d'ingresso del ciclo %s non trovata\n", uid);
+        vm_debug_panic("[VM] FROM: entry guard of loop %s not found\n", uid);
     uint saved = thread_val_IF;
     op_eval(vm, fname);
     int b1 = thread_val_IF ? 1 : 0;
@@ -843,7 +843,7 @@ static inline int loop_entry_guard(VM *vm, const char *fname, char *buf, const c
 static inline void loop_check_reentry(VM *vm, const char *fname, char *buf, const char *uid)
 {
     if (loop_entry_guard(vm, fname, buf, uid))
-        vm_debug_panic("[VM] FROM: guardia d'ingresso vera al rientro nel ciclo "
+        vm_debug_panic("[VM] FROM: entry guard true on re-entering the loop "
                        "(LoopError2, frame=%s)\n", fname);
 }
 
@@ -876,7 +876,7 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
     if (thread_val_IF) return NULL;
     /* LoopError1: la guardia d'ingresso di un ciclo dev'essere vera all'ingresso. */
     if (lbl && !strncmp(lbl, "FROM_ERR_", 9))
-        vm_debug_panic("[VM] FROM: guardia d'ingresso falsa all'ingresso del ciclo "
+        vm_debug_panic("[VM] FROM: entry guard false on entering the loop "
                        "(LoopError1, frame=%s)\n", fname);
     /* Ciclo a un corpo: il back-edge e' il rientro, la guardia dev'essere falsa. */
     if (lbl && !strncmp(lbl, "FROM_START_", 11))
@@ -885,7 +885,7 @@ static inline char *op_jmpf(VM *vm, const char *fname, char *buf)
     if (!char_id_map_exists(&vm->frames[fi]->LabelIndexer, lbl)) vm_debug_panic("EXIT_FAILURE");
     uint  li     = char_id_map_get(&vm->frames[fi]->LabelIndexer, lbl);
     char *newptr = go_to_line(buf, vm->frames[fi]->label[li] + 1);
-    if (!newptr) vm_debug_panic("[VM] JMPF: label non trovata!\n");
+    if (!newptr) vm_debug_panic("[VM] JMPF: label not found\n");
     return newptr;
 }
 
@@ -926,13 +926,13 @@ static inline void op_local(VM *vm, const char *frame_name)
     if (vm->frames[fi]->vars[vi]) {
         if (vm->frames[fi]->vars[vi]->is_local)
             vm_debug_panic(
-                "[VM] LOCAL: variabile '%s' già allocata (Local-Err: manca un DELOCAL prima di questo LOCAL?) frame=%s\n",
+                "[VM] LOCAL: variable '%s' already allocated (Local-Err: missing DELOCAL before this LOCAL?) frame=%s\n",
                 Vname, frame_name);
         delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
     }
 
     vm->frames[fi]->vars[vi] = malloc(sizeof(Var));
-    if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: malloc fallita\n");
+    if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: allocation failed\n");
     alloc_var(vm->frames[fi]->vars[vi], Vtype, Vname);
 
     /* Massimo atomico: due rami di par possono aprire local nello stesso frame. */
@@ -956,7 +956,7 @@ static inline void op_local(VM *vm, const char *frame_name)
 
     if (dst->T == TYPE_ARRAY) {
         long n = c_len ? strtol(c_len, NULL, 10) : 0;
-        if (n <= 0) vm_debug_panic("[VM] LOCAL: array '%s' senza lunghezza valida\n", Vname);
+        if (n <= 0) vm_debug_panic("[VM] LOCAL: array '%s' without a valid length\n", Vname);
         int64_t fill = 0;
         if (c_val) {
             if (char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val))
@@ -965,15 +965,15 @@ static inline void op_local(VM *vm, const char *frame_name)
                 fill = (int64_t)strtoull(c_val, NULL, 10);
         }
         if ((unsigned long)n > SIZE_MAX / sizeof(int64_t))
-            vm_debug_panic("[VM] LOCAL: array '%s' troppo grande (%ld celle)\n", Vname, n);
+            vm_debug_panic("[VM] LOCAL: array '%s' too large (%ld cells)\n", Vname, n);
         dst->value = malloc((size_t)n * sizeof(int64_t));
-        if (!dst->value) vm_debug_panic("[VM] LOCAL: malloc array fallita\n");
+        if (!dst->value) vm_debug_panic("[VM] LOCAL: array allocation failed\n");
         for (long k = 0; k < n; k++) dst->value[k] = fill;
         dst->stack_len = (size_t)n;
     } else if (c_val && char_id_map_exists(&vm->frames[fi]->VarIndexer, c_val)) {
         uint  si  = char_id_map_get(&vm->frames[fi]->VarIndexer, c_val);
         Var  *src = vm->frames[fi]->vars[si];
-        if (!src) vm_debug_panic("[VM] LOCAL: sorgente NULL\n");
+        if (!src) vm_debug_panic("[VM] LOCAL: NULL source\n");
         if (src->T == TYPE_INT)
             *(dst->value) = *(src->value);
         else if (src->T == TYPE_STACK) {
@@ -981,14 +981,14 @@ static inline void op_local(VM *vm, const char *frame_name)
             dst->stack_len = src->stack_len;
             memcpy(dst->value, src->value, src->stack_len * sizeof(int64_t));
         } else {
-            vm_debug_panic("[VM] LOCAL: copia da PARAM non linkato\n");
+            vm_debug_panic("[VM] LOCAL: copy from an unlinked PARAM\n");
         }
     } else {
         if (dst->T == TYPE_INT)
             *(dst->value) = c_val ? (int64_t)strtoull(c_val, NULL, 10) : 0;
         else if (dst->T == TYPE_STACK) {
             if (c_val && strcmp(c_val, "nil") != 0)
-                vm_debug_panic("[VM] LOCAL: valore stack non compatibile\n");
+                vm_debug_panic("[VM] LOCAL: incompatible stack value\n");
         }
     }
 
@@ -1018,7 +1018,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
 
     /* ── 3. Ordine LIFO ── */
     if (strcmp(V->name, Vname) != 0) {
-        vm_debug_panic("[VM] DELOCAL: ordine errato! atteso '%s', trovato '%s'\n", Vname, V->name);
+        vm_debug_panic("[VM] DELOCAL: wrong order, expected '%s', found '%s'\n", Vname, V->name);
     }
 
     /* ── 4. Tipo ── */
@@ -1027,7 +1027,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
                             : (V->T == TYPE_ARRAY) ? "array"
                                                    : "channel";
     if (strcmp(Vtype, actual_type) != 0) {
-        vm_debug_panic("[VM] DELOCAL: tipo errato! atteso %s, trovato %s\n",
+        vm_debug_panic("[VM] DELOCAL: wrong type, expected %s, found %s\n",
                 actual_type, Vtype);
     }
 
@@ -1046,14 +1046,14 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     if (!ok) {
         if (V->T == TYPE_ARRAY)
             vm_debug_panic(
-                "[VM] DELOCAL: array '%s' non e' tutto %lld alla chiusura (o lunghezza diversa)\n",
+                "[VM] DELOCAL: array '%s' is not all %lld when closed (or has another length)\n",
                 Vname, (long long)Vvalue);
         else if (V->T == TYPE_INT)
             vm_debug_panic(
-                "[VM] DELOCAL: valore finale errato! (frame=%s var=%s, atteso=%lld, trovato=%lld, c_val=%s)\n",
+                "[VM] DELOCAL: wrong final value (Deloc-Err, frame=%s var=%s, expected=%lld, found=%lld, c_val=%s)\n",
                 frame_name, Vname, (long long)Vvalue, (long long)*(V->value), c_val ? c_val : "NULL");
         else
-            vm_debug_panic("[VM] DELOCAL: %s non è nil/empty!\n", Vname);
+            vm_debug_panic("[VM] DELOCAL: %s is not nil/empty\n", Vname);
         
     }
 

@@ -38,7 +38,7 @@ void vm_debug_panic(const char *fmt, ...)
     /* Scrivi sulla pipe — stesso canale usato da SHOW — così il DAP
        adapter lo riceve come OutputEvent nella Debug Console */
     if (g_debug_dbg->output_pipe_fd > 0) {
-        const char *prefix = "[ERRORE] ";
+        const char *prefix = "[ERROR] ";
         write(g_debug_dbg->output_pipe_fd, prefix, strlen(prefix));
         write(g_debug_dbg->output_pipe_fd, msg, strlen(msg));
     }

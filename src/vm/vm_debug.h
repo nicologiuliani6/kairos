@@ -231,8 +231,8 @@ static inline int dbg_hook(VMDebugState *dbg,
         while (dbg->mode == VM_MODE_PAUSE)
             pthread_cond_wait(&dbg->pause_cond, &dbg->pause_mtx);
         if (dbg->mode == VM_MODE_STEP_BACK && !can_step_back) {
-            dbg_set_error(dbg, "passo indietro non disponibile qui: l'istruzione corrente "
-                               "e' dentro un'inversione o in un ramo di par");
+            dbg_set_error(dbg, "step back not available here: the current instruction "
+                               "is inside an inversion or in a par branch");
             dbg->mode = VM_MODE_PAUSE;
             pthread_cond_broadcast(&dbg->pause_cond);
             continue;

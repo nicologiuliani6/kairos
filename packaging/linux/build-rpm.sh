@@ -10,22 +10,22 @@ DESCRIPTION="${DESCRIPTION:-Kairos, reversible concurrent language: compiler, VM
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
 
-# Requisiti, controllati PRIMA di avviare la build.
+# Requirements, checked BEFORE starting the build.
 require() {
-  command -v "$1" >/dev/null 2>&1 || { echo "Manca '$1'. $2"; MISSING=1; }
+  command -v "$1" >/dev/null 2>&1 || { echo "Missing '$1'. $2"; MISSING=1; }
 }
 MISSING=0
-require make "Installa i tool di build (Debian/Ubuntu: sudo apt install build-essential)."
-require gcc "Installa un compilatore C (Debian/Ubuntu: sudo apt install build-essential)."
-require python3 "Installa Python 3."
+require make "Install the build tools (Debian/Ubuntu: sudo apt install build-essential)."
+require gcc "Install a C compiler (Debian/Ubuntu: sudo apt install build-essential)."
+require python3 "Install Python 3."
 if [[ ! -x "${PROJECT_ROOT}/venv/bin/python" ]]; then
-  echo "Manca il virtualenv in ${PROJECT_ROOT}/venv. Esegui: (cd ${PROJECT_ROOT} && make install-deps)"; MISSING=1
+  echo "Missing the virtualenv in ${PROJECT_ROOT}/venv. Run: (cd ${PROJECT_ROOT} && make install-deps)"; MISSING=1
 elif [[ ! -x "${PROJECT_ROOT}/venv/bin/pyinstaller" ]]; then
-  echo "Manca pyinstaller nel virtualenv. Esegui: (cd ${PROJECT_ROOT} && make install-deps)"; MISSING=1
+  echo "Missing pyinstaller in the virtualenv. Run: (cd ${PROJECT_ROOT} && make install-deps)"; MISSING=1
 fi
-require rpmbuild "Installa rpm-build (Fedora: sudo dnf install rpm-build)."
+require rpmbuild "Install rpm-build (Fedora: sudo dnf install rpm-build)."
 if [[ "${MISSING}" -ne 0 ]]; then
-  echo "Requisiti mancanti: la build non parte."; exit 1
+  echo "Missing requirements: the build does not start."; exit 1
 fi
 BUILD_DIR="${ROOT_DIR}/.build"
 VERSION_FILE="${ROOT_DIR}/VERSION"
@@ -51,8 +51,8 @@ fi
 MAJOR="${BASH_REMATCH[1]}"
 MINOR="${BASH_REMATCH[2]}"
 PATCH="${BASH_REMATCH[3]}"
-# PKG_VERSION dall'ambiente (es. la CI di release, dal tag vX.Y.Z) vince sul
-# file VERSION, che in quel caso non viene toccato.
+# PKG_VERSION from the environment (e.g. the release CI, from the vX.Y.Z tag) wins
+# over the VERSION file, which is then left untouched.
 BUMP_VERSION_FILE=0
 if [[ -z "${PKG_VERSION:-}" ]]; then
   PKG_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
@@ -66,7 +66,7 @@ VM_SRC="${PROJECT_ROOT}/build/libvm.so"
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
-# Il .so va su CPU diverse da quella che compila: niente -march=native.
+# The .so runs on CPUs other than the build one: no -march=native.
 case "$(uname -m)" in x86_64) PKG_MARCH="${PKG_MARCH--march=x86-64}" ;; *) PKG_MARCH="${PKG_MARCH-}" ;; esac
 rm -f "${PROJECT_ROOT}/build/libvm.so"
 (cd "${PROJECT_ROOT}" && make release-app MARCH="${PKG_MARCH}" && make build-dap)

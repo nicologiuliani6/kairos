@@ -18,8 +18,8 @@ def _warn_if_libvm_stale(lib_path: str, project_root: str) -> None:
             return
         if lib_path.startswith('/opt/') or lib_path.startswith('/usr/'):
             print(
-                f"[Kairos] VM di sistema: {lib_path}\n"
-                "         Per la build del repository: make build-release",
+                f"[Kairos] system VM: {lib_path}\n"
+                "         To build from the repository: make build-release",
                 file=sys.stderr,
             )
             return
@@ -31,7 +31,7 @@ def _warn_if_libvm_stale(lib_path: str, project_root: str) -> None:
                 p = os.path.join(vm_dir, fn)
                 if os.path.isfile(p) and os.path.getmtime(p) > lib_m:
                     print(
-                        "[Kairos] build/libvm.so è più vecchio di src/vm — esegui: make build-release",
+                        "[Kairos] build/libvm.so is older than src/vm: run make build-release",
                         file=sys.stderr,
                     )
                     break
@@ -54,7 +54,7 @@ if __name__ == '__main__':
         pass
 
     if len(sys.argv) < 2:
-        print("Uso: kairos <file> [--dump-bytecode] [--dap] [--vm-stats]")
+        print("Usage: kairos <file> [--dump-bytecode] [--dap] [--vm-stats]")
         sys.exit(1)
 
     dap_mode = "--dap" in sys.argv
@@ -65,7 +65,7 @@ if __name__ == '__main__':
     try:
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
-            raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+            raise KairosCompileError("PARSER", "compilation stopped: no AST produced")
         ast = desugar_try(ast)
         run_static_checks(ast)
         BT_Compiler = ByteCode_Compiler()
@@ -106,7 +106,7 @@ if __name__ == '__main__':
         lib_path = '/usr/local/lib/kairos/libvm.so'
 
     if not os.path.exists(lib_path):
-        print("Errore: libreria non trovata in nessun percorso.")
+        print("Error: libvm.so not found.")
         sys.exit(1)
 
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

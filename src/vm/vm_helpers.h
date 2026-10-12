@@ -35,7 +35,7 @@ static inline void frame_ensure_labels(Frame *f, int idx)
     int nc = f->label_cap ? f->label_cap : FRAME_LABEL_INIT_CAP;
     while (idx >= nc) nc *= 2;
     uint *n = (uint *)realloc(f->label, sizeof(uint) * (size_t)nc);
-    if (!n) { fprintf(stderr, "[VM] frame_ensure_labels: realloc(%d) fallita\n", nc); exit(1); }
+    if (!n) { fprintf(stderr, "[VM] frame_ensure_labels: realloc(%d) failed\n", nc); exit(1); }
     memset(n + f->label_cap, 0, sizeof(uint) * (size_t)(nc - f->label_cap));
     f->label = n; f->label_cap = nc;
 }
@@ -46,7 +46,7 @@ static inline void frame_ensure_params(Frame *f, int idx)
     int nc = f->param_indices_cap ? f->param_indices_cap : FRAME_PARAMS_INIT_CAP;
     while (idx >= nc) nc *= 2;
     int *n = (int *)realloc(f->param_indices, sizeof(int) * (size_t)nc);
-    if (!n) { fprintf(stderr, "[VM] frame_ensure_params: realloc(%d) fallita\n", nc); exit(1); }
+    if (!n) { fprintf(stderr, "[VM] frame_ensure_params: realloc(%d) failed\n", nc); exit(1); }
     memset(n + f->param_indices_cap, 0, sizeof(int) * (size_t)(nc - f->param_indices_cap));
     f->param_indices = n; f->param_indices_cap = nc;
 }
@@ -67,7 +67,7 @@ static inline void vm_str_replace(char **dst, const char *src)
     Var *name##_small[VM_PARAM_SAVE_SMALL]; \
     Var **name = ((n) <= VM_PARAM_SAVE_SMALL) ? name##_small \
                  : (Var **)malloc(sizeof(Var *) * (size_t)(n)); \
-    if (!name) vm_debug_panic("[VM] parametri: memoria esaurita\n")
+    if (!name) vm_debug_panic("[VM] parameters: out of memory\n")
 #define VM_PARAM_SAVE_FREE(name) \
     do { if (name != name##_small) free(name); } while (0)
 
@@ -107,7 +107,7 @@ static inline uint get_findex(const char *name)
     int exists = char_id_map_exists(&FrameIndexer, name);
     if (!exists) {
         pthread_mutex_unlock(&var_indexer_mtx);
-        vm_debug_panic("[VM] get_findex: frame '%s' non trovato!\n", name);
+        vm_debug_panic("[VM] get_findex: frame '%s' not found\n", name);
     }
     uint idx = char_id_map_get(&FrameIndexer, name);
     pthread_mutex_unlock(&var_indexer_mtx);
@@ -138,11 +138,11 @@ static inline int64_t resolve_atom(VM *vm, uint fi, const char *s)
         Var *v = vm->frames[fi]->vars[idx];
         if (v && v->value)
             return *(v->value);
-        vm_debug_panic("[VM] lettura: variabile '%s' fuori dal suo blocco local/delocal\n", s);
+        vm_debug_panic("[VM] read: variable '%s' outside its local/delocal block\n", s);
     }
     const char *c = (*s == '-') ? s + 1 : s;
     if (!(*c >= '0' && *c <= '9'))
-        vm_debug_panic("[VM] lettura: variabile '%s' non definita!\n", s);
+        vm_debug_panic("[VM] read: variable '%s' is not defined\n", s);
     /* strtoull preserva bit-pattern per costanti unsigned > 2^63 (es. 0x8...
      * stored come 0x8000000000000000 = INT64_MIN). strtoll saturerebbe a
      * INT64_MAX perdendo l'high bit. Per "-N" strtoull accetta segno e
@@ -190,7 +190,7 @@ static inline int64_t apply_binop(char op, int64_t lval, int64_t rval)
     if (op == '*') return (int64_t)((uint64_t)lval * (uint64_t)rval);
     if (op == '/' || op == '%') {
         if (rval == 0)
-            vm_debug_panic("[VM] Div-Err: divisione per zero (%lld %c 0)\n",
+            vm_debug_panic("[VM] Div-Err: division by zero (%lld %c 0)\n",
                            (long long)lval, op);
         if (rval == -1)   /* INT64_MIN / -1 trabocca: anche qui modulo 2^64 */
             return op == '/' ? (int64_t)(0 - (uint64_t)lval) : 0;
@@ -206,7 +206,7 @@ static inline int64_t apply_binop(char op, int64_t lval, int64_t rval)
     if (op == '}') return lval >= rval;
     if (op == '&') return (lval != 0) && (rval != 0);
     if (op == '|') return (lval != 0) || (rval != 0);
-    vm_debug_panic("[VM] resolve_expr: operatore sconosciuto '%c'\n", op);
+    vm_debug_panic("[VM] resolve_expr: unknown operator '%c'\n", op);
     return 0;
 }
 
@@ -232,7 +232,7 @@ static int64_t eval_expr_at(VM *vm, uint fi, const char **pp)
     int len = (*p == '-') ? 1 + token_len(p + 1) : token_len(p);
     char small[64];
     char *atom = (len < (int)sizeof small) ? small : (char *)malloc((size_t)len + 1);
-    if (!atom) vm_debug_panic("[VM] memoria esaurita\n");
+    if (!atom) vm_debug_panic("[VM] out of memory\n");
     memcpy(atom, p, (size_t)len); atom[len] = '\0';
     int64_t v = resolve_atom(vm, fi, atom);
     if (atom != small) free(atom);
@@ -269,7 +269,7 @@ static inline int64_t *array_cell(VM *vm, uint fi, const char *tok, Var **vout, 
     const char *lb = strchr(tok, '[');
     const char *rb = strrchr(tok, ']');
     if (!lb || !rb || rb < lb)
-        vm_debug_panic("[VM] %s: cella di array malformata '%s'\n", op, tok);
+        vm_debug_panic("[VM] %s: malformed array cell '%s'\n", op, tok);
     size_t nl = (size_t)(lb - tok);
     char name[nl + 1];
     memcpy(name, tok, nl); name[nl] = '\0';
@@ -278,10 +278,10 @@ static inline int64_t *array_cell(VM *vm, uint fi, const char *tok, Var **vout, 
     memcpy(inner, lb + 1, il); inner[il] = '\0';
     Var *v = get_var(vm, fi, name, op);
     if (v->T != TYPE_ARRAY)
-        vm_debug_panic("[VM] %s: '%s' non e' un array\n", op, name);
+        vm_debug_panic("[VM] %s: '%s' is not an array\n", op, name);
     int64_t i = resolve_expr(vm, fi, inner);
     if (i < 0 || (uint64_t)i >= (uint64_t)v->stack_len)
-        vm_debug_panic("[VM] Idx-Err: indice %lld fuori dai limiti di '%s' (lunghezza %zu)\n",
+        vm_debug_panic("[VM] Idx-Err: index %lld out of the bounds of '%s' (length %zu)\n",
                        (long long)i, name, v->stack_len);
     *vout = v;
     return &v->value[i];
@@ -293,7 +293,7 @@ static inline int64_t *lvalue_ptr(VM *vm, uint fi, const char *id, Var **vout, c
     if (strchr(id, '['))
         return array_cell(vm, fi, id, vout, op);
     Var *v = get_var(vm, fi, id, op);
-    if (v->T != TYPE_INT) vm_debug_panic("[VM] %s non su INT!\n", op);
+    if (v->T != TYPE_INT) vm_debug_panic("[VM] %s on a non-int\n", op);
     *vout = v;
     return v->value;
 }
@@ -302,10 +302,10 @@ static inline Var *get_var(VM *vm, uint fi, const char *name, const char *op)
 {
     int idx = char_id_map_lookup(&vm->frames[fi]->VarIndexer, name);
     if (idx < 0) {
-        vm_debug_panic("[VM] %s: variabile '%s' non definita!\n", op, name);
+        vm_debug_panic("[VM] %s: variable '%s' is not defined\n", op, name);
     }
     if (!vm->frames[fi]->vars[idx]) {
-        vm_debug_panic("[VM] %s: variabile '%s' è NULL\n", op, name);
+        vm_debug_panic("[VM] %s: variable '%s' is NULL\n", op, name);
     }
     return vm->frames[fi]->vars[idx];
 }
@@ -384,7 +384,7 @@ static inline char *normalize_bytecode_physical_lines(const char *input)
 
 static inline void delete_var(Var *vars[], int *size, int n)
 {
-    if (n < 0 || n >= *size) { printf("Indice fuori range!\n"); return; }
+    if (n < 0 || n >= *size) { printf("Index out of range\n"); return; }
     Var *v = vars[n];
     if (v->T == TYPE_CHANNEL && v->channel) {
         pthread_mutex_lock(&v->channel->mtx);
@@ -416,7 +416,7 @@ static inline void var_stack_reserve(Var *v, size_t n)
     size_t nc = v->stack_cap ? v->stack_cap : VAR_STACK_INIT_CAP;
     while (nc < n) nc *= 2;
     int64_t *nv = (int64_t *)realloc(v->value, nc * sizeof(int64_t));
-    if (!nv) vm_debug_panic("[VM] stack: memoria esaurita (%zu celle)\n", nc);
+    if (!nv) vm_debug_panic("[VM] stack: out of memory (%zu cells)\n", nc);
     v->value     = nv;
     v->stack_cap = nc;
 }
@@ -460,7 +460,7 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
         v->channel->buf_len = 0;
         v->channel->refcount = 1;
     } else {
-        vm_debug_panic("[VM] tipo non supportato\n");
+        vm_debug_panic("[VM] unsupported type\n");
     }
 }
 

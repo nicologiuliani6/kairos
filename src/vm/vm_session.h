@@ -88,7 +88,7 @@ static inline void session_thread_begin(void)
         unsigned long nc = g_serial_cap ? g_serial_cap * 2 : 64;
         while (nc <= sr) nc *= 2;
         unsigned char *n = realloc(g_serial_alive, nc);
-        if (!n) { pthread_mutex_unlock(&g_session_mtx); vm_debug_panic("[VM] memoria esaurita\n"); }
+        if (!n) { pthread_mutex_unlock(&g_session_mtx); vm_debug_panic("[VM] out of memory\n"); }
         memset(n + g_serial_cap, 0, nc - g_serial_cap);
         g_serial_alive = n;
         g_serial_cap = nc;
@@ -142,9 +142,9 @@ static inline void session_claim(Channel *ch, const char *name, const char *come
     if (s->owner_n >= SESSION_MAX_OWNERS) {
         pthread_mutex_unlock(&g_session_mtx);
         vm_debug_panic(
-            "[VM] SESSIONE: il channel '%s' ha gia' due titolari, un terzo thread non "
-            "puo' %s (la sessione e' binaria); se il canale e' stato passato a un altro "
-            "thread, chi lo cede deve smettere di usarlo prima che il nuovo cominci\n",
+            "[VM] SESSION: channel '%s' already has two owners, a third thread cannot "
+            "%s it (the session is binary); if the channel was passed to another "
+            "thread, the one handing it over must stop using it before the new one starts\n",
             name, come);
     }
 
@@ -156,13 +156,13 @@ static inline void session_claim(Channel *ch, const char *name, const char *come
 /* Prima di ogni ssend/srecv sul canale. */
 static inline void session_acquire(Channel *ch, const char *name)
 {
-    session_claim(ch, name, "usarlo");
+    session_claim(ch, name, "use");
 }
 
 /* Il thread ha ricevuto il canale come payload di un altro canale. */
 static inline void session_delegate_acquire(Channel *ch, const char *name)
 {
-    session_claim(ch, name, "riceverlo");
+    session_claim(ch, name, "receive");
 }
 
 /* Il thread spedisce il canale a qualcun altro: cede la titolarita'. Se poi

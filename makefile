@@ -109,7 +109,7 @@ run: build-release
 ifndef FILE
 	$(error Specifica il file senza spazi intorno a = — es.: make run FILE=examples/example_login.kairos — non "FILE = ...")
 endif
-	@echo "$(CYAN)Esecuzione: $(FILE)$(RESET)"
+	@echo "$(CYAN)Running: $(FILE)$(RESET)"
 	$(PYTHON) -m src.kairos $(FILE) --dump-bytecode
 
 # tests/*.kairos + examples/; esclusi: tests/fixtures/; esempi noti non validi in suite.
@@ -141,10 +141,10 @@ test: build-release
 		fi; \
 	done; \
 	echo ""; \
-	echo "$(CYAN)Risultati: $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
+	echo "$(CYAN)Results: $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
 	if [ $$failed -gt 0 ]; then \
 		echo ""; \
-		echo "$(RED)Dettaglio errori:$(RESET)"; \
+		echo "$(RED)Error details:$(RESET)"; \
 		printf "$$errors"; \
 		exit 1; \
 	fi
@@ -152,7 +152,7 @@ test: build-release
 # Ogni programma di test_error/ deve fermarsi con un errore etichettato
 # ([LEXER], [PARSER], [STATIC], [LOCAL], [VM]); quelli *_ok.kairos devono girare.
 test-error: build-release
-	@echo "$(CYAN)=== Programmi errati (test_error/) ===$(RESET)"
+	@echo "$(CYAN)=== Programs with errors (test_error/) ===$(RESET)"
 	@passed=0; failed=0; \
 	for f in test_error/*.kairos; do \
 		name=$$(basename $$f); \
@@ -160,10 +160,10 @@ test-error: build-release
 		if echo "$$output" | grep -qE "^\[(LEXER|PARSER|STATIC|LOCAL|VM)\]"; then got=err; else got=ok; fi; \
 		case $$name in *_ok.kairos) want=ok;; *) want=err;; esac; \
 		if [ $$got = $$want ]; then passed=$$((passed+1)); \
-		else echo "  $(RED)FAIL$(RESET)  $$name (atteso $$want)"; failed=$$((failed+1)); fi; \
+		else echo "  $(RED)FAIL$(RESET)  $$name (expected $$want)"; failed=$$((failed+1)); fi; \
 	done; \
 	rm -f bytecode.txt; \
-	echo "$(CYAN)Risultati: $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
+	echo "$(CYAN)Results: $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
 	[ $$failed -eq 0 ]
 
 # PyInstaller standalone app (rinominato da `release` per non confondersi con la build libvm).
@@ -185,64 +185,64 @@ release-app: release check-pyinstaller
 check-system:
 	@missing=0; \
 	for tool in make $(CC) python3; do \
-		command -v $$tool >/dev/null 2>&1 || { echo "$(RED)Manca '$$tool'$(RESET)"; missing=1; }; \
+		command -v $$tool >/dev/null 2>&1 || { echo "$(RED)Missing '$$tool'$(RESET)"; missing=1; }; \
 	done; \
-	python3 -c "import venv, ensurepip" 2>/dev/null || { echo "$(RED)Manca il modulo venv/ensurepip di Python (Debian/Ubuntu: sudo apt install python3-venv)$(RESET)"; missing=1; }; \
+	python3 -c "import venv, ensurepip" 2>/dev/null || { echo "$(RED)Missing the Python venv/ensurepip module (Debian/Ubuntu: sudo apt install python3-venv)$(RESET)"; missing=1; }; \
 	if [ $$missing -ne 0 ]; then \
 		echo ""; \
-		echo "$(YELLOW)Requisiti di sistema: make, gcc, python3 (con venv).$(RESET)"; \
+		echo "$(YELLOW)System requirements: make, gcc, python3 (with venv).$(RESET)"; \
 		echo "$(YELLOW)Debian/Ubuntu: sudo apt install build-essential python3 python3-venv$(RESET)"; \
 		echo "$(YELLOW)Fedora: sudo dnf install gcc make python3$(RESET)   Arch: sudo pacman -S base-devel python$(RESET)"; \
 		exit 1; \
 	fi; \
-	echo "$(GREEN)Requisiti di sistema OK$(RESET)"
+	echo "$(GREEN)System requirements OK$(RESET)"
 
 install-deps: check-system
-	@echo "$(CYAN)Creazione venv e installazione dipendenze...$(RESET)"
+	@echo "$(CYAN)Creating the venv and installing the dependencies...$(RESET)"
 	python3 -m venv venv
 	./venv/bin/pip install --upgrade pip
 	./venv/bin/pip install ply pyinstaller
-	@echo "$(GREEN)Dipendenze installate$(RESET)"
+	@echo "$(GREEN)Dependencies installed$(RESET)"
 
 # Requisiti per compilare la VM e far girare i programmi.
 check-deps:
-	@command -v $(CC) >/dev/null 2>&1 || (echo "$(RED)Compilatore '$(CC)' non trovato. Esegui: make check-system$(RESET)" && exit 1)
-	@test -f $(PYTHON) || (echo "$(RED)venv non trovato. Esegui: make install-deps$(RESET)" && exit 1)
+	@command -v $(CC) >/dev/null 2>&1 || (echo "$(RED)Compiler '$(CC)' not found. Run: make check-system$(RESET)" && exit 1)
+	@test -f $(PYTHON) || (echo "$(RED)venv not found. Run: make install-deps$(RESET)" && exit 1)
 	@$(PYTHON) -c "import ply" 2>/dev/null || \
-		(echo "$(RED)ply non trovato nel venv. Esegui: make install-deps$(RESET)" && exit 1)
+		(echo "$(RED)ply not found in the venv. Run: make install-deps$(RESET)" && exit 1)
 
 # Requisito in piu' per costruire l'app e i pacchetti.
 check-pyinstaller: check-deps
 	@test -x $(PYINSTALLER) || \
-		(echo "$(RED)pyinstaller non trovato in ./venv/bin. Esegui: make install-deps$(RESET)" && exit 1)
+		(echo "$(RED)pyinstaller not found in ./venv/bin. Run: make install-deps$(RESET)" && exit 1)
 
 clean:
-	@echo "$(YELLOW)Pulizia...$(RESET)"
+	@echo "$(YELLOW)Cleaning...$(RESET)"
 	rm -f $(LIBVM) $(LIBVM_DAP) $(VERSCRIPT) build/test_dap_autonomous
 	rm -rf build/pyinstaller-work build/dist
 	rm -rf $(SRC_DIR)/build $(SRC_DIR)/dist $(SRC_DIR)/__pycache__ $(SRC_DIR)/*.spec
 	rm -f $(SRC_DIR)/parser.out $(SRC_DIR)/parsetab.py
 	find . -name "*.pyc" -delete
 	find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; true
-	@echo "$(GREEN)Pulizia completata$(RESET)"
+	@echo "$(GREEN)Clean done$(RESET)"
 
 help:
 	@echo ""
 	@echo "$(CYAN)Kairos — Toolchain (gcc)$(RESET)"
 	@echo ""
-	@echo "  $(GREEN)make$(RESET)                          libvm.so release (default; massima ottimizzazione)"
+	@echo "  $(GREEN)make$(RESET)                          libvm.so release build (default; fully optimized)"
 	@echo "  $(GREEN)make release$(RESET)                  libvm.so ($(CC) -O3 -march=native -flto -DNDEBUG)"
-	@echo "  $(GREEN)make build$(RESET)                    libvm.so portabile ($(CC) -O2, niente -march=native/-flto)"
-	@echo "  $(GREEN)make build-dap$(RESET)                Compila libvm_dap.so (debugger)"
-	@echo "  $(GREEN)make test-dap$(RESET)                 Test C debugger (pipe + loop lungo)"
-	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)       Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
+	@echo "  $(GREEN)make build$(RESET)                    portable libvm.so ($(CC) -O2, no -march=native/-flto)"
+	@echo "  $(GREEN)make build-dap$(RESET)                Build libvm_dap.so (debugger)"
+	@echo "  $(GREEN)make test-dap$(RESET)                 C tests of the debugger"
+	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)       Run one Kairos program"
 	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + lossless/"
-	@echo "  $(GREEN)make test-error$(RESET)               test_error/: ogni programma si ferma con il suo errore"
-	@echo "  $(GREEN)make release-app$(RESET)              Build kairos standalone con PyInstaller"
-	@echo "  $(GREEN)make check-system$(RESET)             Controlla i requisiti di sistema (gcc, make, python3-venv)"
-	@echo "  $(GREEN)make install-deps$(RESET)             Controlla i requisiti, crea il venv e installa le dipendenze"
-	@echo "  $(GREEN)make clean$(RESET)                    Rimuove artefatti generati"
+	@echo "  $(GREEN)make test-error$(RESET)               test_error/: every program stops with its error"
+	@echo "  $(GREEN)make release-app$(RESET)              Build the standalone kairos app with PyInstaller"
+	@echo "  $(GREEN)make check-system$(RESET)             Check the system requirements (gcc, make, python3-venv)"
+	@echo "  $(GREEN)make install-deps$(RESET)             Check the requirements, create the venv and install the dependencies"
+	@echo "  $(GREEN)make clean$(RESET)                    Remove build artifacts"
 	@echo ""
-	@echo "  $(YELLOW)release: -O3 -march=native -flto (libvm ottimizzata per la CPU di build, non redistribuibile).$(RESET)"
-	@echo "  $(YELLOW)build:   -O2 portabile (niente architettura-specifico).$(RESET)"
+	@echo "  $(YELLOW)release: -O3 -march=native -flto (libvm tuned for this CPU; packages use MARCH=-march=x86-64).$(RESET)"
+	@echo "  $(YELLOW)build:   -O2, portable.$(RESET)"
 	@echo ""

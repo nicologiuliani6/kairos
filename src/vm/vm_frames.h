@@ -40,7 +40,7 @@ static inline void vm_ensure_frame_cap(VM *vm, uint needed)
     if (!vm->frames[needed]) {
         vm->frames[needed] = (Frame *)calloc(1, sizeof(Frame));
         if (!vm->frames[needed]) {
-            fprintf(stderr, "[VM] vm_ensure_frame_cap: calloc Frame fallita\n");
+            fprintf(stderr, "[VM] vm_ensure_frame_cap: calloc Frame failed\n");
             exit(1);
         }
     }
@@ -135,7 +135,7 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
             const char *typ = (bv->T == TYPE_STACK) ? "stack" : "channel";
             clone->vars[vi] = malloc(sizeof(Var));
             if (!clone->vars[vi])
-                vm_debug_panic("[VM] init_clone_frame: malloc Var fallita\n");
+                vm_debug_panic("[VM] init_clone_frame: malloc Var failed\n");
             alloc_var(clone->vars[vi], typ, bv->name);
             clone->vars[vi]->is_local = 0;
         } else if (bv->T == TYPE_INT) {
@@ -145,7 +145,7 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
              * via op_local). */
             clone->vars[vi] = malloc(sizeof(Var));
             if (!clone->vars[vi])
-                vm_debug_panic("[VM] init_clone_frame: malloc Var int fallita\n");
+                vm_debug_panic("[VM] init_clone_frame: malloc Var int failed\n");
             alloc_var(clone->vars[vi], "int", bv->name);
             clone->vars[vi]->is_local = 0;
         }

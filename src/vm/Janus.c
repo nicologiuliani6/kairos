@@ -76,7 +76,7 @@ static inline void vm_buf_set(char **buf, size_t *cap, const char *src)
         size_t nc = *cap ? *cap : 32;
         while (nc < l) nc *= 2;
         char *n = (char *)realloc(*buf, nc);
-        if (!n) vm_debug_panic("[VM] nome di frame: memoria esaurita\n");
+        if (!n) vm_debug_panic("[VM] frame name: out of memory\n");
         *buf = n; *cap = nc;
     }
     memcpy(*buf, src, l);
@@ -111,13 +111,13 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
      * Gli slot nuovi sono azzerati: i loro buffer partono vuoti. */
     uint cs_cap = 64;
     CallRecord *cs = calloc(cs_cap, sizeof(CallRecord));
-    if (!cs) vm_debug_panic("[VM] call stack: memoria esaurita\n");
+    if (!cs) vm_debug_panic("[VM] call stack: out of memory\n");
     int cs_top = -1;
 #define VM_CS_ENSURE(needed) do { \
     if ((uint)(needed) >= cs_cap) { \
         uint _nc = cs_cap; while (_nc <= (uint)(needed)) _nc *= 2; \
         CallRecord *_nb = (CallRecord *)realloc(cs, sizeof(CallRecord) * _nc); \
-        if (!_nb) vm_debug_panic("[VM] CALL: realloc(%u) fallita\n", _nc); \
+        if (!_nb) vm_debug_panic("[VM] CALL: realloc(%u) failed\n", _nc); \
         memset(_nb + cs_cap, 0, sizeof(CallRecord) * (_nc - cs_cap)); \
         cs = _nb; cs_cap = _nc; \
     } \
@@ -125,7 +125,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     g_run_bt_depth++;
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si]->addr + 1);
-    if (!ptr) { fprintf(stderr, "ERROR: '%s' non trovato\n", fname); goto done; }
+    if (!ptr) { fprintf(stderr, "ERROR: '%s' not found\n", fname); goto done; }
 
     while (*ptr) {
         char *nl = strchr(ptr, '\n'); if (!nl) break;
@@ -156,7 +156,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         if (!strcmp(fw, "END_PROC")) {
             uint fi = get_findex(fname);
             if (stack_size(&vm->frames[fi]->LocalVariables) > -1) {
-                vm_debug_panic("[VM] END_PROC: variabili LOCAL non chiuse!\n");
+                vm_debug_panic("[VM] END_PROC: LOCAL variables not closed\n");
             }
             if (cs_top >= 0) {
                 int cfi = cs[cs_top].callee_findex;
@@ -230,7 +230,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 int nc = cs[cs_top].saved_params_cap ? cs[cs_top].saved_params_cap : 8;
                 while (nc < pc) nc *= 2;
                 Var **np = (Var **)realloc(cs[cs_top].saved_params, sizeof(Var *) * (size_t)nc);
-                if (!np) vm_debug_panic("[VM] CALL: memoria esaurita per i parametri\n");
+                if (!np) vm_debug_panic("[VM] CALL: out of memory for the parameters\n");
                 cs[cs_top].saved_params = np;
                 cs[cs_top].saved_params_cap = nc;
             }
@@ -238,7 +238,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             char *p = NULL; int ii = 0;
             while ((p = strtok(NULL, " \t")) && ii < pc) {
                 if (!char_id_map_exists(&vm->frames[cfi_cur]->VarIndexer, p))
-                    { vm_debug_panic("[VM] CALL: '%s' non def\n", p);}
+                    { vm_debug_panic("[VM] CALL: '%s' not defined\n", p);}
                 int src = char_id_map_get(&vm->frames[cfi_cur]->VarIndexer, p);
                 if (!vm->frames[cfi_cur]->vars[src])
                     { vm_debug_panic("[VM] CALL: '%s' NULL\n", p);}
@@ -271,12 +271,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             vm_buf_set(&fname, &fname_cap, nfname);
             ptr = go_to_line(orig, vm->frames[cfi]->addr + 1);
-            if (!ptr) vm_debug_panic("[VM] CALL: indirizzo non trovato!\n");
+            if (!ptr) vm_debug_panic("[VM] CALL: address not found\n");
             continue;
         }
         else if (!strcmp(fw, "UNCALL")) {
             char *pn  = strtok(NULL, " \t");
-            VMLOG("[UNCALL] chiamato per '%s'\n", pn ? pn : "NULL");
+            VMLOG("[UNCALL] called for '%s'\n", pn ? pn : "NULL");
             uint  cfi = current_thread_args ? clone_frame_for_thread(vm, pn)
                                             : char_id_map_get(&FrameIndexer, pn);
             uint  curi = get_findex(fname);
@@ -348,9 +348,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             if (current_thread_args) {
                 goto done;
             }
-            vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw);
+            vm_debug_panic("[VM] unknown op: '%s'\n", fw);
         }
-        else { vm_debug_panic("[VM] op sconosciuta: '%s'\n", fw); }
+        else { vm_debug_panic("[VM] unknown op: '%s'\n", fw); }
 
         ptr = nl + 1;
     }
@@ -432,7 +432,7 @@ void vm_exec(VM *vm, char *buffer)
                 char *type = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
                 int   vi   = char_id_map_get(&vm->frames[vm->frame_top]->VarIndexer, vn);
                 frame_ensure_vars(vm->frames[vm->frame_top], vi);
-                if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] Variabile già definita!\n");
+                if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] variable already defined\n");
                 vm->frames[vm->frame_top]->vars[vi] = malloc(sizeof(Var));
                 alloc_var(vm->frames[vm->frame_top]->vars[vi], type, vn);
                 vm->frames[vm->frame_top]->vars[vi]->is_local = 0;
@@ -443,7 +443,7 @@ void vm_exec(VM *vm, char *buffer)
                 char *vtype = strtok(NULL, " \t"), *vn = strtok(NULL, " \t");
                 int   vi    = char_id_map_get(&vm->frames[vm->frame_top]->VarIndexer, vn);
                 frame_ensure_vars(vm->frames[vm->frame_top], vi);
-                if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] PARAM già definito!\n");
+                if (vm->frames[vm->frame_top]->vars[vi]) vm_debug_panic("[VM] PARAM already defined\n");
                 vm->frames[vm->frame_top]->vars[vi]          = calloc(1, sizeof(Var));
                 vm->frames[vm->frame_top]->vars[vi]->T        = TYPE_PARAM;
                 vm->frames[vm->frame_top]->vars[vi]->is_local = 0;
@@ -467,7 +467,7 @@ void vm_exec(VM *vm, char *buffer)
     }
     /* main parte a prima passata conclusa: tutte le procedure sono registrate,
      * in qualunque ordine compaiano nel file. */
-    if (!has_main) vm_debug_panic("[VM] manca la procedura main\n");
+    if (!has_main) vm_debug_panic("[VM] procedure main is missing\n");
     /* nuovo programma: nessun par aperto, solo il thread principale */
     __atomic_store_n(&g_runnable, 1, __ATOMIC_SEQ_CST);
     vm_run_BT(vm, orig, "main");
@@ -658,7 +658,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
 
     char *ast = normalize_bytecode_physical_lines(bytecode);
     if (!ast) {
-        fprintf(stderr, "Errore: normalizzazione bytecode fallita.\n");
+        fprintf(stderr, "Error: bytecode normalization failed.\n");
         return;
     }
 

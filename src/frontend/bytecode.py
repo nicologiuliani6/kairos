@@ -119,7 +119,7 @@ class ByteCode_Compiler:
                 _, var, op, expr, lineno = ast
                 opcode = _ASSIGN_OPS.get(op)
                 if opcode is None:
-                    raise KairosCompileError("BYTECODE", f"operatore aritmetico non supportato: {op}")
+                    raise KairosCompileError("BYTECODE", f"unsupported arithmetic operator: {op}")
                 self.emit(f"{opcode} {self.expr_to_str(var)} {self.expr_to_str(expr)}", lineno)
 
             case 'call':
@@ -217,12 +217,12 @@ class ByteCode_Compiler:
                 self.emit("PAR_END", lineno)
 
             case _:
-                raise KairosCompileError("BYTECODE", f"nodo AST non gestito: {ast[0]}  ->  {ast}")
+                raise KairosCompileError("BYTECODE", f"unhandled AST node: {ast[0]}  ->  {ast}")
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Uso: python JBytecode.py <file>")
+        print("Usage: python bytecode.py <file>")
         sys.exit(1)
 
     with open(sys.argv[1], 'r') as f:
@@ -231,7 +231,7 @@ if __name__ == '__main__':
     try:
         ast = parser.parse(source, lexer=lexer)
         if ast is None:
-            raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+            raise KairosCompileError("PARSER", "compilation stopped: no AST produced")
         ast = desugar_try(ast)
         run_static_checks(ast)
         compiler = ByteCode_Compiler()

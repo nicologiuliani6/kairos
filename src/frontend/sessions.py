@@ -196,15 +196,15 @@ def _session_clash(s1, s2):
         return None
     if t1 == 'end' or t2 == 'end':
         avanti = s2 if t1 == 'end' else s1
-        resta = ("ha ancora un invio da fare" if avanti[0] == '!'
-                 else "attende ancora una ricezione")
-        return f"un thread {resta}, ma l'altro ha gia' finito"
+        resta = ("still has a send to do" if avanti[0] == '!'
+                 else "still waits for a receive")
+        return f"one thread {resta}, but the other has already finished"
     if t1 == t2:
         verso = 'inviano' if t1 == '!' else 'ricevono'
-        return f"entrambi i thread {verso} nello stesso punto del protocollo"
+        return f"both threads {verso} at the same point of the protocol"
     if s1[1] != s2[1]:
         return (f"scambio di ampiezza diversa: {s1[1]} "
-                f"{'valore' if s1[1] == 1 else 'valori'} da un lato, {s2[1]} dall'altro")
+                f"{'value' if s1[1] == 1 else 'values'} on one side, {s2[1]} on the other")
     return _session_clash(s1[2], s2[2])
 
 
@@ -343,10 +343,10 @@ def check_sessions(branches, proc_signatures, program_procedures, lineno):
             raise KairosCompileError(
                 "STATIC",
                 (
-                    f"riga {lineno}: i due thread usano il channel '{ch}' con protocolli non "
-                    f"duali ({_session_str(s1)} contro {_session_str(s2)}): {why}; "
-                    "a ogni ssend di un lato deve corrispondere un srecv dell'altro, "
-                    "nello stesso ordine e con lo stesso numero di valori"
+                    f"line {lineno}: the two threads use channel '{ch}' with non-dual "
+                    f"protocols ({_session_str(s1)} against {_session_str(s2)}): {why}; "
+                    "each ssend on one side must match an srecv on the other, "
+                    "in the same order and with the same number of values"
                 ),
             )
 

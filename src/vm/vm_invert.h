@@ -222,13 +222,13 @@ static inline int collect_loops(VM *vm, const char *frame_name, char *buf,
             if (n == out_cap) { \
                 out_cap = out_cap ? out_cap * 2 : 8; \
                 out = (LoopDescriptor *)realloc(out, sizeof(LoopDescriptor) * (size_t)out_cap); \
-                if (!out) vm_debug_panic("[VM] collect_loops: memoria esaurita\n"); \
+                if (!out) vm_debug_panic("[VM] collect_loops: out of memory\n"); \
             } \
             if (top + 1 == stack_cap) { \
                 stack_cap = stack_cap ? stack_cap * 2 : 8; \
                 stack_slot = (int *)realloc(stack_slot, sizeof(int) * (size_t)stack_cap); \
                 stack_uid  = (char **)realloc(stack_uid, sizeof(char *) * (size_t)stack_cap); \
-                if (!stack_slot || !stack_uid) vm_debug_panic("[VM] collect_loops: memoria esaurita\n"); \
+                if (!stack_slot || !stack_uid) vm_debug_panic("[VM] collect_loops: out of memory\n"); \
             } \
             slot_out = n++; \
             memset(&out[slot_out], 0, sizeof(LoopDescriptor)); \
@@ -649,7 +649,7 @@ static inline void loop_check_inverse_reentry(VM *vm, uint fi, LoopDescriptor *L
     int b2 = thread_val_IF ? 1 : 0;
     thread_val_IF = saved;
     if (b2)
-        vm_debug_panic("[VM] FROM inverso: guardia until vera al rientro nell'inverso "
+        vm_debug_panic("[VM] inverse FROM: until guard true on re-entry to the inverse "
                        "(LoopError2, frame=%s)\n", frame);
 }
 
@@ -726,9 +726,9 @@ static inline void check_if_entry_inverse(VM *vm, uint fi,
     int guardia = eval_cond(lval, d->eval_entry_op, rval) ? 1 : 0;
     if (guardia != took_then) {
         vm_debug_panic(
-            "[VM] IF inverso: l'asserzione d'uscita indica il ramo %s, ma la "
-            "guardia d'ingresso (%s %s %s) vale %d: stato fuori dall'immagine "
-            "del diretto\n",
+            "[VM] inverse IF: the exit assertion selects the %s branch, but the "
+            "entry guard (%s %s %s) is %d: state outside the image "
+            "of the forward program\n",
             took_then ? "then" : "else",
             vm_name_get(d->eval_entry_id), d->eval_entry_op, vm_name_get(d->eval_entry_val), guardia);
     }
@@ -800,7 +800,7 @@ static inline int collect_par_ranges(char *buf, uint proc_start, uint proc_end,
             if (n == cap) {
                 cap = cap ? cap * 2 : 4;
                 out = (ParRange *)realloc(out, sizeof(ParRange) * (size_t)cap);
-                if (!out) vm_debug_panic("[VM] collect_par_ranges: memoria esaurita\n");
+                if (!out) vm_debug_panic("[VM] collect_par_ranges: out of memory\n");
             }
             out[n].start_line = cur;
             int   depth = 1;
@@ -975,14 +975,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             int nc = _fa_cache_cap ? _fa_cache_cap * 2 : 16;
             FrameAnalysisCache *n = (FrameAnalysisCache *)realloc(
                 _fa_cache, sizeof(FrameAnalysisCache) * (size_t)nc);
-            if (!n) vm_debug_panic("[UNCALL] cache analisi: memoria esaurita\n");
+            if (!n) vm_debug_panic("[UNCALL] analysis cache: out of memory\n");
             _fa_cache = n;
             _fa_cache_cap = nc;
         }
         FrameAnalysisCache e;
         e.base   = char_id_strdup(base);
         e.ifs    = malloc(sizeof(IfDescriptor) * (size_t)_frame_ifs_cap);
-        if (!e.ifs) vm_debug_panic("[UNCALL] cache analisi: memoria esaurita\n");
+        if (!e.ifs) vm_debug_panic("[UNCALL] analysis cache: out of memory\n");
         e.nloops = collect_loops(vm, frame_name, orig, &e.loops);
         e.nifs   = collect_ifs  (vm, frame_name, orig, e.ifs, _frame_ifs_cap);
         e.npars  = collect_par_ranges(orig, vm->frames[fi_reset]->addr + 1,
@@ -1016,7 +1016,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     char  *_span_e = (ptr && start > stop) ? go_to_line(ptr, start - stop + 1) : NULL;
     size_t _arena_cap = (ptr ? (_span_e ? (size_t)(_span_e - ptr) : strlen(ptr)) : 0) + 1;
     char  *_arena = (char *)malloc(_arena_cap);
-    if (!_arena) vm_debug_panic("[UNCALL] arena malloc fallita\n");
+    if (!_arena) vm_debug_panic("[UNCALL] arena malloc failed\n");
     char  *_arena_p = _arena;
     while (ptr && *ptr && (size_t)nl < lp_cap) {
         char *newline = strchr(ptr, '\n'); if (!newline) break;
@@ -1029,7 +1029,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         if (cur_ln <= start && cur_ln > stop) {
             size_t _line_len = (size_t)(newline - ptr);
             if ((size_t)(_arena_p - _arena) + _line_len + 1 > _arena_cap)
-                vm_debug_panic("[UNCALL] arena: riga %u fuori dallo span (%u, %u]\n",
+                vm_debug_panic("[UNCALL] arena: line %u outside the span (%u, %u]\n",
                                cur_ln, stop, start);
             memcpy(_arena_p, ptr, _line_len);
             _arena_p[_line_len] = '\0';
@@ -1137,8 +1137,8 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
              * Se e' falsa lo stato non viene da questo ciclo (LoopError1
              * dell'inverso). Poi si inverte c1. */
             if (!thread_val_IF)
-                vm_debug_panic("[VM] FROM inverso: guardia until falsa all'ingresso "
-                               "dell'inverso (LoopError1, frame=%s)\n", cur_frame);
+                vm_debug_panic("[VM] inverse FROM: until guard false on entry "
+                               "to the inverse (LoopError1, frame=%s)\n", cur_frame);
             int t = lp_row_first_eval_at_line(loops[li].eval_exit_line, lp, ln, nl);
             if (t < 0) { vm_debug_panic("[UNCALL] loop_eval_exit\n"); }
             i = t - 1;
@@ -1332,7 +1332,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
             case INVOP_EVAL:  case INVOP_JMPF:  case INVOP_JMP:
             case INVOP_ASSERT: case INVOP_DECL: case INVOP_HALT:
             case INVOP_THREAD: /* skip */ break;
-            default: vm_debug_panic("[UNCALL] op sconosciuta: '%s'\n", fw);
+            default: vm_debug_panic("[UNCALL] unknown op: '%s'\n", fw);
         }
         i--;
     }
@@ -1753,10 +1753,10 @@ static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_
     int k = cur_rec - 1;
     while (k > floor && strcmp(d->history[k].frame, fname) != 0) k--;
     if (k < 0)
-        why = "passo indietro: nessuna istruzione precedente da disfare";
+        why = "step back: no previous instruction to undo";
     else if (k <= floor)
-        why = "passo indietro oltre l'inizio della procedura: il record di attivazione "
-              "del chiamante non fa parte dello store";
+        why = "step back past the start of the procedure: the caller's activation record "
+              "is not part of the store";
     uint phys = 0;
     ParRange par = { 0, 0 };   /* par completato da disfare per intero */
     if (!why) {
@@ -1802,9 +1802,9 @@ static char *dbg_step_back_here(VM *vm, char *buf, const char *fname, char *cur_
         fw = strtok(skip_lineno(ins), " \t");
         if (fw && *fw == '@') fw = strtok(NULL, " \t");
         if (!fw)
-            why = "passo indietro: istruzione illeggibile";
+            why = "step back: unreadable instruction";
         else if (!strcmp(fw, "SSEND") || !strcmp(fw, "SRECV"))
-            why = "passo indietro su ssend/srecv: l'inverso richiede il partner";
+            why = "step back over ssend/srecv: the inverse needs the partner";
     }
     if (why) {
         dbg_set_error(d, why);

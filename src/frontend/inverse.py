@@ -81,7 +81,7 @@ def _inv_stmt(s, cyclic):
     if tag == 'delocal':
         _, tipo, name, val, ln = s
         if val is None:
-            raise NoInverse("delocal senza valore")
+            raise NoInverse("delocal without a value")
         return ('local', tipo, name, val, ln)
     if tag == 'call':
         return ('uncall',) + s[1:]

@@ -39,7 +39,7 @@
 static inline void *vm_grow_keep(void *old, size_t old_bytes, size_t new_bytes)
 {
     void **blk = (void **)malloc(sizeof(void *) * 2 + new_bytes);
-    if (!blk) { fprintf(stderr, "[VM] memoria esaurita (%zu byte)\n", new_bytes); exit(1); }
+    if (!blk) { fprintf(stderr, "[VM] out of memory (%zu bytes)\n", new_bytes); exit(1); }
     blk[0] = old ? (void *)((void **)old - 2) : NULL;    /* blocco precedente */
     blk[1] = NULL;                                         /* allinea a 16 byte */
     void *p = blk + 2;
