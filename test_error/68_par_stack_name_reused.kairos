@@ -1,0 +1,25 @@
+// Errore di compilazione atteso: lo stack s e' condiviso dai rami anche se il nome torna intero piu' avanti.
+procedure fill(stack s, int base)
+    local int i = 0
+    from i == 0 do
+        local int t = 0
+        t += (base + i)
+        push(t, s)
+        delocal int t = 0
+        i += 1
+    loop until i == 20000
+    delocal int i = 20000
+procedure main()
+    local stack s = nil
+    local int u = 0
+    local int v = 0
+    par
+        call fill(s, u)
+    and
+        call fill(s, v)
+    rap
+    delocal int v = 0
+    delocal int u = 0
+    delocal stack s = nil
+    local int s = 0
+    delocal int s = 0

@@ -1,0 +1,19 @@
+// Errore di compilazione atteso: Ssend e' la builtin ssend anche in maiuscolo, vietata nel try.
+procedure main()
+    channel c
+    int v
+    int w
+    int k
+    v += 3
+    par
+        try k == 1
+            Ssend(<v>, c)
+        rollback
+            k += 5
+        yrt k == 1
+    and
+        srecv(<w>, c)
+    rap
+    show(w)
+    show(k)
+    show(v)

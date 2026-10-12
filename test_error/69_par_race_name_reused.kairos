@@ -1,0 +1,13 @@
+// Errore di compilazione atteso: x e' scritto in un ramo e letto nell'altro anche se il nome torna stack piu' avanti.
+procedure main()
+    local int x = 0
+    int y
+    par
+        x += 1
+    and
+        y += x
+    rap
+    show(y)
+    delocal int x = 1
+    local stack x = nil
+    delocal stack x = nil

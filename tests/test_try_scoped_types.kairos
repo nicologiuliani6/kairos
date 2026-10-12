@@ -1,0 +1,14 @@
+// Un try usa i tipi dello scope in cui compare: x e' un intero li', anche se
+// piu' avanti lo stesso nome e' uno stack.
+procedure main()
+    local int x = 0
+    try x == 5
+        x += 5
+    rollback
+        x += 1
+    yrt x == 5
+    show(x)
+    x -= 5
+    delocal int x = 0
+    local stack x = nil
+    delocal stack x = nil

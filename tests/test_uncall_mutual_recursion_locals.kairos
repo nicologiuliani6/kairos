@@ -1,0 +1,42 @@
+// uncall di una procedura che chiama una mutua ricorsione con local: l'interprete
+// inverte la call eseguendo f__inv, che richiama g__inv e di nuovo f__inv; ogni
+// attivazione ha il proprio frame.
+procedure f(int n, int acc)
+    local int t = 0
+    if n == 0 then
+        skip
+    else
+        n -= 1
+        t += n
+        acc += 1
+        call g(n, acc)
+        t -= n
+        n += 1
+    fi n == 0
+    delocal int t = 0
+
+procedure g(int n, int acc)
+    local int u = 0
+    if n == 0 then
+        skip
+    else
+        n -= 1
+        u += 2
+        acc += 10
+        call f(n, acc)
+        u -= 2
+        n += 1
+    fi n == 0
+    delocal int u = 0
+
+procedure w(int a, int ra)
+    call f(a, ra)
+
+procedure main()
+    int a
+    int ra
+    a += 3
+    call w(a, ra)
+    show(ra)
+    uncall w(a, ra)
+    show(ra)

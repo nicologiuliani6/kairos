@@ -173,7 +173,9 @@ static inline Channel *channel_restore_pop(const char *frame_name, const char *v
             Channel *ch = g_channel_restore[i].channel;
             free(g_channel_restore[i].proc);
             free(g_channel_restore[i].var);
-            g_channel_restore[i] = g_channel_restore[g_channel_restore_top - 1];
+            /* si chiude il buco tenendo l'ordine: le altre chiavi restano LIFO */
+            memmove(&g_channel_restore[i], &g_channel_restore[i + 1],
+                    sizeof(ChannelRestoreEntry) * (size_t)(g_channel_restore_top - 1 - i));
             g_channel_restore_top--;
             pthread_mutex_unlock(&g_channel_restore_mtx);
             free(proc);
@@ -298,7 +300,7 @@ static inline void op_pop(VM *vm, const char *frame_name)
                        C_stack, frame_name);
     if (sv->stack_len == 0)
         vm_debug_panic("[VM] POP: stack vuoto! (frame=%s dest=%s stack=%s inv=%d)\n",
-                       frame_name, C_dest, C_stack, vm->inversion_depth);
+                       frame_name, C_dest, C_stack, g_inversion_depth);
     int64_t popped = sv->value[--sv->stack_len];   /* la capacità resta per i push */
 
     Var *dest = get_var(vm, fi, C_dest, "POP");
@@ -579,6 +581,13 @@ static inline void op_srecv(VM *vm, const char *frame_name)
     }
 
     size_t remaining = chv->channel->buf_len - read_idx;
+    if (remaining > 0) {
+        /* Un rendez-vous scambia un messaggio intero: il ricevente deve
+           prendere tutti i valori che il mittente spedisce. */
+        pthread_mutex_unlock(&chv->channel->mtx);
+        vm_debug_panic("[VM] SRECV: il mittente ha spedito piu' valori di quanti '%s' ne riceve\n",
+                       ch_name);
+    }
     if (remaining > 0)
         memmove(chv->channel->buf, chv->channel->buf + read_idx, remaining * sizeof(int64_t));
     chv->channel->buf_len = remaining;
@@ -929,7 +938,7 @@ static inline void op_local(VM *vm, const char *frame_name)
 
     Var *dst = vm->frames[fi]->vars[vi];
 
-    if (dst->T == TYPE_CHANNEL && vm->inversion_depth > 0) {
+    if (dst->T == TYPE_CHANNEL && g_inversion_depth > 0) {
         Channel *restored = channel_restore_pop(frame_name, Vname);
         if (restored) {
             pthread_mutex_destroy(&dst->channel->mtx);
@@ -1053,7 +1062,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
         pthread_mutex_unlock(&var_indexer_mtx);
     }
 
-    if (V->T == TYPE_CHANNEL && vm->inversion_depth == 0) {
+    if (V->T == TYPE_CHANNEL && g_inversion_depth == 0) {
         int should_track = 0;
         pthread_mutex_lock(&V->channel->mtx);
         if (V->channel->refcount > 1) {

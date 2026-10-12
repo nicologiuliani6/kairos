@@ -111,6 +111,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
         args[t]->branch_path = (char *)malloc(pl);
         if (!args[t]->branch_path) vm_debug_panic("[VM] PAR: memoria esaurita\n");
         snprintf(args[t]->branch_path, pl, "%s/%d", g_branch_path, t);
+        args[t]->inversion_depth = g_inversion_depth;
     }
 
     /* Tutti i thread partono insieme; canali e lock sui parametri serializzano
@@ -119,7 +120,9 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
     __atomic_add_fetch(&g_runnable, pb->count, __ATOMIC_SEQ_CST);
     run_dec();
     for (int t = 0; t < pb->count; t++)
-        pthread_create(&args[t]->tid, NULL, thread_entry, args[t]);
+        if (pthread_create(&args[t]->tid, NULL, thread_entry, args[t]) != 0)
+            vm_debug_panic("[VM] PAR: impossibile creare il thread del ramo %d di %d "
+                           "(memoria del sistema esaurita)\n", t, pb->count);
 
     pthread_mutex_lock(&done_mtx);
     for (;;) {
@@ -186,6 +189,7 @@ static void *thread_entry(void *arg)
     const char *fname = args->frame_name;   /* vive quanto il thread */
     current_thread_args = args;
     g_branch_path = args->branch_path;
+    g_inversion_depth = args->inversion_depth;
     session_thread_begin();   /* vm_session.h */
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
     Stack branch_locals;

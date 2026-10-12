@@ -931,21 +931,16 @@ def _check_stmt_reversibility(
 
     if tag == 'if':
         _, _entry_cond, then_body, else_body, _fi_cond, _lineno = stmt
-        for nested in then_body:
-            _check_stmt_reversibility(
-                nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
-            )
-        for nested in else_body:
-            _check_stmt_reversibility(
-                nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+        for body in (then_body, else_body):
+            _check_list_reversibility(
+                body, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
             )
         return
 
     if tag == 'from':
-        _, _entry_cond, body, _until_cond, *_rest = stmt
-        for nested in list(body) + from_second_body(stmt):
-            _check_stmt_reversibility(
-                nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+        for body in (stmt[2], from_second_body(stmt)):
+            _check_list_reversibility(
+                body, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
             )
         return
 
@@ -954,7 +949,19 @@ def _check_stmt_reversibility(
         stack_usage_by_var = {}
         branch_access = []
         branch_direct_int_writes = []
+        # Tipi: quelli in scope al par, piu' i nomi che ciascun ramo introduce
+        # (due rami che aprono lo stesso local userebbero lo stesso slot del
+        # frame, quindi contano anch'essi).
+        branch_envs = []
+        for branch in branches:
+            benv = dict(declared_types)
+            benv.update(_collect_declared_types(('procedure', '', [], branch)))
+            branch_envs.append(benv)
+        merged = {}
+        for benv in branch_envs:
+            merged.update(benv)
         for branch_idx, branch in enumerate(branches):
+            benv = branch_envs[branch_idx]
             used_in_branch = set()
             par_ids = set()
             writes = set()
@@ -963,13 +970,13 @@ def _check_stmt_reversibility(
                 _collect_stack_args_from_call(nested, proc_signatures, used_in_branch)
                 _collect_par_branch_var_uses(nested, par_ids)
                 _collect_par_branch_int_writes(
-                    nested, declared_types, proc_param_lists, proc_int_mutated_formals, writes
+                    nested, benv, proc_param_lists, proc_int_mutated_formals, writes
                 )
-                _check_stmt_reversibility(
-                    nested, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
-                )
+            _check_list_reversibility(
+                branch, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
+            )
             for var_name in used_in_branch:
-                if declared_types.get(var_name) == 'stack':
+                if benv.get(var_name) == 'stack':
                     stack_usage_by_var.setdefault(var_name, set()).add(branch_idx)
             branch_access.append(par_ids)
             branch_direct_int_writes.append(writes)
@@ -987,8 +994,8 @@ def _check_stmt_reversibility(
                 )
 
         int_access_sets = [
-            {v for v in acc if _intlike(declared_types.get(v))}
-            for acc in branch_access
+            {v for v in acc if _intlike(branch_envs[k].get(v))}
+            for k, acc in enumerate(branch_access)
         ]
         for i in range(len(branch_direct_int_writes)):
             for j in range(i + 1, len(branch_direct_int_writes)):
@@ -1015,6 +1022,22 @@ def _check_stmt_reversibility(
         check_sessions(
             branches, proc_signatures, _ParStaticConfig.program_procedures, lineno
         )
+
+def _check_list_reversibility(
+    stmts, env, proc_signatures, proc_param_lists, proc_int_mutated_formals
+):
+    """Controlla una sequenza di comandi con i tipi dello scope: ogni local o
+    dichiarazione vale per i comandi che seguono, fino al suo delocal."""
+    env = dict(env)
+    for st in stmts or []:
+        _check_stmt_reversibility(
+            st, env, proc_signatures, proc_param_lists, proc_int_mutated_formals
+        )
+        if isinstance(st, tuple) and st and st[0] in ('local', 'decl'):
+            env[st[2]] = st[1]
+        elif isinstance(st, tuple) and st and st[0] == 'delocal':
+            env.pop(st[2], None)
+
 
 def run_static_checks(program_ast):
     if not isinstance(program_ast, tuple) or not program_ast or program_ast[0] != 'program':
@@ -1292,15 +1315,14 @@ def _run_static_checks_body(program_ast):
     for proc in procedures:
         if not isinstance(proc, tuple) or len(proc) < 4 or proc[0] != 'procedure':
             continue
-        declared_types = _collect_declared_types(proc)
+        params_env = {pn: pt for pt, pn in (proc[2] or [])}
         body = proc[3] or []
         _check_local_blocks(body, proc[1], tuple(pn for _pt, pn in (proc[2] or [])))
         _check_callees_defined(body, proc_signatures)
-        _check_types(body, {pn: pt for pt, pn in (proc[2] or [])}, proc[1], proc_signatures)
-        for stmt in body:
-            _check_stmt_reversibility(
-                stmt, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
-            )
+        _check_types(body, params_env, proc[1], proc_signatures)
+        _check_list_reversibility(
+            body, params_env, proc_signatures, proc_param_lists, proc_int_mutated_formals
+        )
 
 
 # ── Desugaring di try/commit/rollback ────────────────────────────────────────
@@ -1351,7 +1373,7 @@ def _stmts_contain_ssend_srecv(stmts, proc_bodies, cache, visiting):
         if not isinstance(s, tuple) or not s:
             continue
         tag = s[0]
-        if tag == 'call_direct' and s[1] in ('ssend', 'srecv'):
+        if tag == 'call_direct' and s[1].lower() in ('ssend', 'srecv'):
             return True
         if tag in ('call', 'uncall'):
             if _proc_contains_ssend_srecv(s[1], proc_bodies, cache, visiting):
@@ -1423,7 +1445,7 @@ def _try_assert_no_forbidden(stmts, lineno, proc_bodies, ssend_srecv_cache):
     for s in stmts:
         if not isinstance(s, tuple) or not s:
             continue
-        if s[0] in _FORBIDDEN_IN_TRY or s[0] == 'call_direct' and s[1] in ('ssend', 'srecv'):
+        if s[0] in _FORBIDDEN_IN_TRY or s[0] == 'call_direct' and s[1].lower() in ('ssend', 'srecv'):
             raise KairosCompileError(
                 "PARSER",
                 f"riga {lineno}: '{s[0] if s[0]!='call_direct' else s[1]}' non ammesso "
@@ -1447,9 +1469,19 @@ def _try_assert_no_forbidden(stmts, lineno, proc_bodies, ssend_srecv_cache):
 
 
 def _desugar_stmts(stmts, new_procs, counter, proc_bodies, ssend_srecv_cache):
+    # I tipi in scope seguono la sequenza: un local vale fino al suo delocal,
+    # e una sottosequenza (ramo, corpo) non cambia lo scope di chi la contiene.
+    global _try_declared
+    saved = _try_declared
+    _try_declared = dict(saved)
     out = []
     for s in stmts:
         out.extend(_desugar_one(s, new_procs, counter, proc_bodies, ssend_srecv_cache))
+        if isinstance(s, tuple) and s and s[0] in ('local', 'decl'):
+            _try_declared[s[2]] = s[1]
+        elif isinstance(s, tuple) and s and s[0] == 'delocal':
+            _try_declared.pop(s[2], None)
+    _try_declared = saved
     return out
 
 
@@ -1595,7 +1627,7 @@ def desugar_try(program_ast):
         # passata).
         new_procs = []
         global _try_declared
-        _try_declared = _collect_declared_types(proc)
+        _try_declared = {pn: pt for pt, pn in (params or [])}
         new_body = _desugar_stmts(body, new_procs, counter, proc_bodies, ssend_srecv_cache)
         out_procs.extend(new_procs)
         out_procs.append(('procedure', name, params, new_body, ln))

@@ -1,0 +1,27 @@
+// Errore VM atteso: il mittente spedisce due valori, il ricevente ne prende uno.
+procedure main()
+    channel c
+    int a
+    int b
+    int d
+    int p
+    int q
+    int sel
+    a += 5
+    b += 7
+    d += 9
+    par
+        if sel == 0 then
+            ssend(<a, b>, c)
+        else
+            ssend(<a>, c)
+        fi sel == 0
+        ssend(<d>, c)
+    and
+        srecv(<p>, c)
+        srecv(<q>, c)
+    rap
+    show(p)
+    show(q)
+    show(d)
+    show(c)

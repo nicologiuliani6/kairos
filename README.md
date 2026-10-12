@@ -309,7 +309,7 @@ ssend(<v1, v2, …>, c)   // send, zeroing/emptying the sources
 srecv(<d1, d2, …>, c)   // receive; int destinations must be 0, stacks empty (Srecv-Err)
 ```
 
-Synchronous rendez-vous: `ssend` waits for an `srecv` and vice versa; values in transit are FIFO. The payload can hold `int`, `stack` (emptied and concatenated) and `channel` (endpoint passing, as in the π-calculus). `ssend` and `srecv` are each other's inverse. Inside a `par` each channel is a **binary session**: exactly two branches use it, with complementary protocols (static check in `sessions.py`, dynamic check in the VM).
+Synchronous rendez-vous: `ssend` waits for an `srecv` and vice versa, and the receiver takes the whole message (an `srecv` with fewer destinations than the values sent is an error); nothing stays in the channel between two exchanges. The payload can hold `int`, `stack` (emptied and concatenated) and `channel` (endpoint passing, as in the π-calculus). `ssend` and `srecv` are each other's inverse. Inside a `par` each channel is a **binary session**: exactly two branches use it, with complementary protocols (static check in `sessions.py`, dynamic check in the VM).
 
 ### `par … and … rap`
 
@@ -403,5 +403,5 @@ Diagnostics are printed in Italian.
 
 ## Debugger and VS Code
 
-- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter: a completed call or `par` is undone as a whole with its inverse, and a `show` is undone by printing again (it is its own inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, or inside the branches of a running `par`, is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
+- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter: a completed call or `par` is undone as a whole with its inverse, and a `show` is undone by printing again (it is its own inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, inside the branches of a running `par`, or while stopped inside an `uncall` in progress, is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
 - **Standalone app**: `make release-app`.

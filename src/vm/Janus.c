@@ -141,7 +141,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 VM_LINE_DUP(raw, ptr, nl);    /* riga intatta, per il debugger */
                 int can = (g_run_bt_depth == 1 && !current_thread_args);
                 int back = dbg_hook(vm->dbg, extract_srcline(raw), fname, raw, can);
-                if (vm->dbg->mode == VM_MODE_DONE && vm->inversion_depth == 0) goto done;
+                if (vm->dbg->mode == VM_MODE_DONE && g_inversion_depth == 0) goto done;
                 if (back) {
                     /* Passo indietro: l'inversa dell'istruzione precedente, poi
                      * l'esecuzione riparte da quella istruzione. */

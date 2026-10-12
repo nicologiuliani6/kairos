@@ -286,7 +286,6 @@ typedef struct {
     uint   frames_cap;   /* capacità allocata corrente */
     int   frame_top;
     VMDebugState *dbg;   /* NULL = normale, non-NULL = debug */
-    int   inversion_depth;
     int   show_char_pending; /* ultimo SHOW è stato show(x,char): il prossimo show classico prefissa \n */
 } VM;
 
@@ -302,11 +301,15 @@ struct ThreadArgs {
     pthread_cond_t  *done_cond;
     ThreadArgs *sender_to_notify;
     char       *branch_path;        /* heap: indici dei rami dal par piu' esterno */
+    int         inversion_depth;    /* quella del thread che lancia il par */
 };
 
 extern __thread ThreadArgs *current_thread_args;
 extern __thread char       *strtok_saveptr;
 extern __thread uint        thread_val_IF;
+/* Profondita' d'inversione del thread: ogni ramo di par ha la sua (la eredita
+ * dal thread che lo lancia), cosi' due rami non se la contendono. */
+static __thread int g_inversion_depth = 0;
 
 extern pthread_mutex_t var_indexer_mtx;
 extern CharIdMap       FrameIndexer;

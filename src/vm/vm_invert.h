@@ -877,10 +877,14 @@ static int invert_call_via_compiled_inverse(VM *vm, char *buf, uint caller_fi, c
     VM_FRAME_KEY_BUF(cn, invn);
     if (current_thread_args) make_thread_frame_key(invn, cn, sizeof(cn));
     else memcpy(cn, invn, strlen(invn) + 1);
-    int saved_inv = vm->inversion_depth;
-    vm->inversion_depth = 0;
+    int saved_inv = g_inversion_depth;
+    g_inversion_depth = 0;
+    /* conta come attivazione: una ricorsione mutua che rientra in questa
+     * procedura ottiene un frame clonato (Janus.c, CALL) */
+    vm->frames[cfi]->active++;
     vm_run_BT(vm, buf, cn);
-    vm->inversion_depth = saved_inv;
+    vm->frames[cfi]->active--;
+    g_inversion_depth = saved_inv;
     for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
     stack_restore(&vm->frames[cfi]->LocalVariables, slv);
     VM_PARAM_SAVE_FREE(sv);
@@ -935,11 +939,11 @@ static void vm_invert_free_cache(void)
 void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                        uint start, uint stop, int honor_if_line_skip)
 {
-    //fprintf(stderr, "[INVERT] frame='%s' start=%u stop=%u depth=%d\n", frame_name, start, stop, vm->inversion_depth);
+    //fprintf(stderr, "[INVERT] frame='%s' start=%u stop=%u depth=%d\n", frame_name, start, stop, g_inversion_depth);
     /* Il bytecode è condiviso in sola lettura: le righe si leggono per copia. */
     char *orig = buffer;
     VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
-    vm->inversion_depth++;   
+    g_inversion_depth++;   
     VM_FRAME_BASE(base, frame_name);
     uint fi_reset = char_id_map_get(&FrameIndexer, base);
     /* Svuota tenendo il buffer: lo stack non è stato salvato da nessuno qui. */
@@ -1277,10 +1281,10 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
                 strncpy(cn, pn, sizeof(cn) - 1);
                 cn[sizeof(cn) - 1] = '\0';
             }
-            int saved_inv = vm->inversion_depth;
-            vm->inversion_depth          = 0;
+            int saved_inv = g_inversion_depth;
+            g_inversion_depth          = 0;
             vm_run_BT(vm, orig, cn);
-            vm->inversion_depth       = saved_inv;
+            g_inversion_depth       = saved_inv;
             for (int k = 0; k < pc; k++) vm->frames[cfi]->vars[pi[k]] = sv[k];
             VM_PARAM_SAVE_FREE(sv);
             i--; continue;
@@ -1337,7 +1341,7 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
     free(lp); free(ln); free(lp_op);
     /* orig non strduped → niente free(orig) */
     VMLOG("[INVERT] completata, righe processate=%d\n", nl);
-    vm->inversion_depth--;
+    g_inversion_depth--;
     /* orig = buffer (no strdup), niente free */
 }
 
@@ -1477,10 +1481,10 @@ static void branch_inverse_uncall(VM *vm, char *buf, const char *frame_name, uin
         strncpy(cn, pn, sizeof(cn) - 1);
         cn[sizeof(cn) - 1] = '\0';
     }
-    int saved_inv = vm->inversion_depth;
-    vm->inversion_depth       = 0;
+    int saved_inv = g_inversion_depth;
+    g_inversion_depth       = 0;
     vm_run_BT(vm, buf, cn);
-    vm->inversion_depth       = saved_inv;
+    g_inversion_depth       = saved_inv;
     for (int k = 0; k < pc; k++) vm->frames[callee_fi]->vars[pi[k]] = sv[k];
     stack_restore(&vm->frames[callee_fi]->LocalVariables, slv);
     VM_PARAM_SAVE_FREE(sv);
