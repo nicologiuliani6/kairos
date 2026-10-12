@@ -32,8 +32,8 @@ procedure main()
 
 ## Contents
 
-1. [Quick start](#quick-start)
-2. [Linux packages](#linux-packages)
+1. [Installation](#installation)
+2. [Building from source](#building-from-source)
 3. [Make targets](#make-targets)
 4. [Repository layout](#repository-layout)
 5. [Architecture](#architecture)
@@ -45,7 +45,39 @@ procedure main()
 
 ---
 
-## Quick start
+## Installation
+
+One line installs the right package for your distribution (`.deb`, `.rpm` or Arch; asks for the sudo password):
+
+```bash
+curl -fsSL https://github.com/nicologiuliani6/kairos/releases/latest/download/install.sh | bash
+```
+
+Or download the package from the [releases](https://github.com/nicologiuliani6/kairos/releases) (standalone frontend + VM, no Python needed) and install it by hand:
+
+| Distribution | File | Install |
+|---|---|---|
+| Debian / Ubuntu | `kairos_<version>_amd64.deb` | `sudo apt install ./kairos_<version>_amd64.deb` |
+| Fedora / RHEL | `kairos-<version>-1.<dist>.x86_64.rpm` | `sudo dnf install ./kairos-<version>-1.<dist>.x86_64.rpm` |
+| Arch Linux | `kairos-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./kairos-<version>-1-x86_64.pkg.tar.zst` |
+
+The packages install `/usr/local/bin/kairos`, `/opt/kairos/kairos`, the debugger library `/usr/local/lib/kairos/dap.so` and the VM `/usr/local/lib/kairos/libvm.so` (they replace the old `kairosapp` package). Then:
+
+```bash
+kairos program.kairos                  # compile and run
+kairos program.kairos --dump-bytecode  # also write the bytecode to bytecode.txt
+```
+
+Related tools, each with its own one-line installer:
+
+- **VS Code debugger** (step back, reverse continue): `curl -fsSL https://github.com/nicologiuliani6/kairos-vscode-debugger/releases/latest/download/install.sh | bash` ([kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger));
+- **Mnemo**, a compiler from a reversible subset of C to Kairos: `curl -fsSL https://github.com/nicologiuliani6/mnemo/releases/latest/download/install.sh | bash` ([mnemo](https://github.com/nicologiuliani6/mnemo)).
+
+To build a package locally use `packaging/linux/build-deb.sh`, `build-rpm.sh` or `build-arch.sh` (details in `packaging/linux/README.md`). Pushing a tag `vX.Y.Z` builds all three and attaches them to the release.
+
+---
+
+## Building from source
 
 Requirements: `gcc`, `make`, Python ≥ 3.10 with the `venv` module (Debian/Ubuntu: `sudo apt install build-essential python3 python3-venv`).
 
@@ -64,26 +96,6 @@ Or directly:
 ```
 
 `--dump-bytecode` writes the bytecode to `bytecode.txt`; `--vm-stats` (or `KAIROS_VM_STATS=1`) prints how many cells are still alive at the end. After editing the VM's C sources run `make build-release` again, otherwise the old `libvm.so` stays in use (the frontend warns about it on stderr).
-
----
-
-## Linux packages
-
-Every [release](https://github.com/nicologiuliani6/kairos/releases) ships ready-made packages of **`kairos`** (standalone frontend + VM, no Python needed) built by the `release` workflow:
-
-| Distribution | File | Install |
-|---|---|---|
-| Debian / Ubuntu | `kairos_<version>_amd64.deb` | `sudo apt install ./kairos_<version>_amd64.deb` |
-| Fedora / RHEL | `kairos-<version>-1.<dist>.x86_64.rpm` | `sudo dnf install ./kairos-<version>-1.<dist>.x86_64.rpm` |
-| Arch Linux | `kairos-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./kairos-<version>-1-x86_64.pkg.tar.zst` |
-
-The packages install `/usr/local/bin/kairos`, `/opt/kairos/kairos`, the debugger library `/usr/local/lib/kairos/dap.so` and the VM `/usr/local/lib/kairos/libvm.so` (they replace the old `kairosapp` package). Then:
-
-```bash
-kairos program.kairos
-```
-
-To build a package locally use `packaging/linux/build-deb.sh`, `build-rpm.sh` or `build-arch.sh` (details in `packaging/linux/README.md`). Pushing a tag `vX.Y.Z` builds all three and attaches them to the release.
 
 ---
 

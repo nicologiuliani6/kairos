@@ -79,6 +79,9 @@ jobs:
     needs: [deb, rpm, arch]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -90,4 +93,4 @@ jobs:
           ls -l dist
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "Kairos $TAG" --generate-notes
-          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" dist/* install.sh -R "$GITHUB_REPOSITORY" --clobber
