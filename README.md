@@ -350,7 +350,7 @@ The frontend rejects with `[STATIC]` / `[LOCAL]`:
 - two procedures with the same name, a `main` with parameters, or a procedure named like a builtin (`show`, `push`, `pop`, `ssend`, `srecv`) or with a name the compiler reserves (`…__inv`, `__try_…`);
 - a declaration without `local` (`int x`, `stack s`, `channel c`) outside `main`;
 - a `delocal` without its expected value;
-- operands of the wrong type, following the declaration in scope (a name may be an `int` in one block and a stack in another): a stack, channel or whole array inside an expression; a `call`/`uncall` argument whose type differs from the parameter; `push`/`pop` not between an `int` variable and a stack; `ssend`/`srecv` on something that is not a channel, with a payload that is not made of distinct `int`s, stacks or channels; a `local`/`delocal` value that is not an integer for `int` and arrays, `nil` for a stack, `empty` for a channel;
+- operands of the wrong type, following the declaration in scope (a name may be an `int` in one block and a stack in another): a stack, channel or whole array inside an expression; a `call`/`uncall` argument whose type differs from the parameter; `push`/`pop` not between an `int` variable and a stack; `ssend`/`srecv` on something that is not a channel, with an empty payload or one that is not made of distinct `int`s, stacks or channels other than the channel itself; a `local`/`delocal` value that is not an integer for `int` and arrays, `nil` for a stack, `empty` for a channel;
 - a literal that does not fit in 64 bits;
 - a `delocal` whose type differs from its `local`;
 - a variable used but not declared (parameter, declaration or open local);

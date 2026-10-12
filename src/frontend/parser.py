@@ -954,12 +954,10 @@ def _check_stmt_reversibility(
         # frame, quindi contano anch'essi).
         branch_envs = []
         for branch in branches:
-            benv = dict(declared_types)
-            benv.update(_collect_declared_types(('procedure', '', [], branch)))
+            benv = _KindEnv(declared_types)
+            for name, t in _all_declarations(branch):
+                benv.add(name, t)
             branch_envs.append(benv)
-        merged = {}
-        for benv in branch_envs:
-            merged.update(benv)
         for branch_idx, branch in enumerate(branches):
             benv = branch_envs[branch_idx]
             used_in_branch = set()
@@ -976,7 +974,7 @@ def _check_stmt_reversibility(
                 branch, declared_types, proc_signatures, proc_param_lists, proc_int_mutated_formals
             )
             for var_name in used_in_branch:
-                if benv.get(var_name) == 'stack':
+                if benv.is_stack(var_name):
                     stack_usage_by_var.setdefault(var_name, set()).add(branch_idx)
             branch_access.append(par_ids)
             branch_direct_int_writes.append(writes)
@@ -1022,6 +1020,48 @@ def _check_stmt_reversibility(
         check_sessions(
             branches, proc_signatures, _ParStaticConfig.program_procedures, lineno
         )
+
+class _KindEnv:
+    """Tipi dei nomi visti da un ramo di par. Un nome dichiarato piu' volte nel
+    ramo con tipi diversi (blocchi disgiunti) li ha tutti: per i controlli
+    sulle corse conta ogni uso, quindi `get` risponde con un tipo intero se il
+    nome lo e' mai stato, poi stack, poi l'ultimo visto."""
+    def __init__(self, base):
+        self.kinds = {k: [v] for k, v in base.items()}
+
+    def add(self, name, t):
+        self.kinds.setdefault(name, []).append(t)
+
+    def get(self, name, default=None):
+        ts = self.kinds.get(name)
+        if not ts:
+            return default
+        for t in ts:
+            if _intlike(t):
+                return t
+        return 'stack' if 'stack' in ts else ts[-1]
+
+    def is_stack(self, name):
+        return 'stack' in self.kinds.get(name, [])
+
+
+def _all_declarations(stmts):
+    """Coppie (nome, tipo) di ogni decl/local in `stmts`, a ogni profondita'."""
+    out = []
+    for st in stmts or []:
+        if not isinstance(st, tuple) or not st:
+            continue
+        if st[0] in ('decl', 'local'):
+            out.append((st[2], st[1]))
+        elif st[0] == 'if':
+            out += _all_declarations(st[2]) + _all_declarations(st[3])
+        elif st[0] == 'from':
+            out += _all_declarations(st[2]) + _all_declarations(from_second_body(st))
+        elif st[0] == 'par':
+            for b in st[1]:
+                out += _all_declarations(b)
+    return out
+
 
 def _check_list_reversibility(
     stmts, env, proc_signatures, proc_param_lists, proc_int_mutated_formals
@@ -1269,9 +1309,13 @@ def _check_types(stmts, env, proc_name, signatures):
                 if _kind(env.get(ch)) != 'channel':
                     raise KairosCompileError(
                         "STATIC", f"riga {ln}: {name}: '{ch}' non e' un canale")
-                if len(set(payload)) != len(payload):
+                if not payload:
                     raise KairosCompileError(
-                        "STATIC", f"riga {ln}: {name}: le variabili del messaggio devono essere distinte")
+                        "STATIC", f"riga {ln}: {name}: il messaggio e' vuoto")
+                if len(set(payload)) != len(payload) or ch in payload:
+                    raise KairosCompileError(
+                        "STATIC", f"riga {ln}: {name}: le variabili del messaggio devono essere "
+                        "distinte fra loro e dal canale")
                 for v in payload:
                     if _kind(env.get(v)) not in ('int', 'stack', 'channel'):
                         raise KairosCompileError(

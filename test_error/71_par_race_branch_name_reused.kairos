@@ -1,0 +1,20 @@
+// Errore di compilazione atteso: t e' un intero scritto da due rami (anche se piu' avanti
+// lo stesso nome torna stack).
+procedure main()
+    int r
+    par
+        local int t = 0
+        t += 1
+        r += t
+        t -= 1
+        delocal int t = 0
+        local stack t = nil
+        delocal stack t = nil
+    and
+        local int t = 0
+        t += 2
+        t -= 2
+        delocal int t = 0
+        local stack t = nil
+        delocal stack t = nil
+    rap

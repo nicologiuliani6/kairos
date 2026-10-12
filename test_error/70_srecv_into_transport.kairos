@@ -1,0 +1,9 @@
+// Errore di compilazione atteso: la destinazione di srecv non puo' essere il canale stesso.
+procedure main()
+    channel c
+    channel d
+    par
+        srecv(<c>, c)
+    and
+        ssend(<d>, c)
+    rap

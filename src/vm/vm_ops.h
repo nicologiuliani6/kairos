@@ -525,6 +525,12 @@ static inline void op_srecv(VM *vm, const char *frame_name)
                 pthread_mutex_unlock(&chv->channel->mtx);
                 vm_debug_panic("[VM] SRECV: channel-ref richiede destinazione channel valida\n");
             }
+            if (dest->channel == chv->channel || shared == chv->channel) {
+                /* la destinazione e' il canale stesso su cui si riceve */
+                pthread_mutex_unlock(&chv->channel->mtx);
+                vm_debug_panic("[VM] SRECV: '%s' e' il canale su cui si riceve: non puo' "
+                               "essere anche la destinazione\n", tokv[i]);
+            }
             session_delegate_acquire(shared, tokv[i]);
             if (dest->channel != shared) {
                 Channel *old = dest->channel;
