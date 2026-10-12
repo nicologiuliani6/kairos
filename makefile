@@ -19,8 +19,11 @@ CXX         := g++
 CFLAGS      := -shared -fPIC -Wall -Wextra -pthread
 # `build` (standard): compilazione portabile, -O2, niente -march=native/-flto. Adatta per dev.
 CFLAGS_BLD  := $(CFLAGS) -O2 -DNDEBUG -Wno-stringop-truncation
-# `release`: massima ottimizzazione locale (-march=native → non redistribuire il .so su CPU diverse)
-CFLAGS_REL  := $(CFLAGS) -O3 -march=native -flto -fomit-frame-pointer -funroll-loops \
+# `release`: massima ottimizzazione. MARCH=-march=native di default; i pacchetti
+# Linux passano MARCH=-march=x86-64 (o vuoto su altre architetture) perche' il
+# .so gira su CPU diverse da quella che lo compila.
+MARCH       ?= -march=native
+CFLAGS_REL  := $(CFLAGS) -O3 $(MARCH) -flto -fomit-frame-pointer -funroll-loops \
                -DNDEBUG -Wno-stringop-truncation
 CFLAGS_DAP  := $(CFLAGS) -g -DDEBUG -DDAP_MODE
 LDFLAGS_REL  := -Wl,-O1
@@ -45,7 +48,7 @@ build-release: release
 
 $(LIBVM): $(VM_SOURCES) $(VM_HDRS) $(VERSCRIPT) | check-deps
 	@mkdir -p build
-	@echo "$(CYAN)Release ($(CC) -O3 -march=native -flto)...$(RESET)"
+	@echo "$(CYAN)Release ($(CC) -O3 $(MARCH) -flto)...$(RESET)"
 	$(CC) $(CFLAGS_REL) \
 	    -Wl,--version-script=$(VERSCRIPT) \
 	    $(LDFLAGS_REL) \

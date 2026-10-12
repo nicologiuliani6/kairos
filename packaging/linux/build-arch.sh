@@ -65,7 +65,10 @@ VM_SRC="${PROJECT_ROOT}/build/libvm.so"
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
-(cd "${PROJECT_ROOT}" && make release-app && make build-dap)
+# Il .so va su CPU diverse da quella che compila: niente -march=native.
+case "$(uname -m)" in x86_64) PKG_MARCH="${PKG_MARCH--march=x86-64}" ;; *) PKG_MARCH="${PKG_MARCH-}" ;; esac
+rm -f "${PROJECT_ROOT}/build/libvm.so"
+(cd "${PROJECT_ROOT}" && make release-app MARCH="${PKG_MARCH}" && make build-dap)
 
 if [[ ! -f "${APP_SRC}" ]]; then
   echo "Missing file after build: ${APP_SRC}"

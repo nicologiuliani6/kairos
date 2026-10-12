@@ -68,7 +68,10 @@ echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
 # release-app dipende da release (libvm.so) e produce il bundle kairos.
-(cd "${PROJECT_ROOT}" && make release-app && make build-dap)
+# Il .so va su CPU diverse da quella che compila: niente -march=native.
+case "$(uname -m)" in x86_64) PKG_MARCH="${PKG_MARCH--march=x86-64}" ;; *) PKG_MARCH="${PKG_MARCH-}" ;; esac
+rm -f "${PROJECT_ROOT}/build/libvm.so"
+(cd "${PROJECT_ROOT}" && make release-app MARCH="${PKG_MARCH}" && make build-dap)
 
 APP_ONEFILE="${PROJECT_ROOT}/build/dist/kairos"
 APP_ONEDIR="${PROJECT_ROOT}/build/dist/kairos/kairos"
@@ -124,7 +127,7 @@ chmod 644 "${STAGE_DIR}/usr/local/lib/kairos/libvm.so"
 ln -s "/opt/kairos/kairos" "${STAGE_DIR}/usr/local/bin/kairos"
 
 PKG_FILE="${ROOT_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.deb"
-dpkg-deb --build "${STAGE_DIR}" "${PKG_FILE}"
+dpkg-deb --build --root-owner-group "${STAGE_DIR}" "${PKG_FILE}"
 if [[ "${BUMP_VERSION_FILE}" -eq 1 ]]; then echo "${PKG_VERSION}" > "${VERSION_FILE}"; fi
 
 echo
