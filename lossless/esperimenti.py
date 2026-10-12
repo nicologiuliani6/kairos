@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Esperimenti sul convertitore reversibile.
+"""Experiments on the reversible converter.
 
-    python3 lossless/esperimenti.py costo        # call contro uncall a parita' di lavoro
-    python3 lossless/esperimenti.py validazione  # cosa accetta l'inverso fuori dall'immagine
-    python3 lossless/esperimenti.py peggiore     # dati incomprimibili
-    python3 lossless/esperimenti.py tutti
+    python3 lossless/esperimenti.py costo        # call against uncall on the same work
+    python3 lossless/esperimenti.py validazione  # what the inverse accepts outside the image
+    python3 lossless/esperimenti.py peggiore     # incompressible data
+    python3 lossless/esperimenti.py tutti        # all of them
 """
 
 import pathlib
@@ -112,8 +112,8 @@ def esp_costo():
     il contatore azzerato: con nsrc = 0 (o npair = 0) la conversione non parte,
     ma parse e caricamento restano identici. La differenza e' la conversione.
     """
-    print("Costo della sola conversione, isolata per differenza.")
-    print(f"{'byte':>7} {'corse':>6} {'call':>9} {'uncall':>9} {'rapporto':>9}")
+    print("Cost of the conversion alone, isolated by difference.")
+    print(f"{'bytes':>7} {'runs':>6} {'call':>9} {'uncall':>9} {'ratio':>9}")
     for w in (32, 64, 128):
         dati = immagine(w)
         coppie = corse_di(dati)
@@ -143,25 +143,25 @@ def esp_validazione():
         "lunghezza negativa": ([(7, 3), (3, -2), (9, 1)], 3),
         "valore che collide con la sentinella": ([(7, 3), (-1, 2), (9, 1)], 3),
     }
-    print("Validazione: cosa accetta l'inverso fuori dall'immagine del diretto.\n")
+    print("Validation: what the inverse accepts outside the image of the forward program.\n")
     for nome, (coppie, np) in casi.items():
         p = scrivi("val.kairos", push_coppie(coppie), f"np += {np}", 1)
         r, _ = esegui(p, limite=30)
         if r is None:
-            print(f"  {nome:38s} NON TERMINA (30 s)")
+            print(f"  {nome:38s} DOES NOT TERMINATE (30 s)")
             continue
         if r.returncode != 0:
             diag = (r.stdout + r.stderr).strip().splitlines()
             msg = next((l for l in diag if "[" in l), diag[-1] if diag else "?")
-            esito = "RIFIUTA   " + msg[:70]
+            esito = "REJECTS   " + msg[:70]
         else:
             fuori = leggi_uscita(r.stdout)
             pila = fuori["a"]
             byte = list(reversed(pila[1:])) if pila and pila[0] == -1 else pila
             riesce = corse_di(byte) == [tuple(c) for c in coppie]
-            esito = f"accetta   -> {byte}"
+            esito = f"accepts   -> {byte}"
             if not riesce:
-                esito += "   (ricodificato NON torna all'ingresso)"
+                esito += "   (re-encoding does NOT give back the input)"
         print(f"  {nome:38s} {esito}")
 
 
@@ -169,7 +169,7 @@ def esp_validazione():
 
 
 def esp_peggiore():
-    print("Dati incomprimibili: ogni corsa lunga 1, il formato B raddoppia.\n")
+    print("Incompressible data: every run has length 1, format B doubles.\n")
     random.seed(7)
     for n in (200, 800):
         dati = bytes(random.randrange(256) for _ in range(n))
@@ -184,9 +184,9 @@ def esp_peggiore():
         f2 = leggi_uscita(r2.stdout)
         indietro = bytes(reversed(f2["a"][1:]))
         print(
-            f"  n={n:4d}  corse {len(ottenute):4d}  B/A = {2 * len(ottenute) / n:.2f}"
-            f"  call {tf:.1f}s  uncall {ti:.1f}s  giro "
-            + ("identico" if indietro == dati else "DIVERSO")
+            f"  n={n:4d}  runs {len(ottenute):4d}  B/A = {2 * len(ottenute) / n:.2f}"
+            f"  call {tf:.1f}s  uncall {ti:.1f}s  round trip "
+            + ("identical" if indietro == dati else "DIFFERENT")
         )
 
 

@@ -102,7 +102,7 @@ int main(void)
     const char *src = "tests/test_loop_condition.kairos";
     char *bytecode = compile_kairos_to_bytecode(src);
     if (!bytecode) {
-        fprintf(stderr, "ERRORE: bytecode non generato da %s\n", src);
+        fprintf(stderr, "ERROR: no bytecode produced from %s\n", src);
         return 2;
     }
 

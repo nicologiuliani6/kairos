@@ -58,7 +58,7 @@ static int run(const char *fixture)
 {
     printf("== %s\n", fixture);
     char *bc = compile(fixture);
-    if (!bc) { fprintf(stderr, "compilazione fallita\n"); return 0; }
+    if (!bc) { fprintf(stderr, "compilation failed\n"); return 0; }
     VMDebugState *d = vm_debug_new();
     vm_debug_start(bc, d);
 
@@ -72,7 +72,7 @@ static int run(const char *fixture)
         if (l < 0) break;
         seen[ns++] = state(d);
     }
-    printf("avanti: %d passi\n", steps);
+    printf("forward: %d steps\n", steps);
 
     int back = 0, bad = 0;
     char err[256];
@@ -85,19 +85,19 @@ static int run(const char *fixture)
         char *st = state(d);
         int ok = 0;
         for (int i = 0; i < ns; i++) if (!strcmp(st, seen[i])) { ok = 1; break; }
-        if (!ok) { bad++; printf("stato mai visto in avanti dopo %d passi indietro:\n%s\n", back, st); }
+        if (!ok) { bad++; printf("state never seen forwards after %d steps back:\n%s\n", back, st); }
         free(st);
         if (back > 200) break;
     }
     char *fin = state(d);
     int back_to_start = !strcmp(fin, initial);
-    printf("indietro: %d passi, stati estranei: %d, stato iniziale: %s\n",
-           back, bad, back_to_start ? "si" : "no");
+    printf("backward: %d steps, unknown states: %d, initial state: %s\n",
+           back, bad, back_to_start ? "yes" : "no");
 
     int line = vm_debug_continue(d);   /* di nuovo in avanti fino in fondo */
     err[0] = '\0';
     vm_debug_error_ext(d, err, sizeof err);
-    printf("avanti fino in fondo: line=%d err='%s'\n", line, err);
+    printf("forward to the end: line=%d err='%s'\n", line, err);
 
     int pass = (bad == 0 && back_to_start && back > 0 && line < 0 && !err[0]);
     printf("RESULT: %s\n", pass ? "PASS" : "FAIL");

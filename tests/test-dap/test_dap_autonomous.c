@@ -97,7 +97,7 @@ int main(void) {
     const char *src = "tests/fixtures/dap_long_show.kairos";
     char *bytecode = compile_kairos_to_bytecode(src);
     if (!bytecode) {
-        fprintf(stderr, "ERRORE: impossibile generare bytecode da %s\n", src);
+        fprintf(stderr, "ERROR: cannot produce bytecode from %s\n", src);
         return 2;
     }
 
@@ -150,7 +150,7 @@ int main(void) {
     vm_debug_vars_json_ext(dbg, vars2, (int)sizeof(vars2));
     int ok = (line < 0 && strstr(out, "x: 999\n") != NULL);
     if (ok) {
-        printf("RESULT: PASS (SHOW in streaming sulla pipe fino a x: 999)\n");
+        printf("RESULT: PASS (SHOW streamed through the pipe up to x: 999)\n");
     } else {
         printf("RESULT: FAIL (output DAP assente/incompleto)\n");
     }

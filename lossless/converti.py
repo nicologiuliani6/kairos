@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Convertitore fra due formati lossless, in una direzione o nell'altra.
+"""Converter between two lossless formats, in either direction.
 
-Il programma Kairos `converti.kairos` contiene una sola procedura, `rle`, che
-va dal formato grezzo a quello a corse. La direzione la sceglie il tipo del
-file: grezzo in ingresso e si fa `call`, codificato e si fa `uncall`. Il
-decodificatore non e' scritto da nessuna parte, e' l'inverso del codificatore.
+The Kairos program `converti.kairos` has a single procedure, `rle`, going from
+the raw format to the run-length one. The file type chooses the direction: raw
+input means `call`, encoded input means `uncall`. The decoder is not written
+anywhere, it is the inverse of the encoder.
 
-    python3 lossless/converti.py cerchio.pgm            # grezzo  -> .rle1
-    python3 lossless/converti.py cerchio.pgm.rle1       # .rle1   -> grezzo
-    python3 lossless/converti.py cerchio.pgm --giro     # A -> B -> A e confronto
+    python3 lossless/converti.py cerchio.pgm            # raw    -> .rle1
+    python3 lossless/converti.py cerchio.pgm.rle1       # .rle1  -> raw
+    python3 lossless/converti.py cerchio.pgm --giro     # A -> B -> A and compare
 
-Il contenitore del formato B: magia `RLE1`, poi per ogni corsa un byte di
-valore e due byte di lunghezza, big endian.
+The format-B container: magic `RLE1`, then for each run one value byte and two
+length bytes, big endian.
 """
 
 import argparse
@@ -45,7 +45,7 @@ def spacchetta(dati):
     """byte del contenitore -> [(valore, lunghezza), ...]."""
     corpo = dati[len(MAGIA) :]
     if len(corpo) % 3:
-        raise SystemExit("contenitore RLE1 malformato")
+        raise SystemExit("malformed RLE1 container")
     return [
         (corpo[i], struct.unpack(">H", corpo[i + 1 : i + 3])[0])
         for i in range(0, len(corpo), 3)
@@ -78,7 +78,7 @@ def esegui(dati_kairos, tenere=None):
     dt = time.time() - t0
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
-        raise SystemExit(f"kairos fallito ({proc.returncode})")
+        raise SystemExit(f"kairos failed ({proc.returncode})")
     return leggi_uscita(proc.stdout), dt
 
 
@@ -99,7 +99,7 @@ def leggi_uscita(testo):
             fuori[nome] = int(val)
     for k in ("a", "b", "na", "np"):
         if k not in fuori:
-            raise SystemExit(f"uscita Kairos senza '{k}':\n{testo[:400]}")
+            raise SystemExit(f"Kairos output without '{k}':\n{testo[:400]}")
     return fuori
 
 
@@ -112,11 +112,11 @@ def codifica(byte, tenere=None):
     dati = blocco_dati(push, f"na += {len(byte)}", 0)
     fuori, dt = esegui(dati, tenere)
     if fuori["a"] != [-1] or fuori["na"] != 0:
-        raise SystemExit("il codificatore non ha consumato tutto l'ingresso")
+        raise SystemExit("the encoder did not consume the whole input")
     piatto = fuori["b"]
     coppie = [(piatto[i], piatto[i + 1]) for i in range(0, len(piatto), 2)]
     if len(coppie) != fuori["np"]:
-        raise SystemExit("numero di coppie incoerente")
+        raise SystemExit("inconsistent number of pairs")
     return coppie, dt
 
 
@@ -129,10 +129,10 @@ def decodifica(coppie, tenere=None):
     dati = blocco_dati(push, f"np += {len(coppie)}", 1)
     fuori, dt = esegui(dati, tenere)
     if fuori["b"] != [] or fuori["np"] != 0:
-        raise SystemExit("il decodificatore non ha consumato tutte le coppie")
+        raise SystemExit("the decoder did not consume all the pairs")
     pila = fuori["a"]
     if not pila or pila[0] != -1:
-        raise SystemExit("sentinella mancante")
+        raise SystemExit("missing sentinel")
     return bytes(reversed(pila[1:])), dt
 
 
@@ -143,26 +143,26 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("file")
     ap.add_argument("-o", "--out")
-    ap.add_argument("-k", "--keep", help="dove tenere il .kairos generato")
+    ap.add_argument("-k", "--keep", help="where to keep the generated .kairos")
     ap.add_argument(
-        "--giro", action="store_true", help="A -> B -> A e confronto byte a byte"
+        "--giro", action="store_true", help="A -> B -> A and byte-by-byte comparison"
     )
     args = ap.parse_args()
 
     path = pathlib.Path(args.file)
     dati = path.read_bytes()
     if not dati:
-        raise SystemExit("file vuoto")
+        raise SystemExit("empty file")
 
     if args.giro:
         coppie, t1 = codifica(dati, args.keep)
         indietro, t2 = decodifica(coppie)
         pack = impacchetta(coppie)
-        print(f"A  {path}  {len(dati)} byte")
-        print(f"B  {len(pack)} byte in {len(coppie)} corse   call    {t1:.1f} s")
-        print(f"A' {len(indietro)} byte                      uncall  {t2:.1f} s")
+        print(f"A  {path}  {len(dati)} bytes")
+        print(f"B  {len(pack)} bytes in {len(coppie)} runs   call    {t1:.1f} s")
+        print(f"A' {len(indietro)} bytes                      uncall  {t2:.1f} s")
         ok = indietro == dati
-        print("giro completo " + ("identico" if ok else "DIVERSO"))
+        print("round trip " + ("identical" if ok else "DIFFERENT"))
         return 0 if ok else 1
 
     if dati.startswith(MAGIA):
@@ -176,8 +176,8 @@ def main():
         verso = "A -> B  (call)"
 
     dest.write_bytes(fuori)
-    print(f"{verso}   {len(dati)} -> {len(fuori)} byte   {tempo:.1f} s")
-    print(f"scritto {dest}")
+    print(f"{verso}   {len(dati)} -> {len(fuori)} bytes   {tempo:.1f} s")
+    print(f"wrote {dest}")
     return 0
 
 

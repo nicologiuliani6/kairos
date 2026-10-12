@@ -1,14 +1,14 @@
-# Conversione fra formati lossless con `call` e `uncall`: analisi
+# Converting between lossless formats with `call` and `uncall`: analysis
 
-## L'idea
+## The idea
 
-Due rappresentazioni lossless dello stesso contenuto, e un solo programma che
-le mette in relazione. Il formato A è la sequenza grezza dei byte; il formato B
-è la stessa informazione codificata a corse. Passare da A a B è una biiezione,
-quindi il decodificatore non è un secondo programma da scrivere e mantenere
-allineato: è il codificatore letto al contrario.
+Two lossless representations of the same content, and a single program that
+relates them. Format A is the raw byte sequence; format B is the same
+information run-length encoded. Going from A to B is a bijection, so the
+decoder is not a second program to write and keep in sync: it is the encoder
+read backwards.
 
-Il programma riconosce il tipo del file in ingresso e sceglie la direzione:
+The program recognizes the type of the input file and chooses the direction:
 
 ```kairos
 if tipo == 0 then
@@ -18,146 +18,146 @@ else
 fi tipo == 0
 ```
 
-Sotto quel bivio c'è una sola procedura, `rle`. Nessuna riga di decodifica
-esiste nel sorgente. Questo è il punto: in un linguaggio reversibile la
-decodifica non si implementa, si ottiene.
+Under that fork there is a single procedure, `rle`. No decoding line exists in
+the source. That is the point: in a reversible language decoding is not
+implemented, it is obtained.
 
-## Perché serve che `rle` sia pulita
+## Why `rle` must be clean
 
-`rle` consuma interamente l'ingresso e lascia solo l'uscita:
+`rle` consumes the whole input and leaves only the output:
 
 ```
-pre   src = [sentinella, byte_n-1, ..., byte_0]   nsrc = n   dst vuoto   npair = 0
-post  src = [sentinella]                          nsrc = 0   dst = coppie  npair = k
+pre   src = [sentinel, byte_n-1, ..., byte_0]   nsrc = n   dst empty    npair = 0
+post  src = [sentinel]                          nsrc = 0   dst = pairs  npair = k
 ```
 
-È la nozione di *clean* di Lyngby, Nylandsted, Glück e Yokoyama. Se `rle`
-lasciasse dietro di sé stati intermedi, l'inverso non sarebbe una decodifica:
-per girare avrebbe bisogno anche di quella spazzatura, cioè di informazione che
-un file in formato B non contiene. La pulizia non è eleganza, è la condizione
-che rende l'inverso utilizzabile su un file vero.
+This is the notion of *clean* of Lyngby, Nylandsted, Glück and Yokoyama. If
+`rle` left intermediate state behind, its inverse would not be a decoder: to
+run it would also need that garbage, that is information a format-B file does
+not contain. Cleanliness is not elegance, it is the condition that makes the
+inverse usable on a real file.
 
-## Due dettagli di linguaggio che hanno cambiato il codice
+## Two language details that changed the code
 
-**Le guardie di Kairos sono confronti semplici.** Non c'è disgiunzione. La
-condizione naturale per la scansione di una corsa è "resta qualcosa in `src`,
-oppure ho appena consumato un elemento", e non si scrive. Il tentativo di
-aggirarla con `(nsrc + cont) > 0` supera il parser ma non la VM, che spezza la
-riga `EVAL` sugli spazi e non ricompone la parentesi.
+**Kairos guards were simple comparisons.** There was no disjunction. The
+natural condition for scanning a run is "something is left in `src`, or I just
+consumed an element", and it could not be written. The attempt to work around
+it with `(nsrc + cont) > 0` got past the parser but not the VM, which split the
+`EVAL` line on spaces and did not rebuild the parenthesis.
 
-La soluzione non è stata piegare il linguaggio ma cambiare i dati: una
-sentinella `-1` in fondo allo stack. Nessun byte vale -1, quindi il confronto
-si interrompe sempre da solo e il test di vuotezza sparisce dal codice. La
-guardia torna a essere `cont == 1`, un confronto semplice.
+The solution was not to bend the language but to change the data: a `-1`
+sentinel at the bottom of the stack. No byte is -1, so the comparison always
+stops by itself and the emptiness test disappears from the code. The guard is
+back to `cont == 1`, a simple comparison.
 
-**Ogni `if` deve dichiarare in uscita quale ramo ha preso.** Dopo aver
-consumato la cima di `src` non è più possibile verificare che fosse uguale a
-`v`. Serve un testimone: `cont` vale 1 quando l'ultimo elemento letto era
-uguale, 0 quando la corsa è finita. È lo stesso schema del `pref` usato per il
-confronto lessicografico nella trasformata di Burrows e Wheeler, e sembra
-essere il modo standard di scrivere condizionali non banali in Kairos.
+**Every `if` must state on exit which branch it took.** After consuming the top
+of `src` it is no longer possible to check that it was equal to `v`. A witness
+is needed: `cont` is 1 when the last element read was equal, 0 when the run is
+over. It is the same pattern as the `pref` used for the lexicographic
+comparison in the Burrows–Wheeler transform, and it seems to be the standard
+way of writing non-trivial conditionals in Kairos.
 
-## Risultati
+## Results
 
-Immagini PGM binarie, cerchio pieno su fondo chiaro. Giro completo A → B → A
-con confronto byte a byte del file finale contro l'originale.
+Binary PGM images, a filled circle on a light background. Full round trip
+A → B → A with a byte-by-byte comparison of the final file against the
+original.
 
-| immagine | A (byte) | corse | B (byte) | giro |
+| image | A (bytes) | runs | B (bytes) | round trip |
 |---|---|---|---|---|
-| 16x16 | 269 | 33 | 103 | identico |
-| 32x32 | 1.037 | 53 | 163 | identico |
-| 64x64 | 4.109 | 93 | 283 | identico |
-| 128x128 | 16.399 | 179 | 541 | identico |
-| 256x256 | 65.551 | 343 | 1.033 | identico |
+| 16x16 | 269 | 33 | 103 | identical |
+| 32x32 | 1,037 | 53 | 163 | identical |
+| 64x64 | 4,109 | 93 | 283 | identical |
+| 128x128 | 16,399 | 179 | 541 | identical |
+| 256x256 | 65,551 | 343 | 1,033 | identical |
 
-Il contenitore del formato B spende tre byte per corsa (valore su un byte,
-lunghezza su due). Con la lunghezza su un byte e corse spezzate a 255 sarebbero
-due byte per corsa, ma il conto non cambia natura.
+The format-B container spends three bytes per run (value on one byte, length
+on two). With the length on one byte and runs split at 255 it would be two
+bytes per run, but the count does not change in nature.
 
-## Efficienza
+## Efficiency
 
-Tempi sul giro completo, separando il frontend dall'esecuzione:
+Times for the full round trip, separating the frontend from the execution:
 
-| immagine | righe del programma generato | parse | esecuzione |
+| image | lines of the generated program | parse | execution |
 |---|---|---|---|
-| 32x32 | 1.132 | 0,1 s | 0,2 s |
-| 64x64 | 4.204 | 0,6 s | 0,2 s |
-| 128x128 | 16.494 | 6,3 s | 0,8 s |
-| 256x256 | 65.646 | 87,3 s | 2,0 s |
+| 32x32 | 1,132 | 0.1 s | 0.2 s |
+| 64x64 | 4,204 | 0.6 s | 0.2 s |
+| 128x128 | 16,494 | 6.3 s | 0.8 s |
+| 256x256 | 65,646 | 87.3 s | 2.0 s |
 
-**L'esecuzione è lineare.** 65 KB di immagine si comprimono e si ricostruiscono
-in circa 2 s. L'RLE su stack tocca solo la cima, non chiede mai accesso
-casuale, e la VM reversibile lo esegue al costo che ci si aspetta.
+**Execution is linear.** A 65 KB image is compressed and rebuilt in about 2 s.
+RLE on stacks only touches the top, never needs random access, and the
+reversible VM runs it at the expected cost.
 
-**Il parse non lo è.** Cresce circa con il quadrato della lunghezza del
-programma, e a 65.646 righe costa 87,3 s, cioè quaranta volte l'esecuzione.
+**Parsing is not.** It grows roughly with the square of the program length,
+and at 65,646 lines it costs 87.3 s, forty times the execution.
 
-La ragione è che la VM non ha filesystem: l'ingresso non può essere letto a
-runtime, quindi i byte del file finiscono nel sorgente come sequenza di `push`.
-Il programma ha la dimensione del dato. Il muro che si incontra non è quello
-della macchina reversibile, è quello di un frontend LALR in Python messo a
-digerire un sorgente da 65 mila righe.
+The reason is that the VM has no filesystem: the input cannot be read at run
+time, so the file's bytes go into the source as a sequence of `push`. The
+program has the size of the data. The wall one hits is not the reversible
+machine, it is an LALR frontend in Python digesting a 65-thousand-line source.
 
-La stessa asimmetria si vede fra le due direzioni. Il `call` parte da 65.551
-byte e paga 87 s di parse; l'`uncall` parte da 343 coppie, cioè 686 `push`, e
-chiude in 1,9 s. Non è che l'inverso sia più veloce dell'inverso di sé stesso:
-è che il suo ingresso è più piccolo, quindi lo è anche il suo programma.
+The same asymmetry shows between the two directions. The `call` starts from
+65,551 bytes and pays 87 s of parsing; the `uncall` starts from 343 pairs, that
+is 686 `push`, and finishes in 1.9 s. It is not that the inverse is faster than
+itself: its input is smaller, and so is its program.
 
-## Quanto costa davvero l'inverso
+## How much the inverse really costs
 
-Il decodificatore è gratuito da scrivere. Resta da chiedersi se sia gratuito da
-eseguire, perché un inverso lento sarebbe un decodificatore inutile.
+The decoder is free to write. It remains to ask whether it is free to run,
+because a slow inverse would be a useless decoder.
 
-I tempi della tabella precedente non rispondono: i due programmi non fanno lo
-stesso lavoro, il diretto esegue n `push` di caricamento dati e l'inverso solo
-2k. Per isolare la sola conversione ogni programma si esegue due volte, una
-com'è e una con il contatore azzerato: con `nsrc = 0` (o `npair = 0`) la
-conversione non parte, mentre parse e caricamento restano identici. La
-differenza è la conversione e nient'altro.
+The times of the previous table do not answer: the two programs do not do the
+same work, the forward one runs n data-loading `push` and the inverse only 2k.
+To isolate the conversion alone, each program runs twice, once as it is and
+once with the counter set to zero: with `nsrc = 0` (or `npair = 0`) the
+conversion does not start, while parsing and loading stay identical. The
+difference is the conversion and nothing else.
 
-| byte | corse | `call` | `uncall` | rapporto |
+| bytes | runs | `call` | `uncall` | ratio |
 |---|---|---|---|---|
-| 1.037 | 53 | 0,02 s | 0,03 s | 2,06x |
-| 4.109 | 93 | 0,06 s | 0,11 s | 1,73x |
-| 16.399 | 179 | 0,20 s | 0,43 s | 2,18x |
-| 65.551 | 343 | 0,97 s | 1,68 s | 1,73x |
+| 1,037 | 53 | 0.02 s | 0.03 s | 2.06x |
+| 4,109 | 93 | 0.06 s | 0.11 s | 1.73x |
+| 16,399 | 179 | 0.20 s | 0.43 s | 2.18x |
+| 65,551 | 343 | 0.97 s | 1.68 s | 1.73x |
 
-**L'inverso costa fra 1,7 e 2,2 volte il diretto, e il rapporto non cresce con
-la taglia.** È un fattore costante, non un fattore n: l'inversione è
-un'operazione locale sull'istruzione, non una rielaborazione del programma. Un
-decodificatore ottenuto per inversione è quindi utilizzabile, non solo
-dimostrabile.
+**The inverse costs between 1.7 and 2.2 times the forward direction, and the
+ratio does not grow with size.** It is a constant factor, not a factor n:
+inversion is a local operation on the instruction, not a reworking of the
+program. A decoder obtained by inversion is therefore usable, not just
+provable.
 
-## L'inverso è anche un decodificatore che valida?
+## Is the inverse also a validating decoder?
 
-Questa è la domanda che decide se l'idea regge fuori dal laboratorio. Un file
-in formato B arriva da disco e non c'è nessuna garanzia che sia nell'immagine
-del codificatore. Se lo si dà all'inverso, cosa succede?
+This is the question that decides whether the idea holds outside the lab. A
+format-B file comes from disk and there is no guarantee that it is in the image
+of the encoder. What happens when it is given to the inverse?
 
-L'esperimento (`esperimenti.py validazione`) costruisce sette ingressi in
-formato B, uno legittimo e sei che nessuna esecuzione diretta produrrebbe.
+The experiment (`esperimenti.py validazione`) builds seven format-B inputs, one
+legitimate and six that no forward execution would produce.
 
-**Il risultato di partenza è negativo.** L'inverso accetta in silenzio ingressi
-fuori dall'immagine e risponde con dati sbagliati, oppure diverge.
+**The starting result is negative.** The inverse silently accepts inputs
+outside the image and answers with wrong data, or diverges.
 
-| ingresso | esito |
+| input | outcome |
 |---|---|
-| riferimento, immagine del diretto | accetta, corretto |
-| corsa di lunghezza 0 | **non termina** |
-| due corse adiacenti con lo stesso valore | **accetta**, e il risultato ricodificato non torna all'ingresso |
-| `npair` più piccolo del contenuto | **accetta**, risultato troncato |
-| `npair` più grande del contenuto | rifiuta, ma per `POP` su stack vuoto |
-| lunghezza negativa | **non termina** |
-| valore che collide con la sentinella | **accetta** |
+| reference, image of the forward program | accepts, correct |
+| run of length 0 | **does not terminate** |
+| two adjacent runs with the same value | **accepts**, and re-encoding the result does not give back the input |
+| `npair` smaller than the content | **accepts**, truncated result |
+| `npair` larger than the content | rejects, but through `POP` on an empty stack |
+| negative length | **does not terminate** |
+| value colliding with the sentinel | **accepts** |
 
-### La causa: le due guardie sono controllate una sola
+### The cause: only one of the two guards was checked
 
-Il condizionale reversibile ha due guardie e la semantica ne chiede due
-controlli, uno per verso. Andando in avanti si controlla l'asserzione d'uscita.
-Andando all'indietro l'asserzione d'uscita sceglie il ramo, e resta da
-verificare che la guardia d'ingresso sia coerente con la scelta.
+The reversible conditional has two guards and the semantics requires two
+checks, one per direction. Going forwards the exit assertion is checked. Going
+backwards the exit assertion chooses the branch, and it remains to check that
+the entry guard agrees with that choice.
 
-Il caso minimo che lo mostra:
+The minimal case showing it:
 
 ```kairos
 procedure p(int x, int y)
@@ -168,21 +168,21 @@ procedure p(int x, int y)
 procedure main()
     int x
     int y
-    x -= 5          // la guardia d'ingresso e' falsa
-    y += 1          // l'asserzione d'uscita e' vera
+    x -= 5          // the entry guard is false
+    y += 1          // the exit assertion is true
     uncall p(x, y)
     show(y)
 ```
 
-Lo stato di partenza non è raggiungibile da nessuna esecuzione diretta di `p`.
-La VM invertiva il ramo `then`, portava `y` a 0 e terminava con successo. Lo
-stesso programma percorso in avanti con l'asserzione d'uscita falsa produceva
-invece l'errore `IF/FI non reversibile`: il controllo c'era in un verso e
-mancava nell'altro. Ora entrambi i versi lo fanno.
+The starting state is not reachable by any forward execution of `p`. The VM
+inverted the `then` branch, brought `y` to 0 and ended successfully. The same
+program run forwards with a false exit assertion produced instead the error
+`IF/FI not reversible`: the check was there in one direction and missing in
+the other. Now both directions do it.
 
-### La conseguenza vera: le asserzioni non funzionano all'indietro
+### The real consequence: assertions did not work backwards
 
-In Janus un'asserzione si scrive con un condizionale a due guardie:
+In Janus an assertion is written with a two-guard conditional:
 
 ```kairos
 local int positiva = 0
@@ -192,147 +192,145 @@ local int positiva = 0
 delocal int positiva = 1
 ```
 
-In avanti funziona: se `run <= 0` la variabile resta a 0 e la `delocal`
-fallisce. All'indietro dovrebbe funzionare allo stesso modo, e invece **non
-faceva assolutamente nulla**, perché il ramo si sceglieva dall'asserzione
-d'uscita e la guardia `run > 0` non veniva mai riletta.
+Forwards it works: if `run <= 0` the variable stays 0 and the `delocal` fails.
+Backwards it should work the same way, and instead **it did absolutely
+nothing**, because the branch was chosen from the exit assertion and the guard
+`run > 0` was never evaluated again.
 
-Questo è il punto che rende la mancanza grave e non cosmetica: non riguarda un
-angolo del linguaggio, riguarda l'unico modo che si ha di scrivere una
-precondizione. In un decodificatore ottenuto per inversione tutte le
-precondizioni sull'ingresso sono esattamente asserzioni di questa forma.
+This is what makes the gap serious rather than cosmetic: it is not about a
+corner of the language, it is about the only way to write a precondition. In a
+decoder obtained by inversion, every precondition on the input is exactly an
+assertion of this form.
 
-### Il controllo mancante, e cosa cambia
+### The missing check, and what changes
 
-Il controllo è stato aggiunto in `src/vm/vm_invert.h`
-(`check_if_entry_inverse`): dopo aver invertito il ramo, quando lo store è
-tornato allo stato che precedeva l'if e la guardia torna valutabile, si verifica
-che valga se e solo se il ramo preso era il `then`. Le due eccezioni sono quelle
-che il controllo in avanti ha già: nessun controllo dove manca l'asserzione
-d'uscita (il ramo è stato dedotto dalla guardia stessa, riverificarla sarebbe
-una tautologia) e nessun controllo nei rami di `par`, dove altri thread possono
-mutare gli int condivisi fra la valutazione e la verifica.
+The check was added in `src/vm/vm_invert.h` (`check_if_entry_inverse`): after
+inverting the branch, when the store is back to the state before the if and
+the guard can be evaluated again, it checks that the guard holds exactly when
+the branch taken was `then`. The two exceptions are those the forward check
+already has: no check where the exit assertion is missing (the branch was
+deduced from the guard itself, checking it again would be a tautology) and no
+check in `par` branches, where other threads may change shared ints between
+the evaluation and the check.
 
-Con il controllo e l'asserzione `run > 0` scritta nel sorgente:
+With the check and the assertion `run > 0` written in the source:
 
-| ingresso | prima della correzione | dopo |
+| input | before the fix | after |
 |---|---|---|
-| riferimento | accetta, corretto | accetta, corretto |
-| corsa di lunghezza 0 | non termina | **rifiuta** |
-| due corse adiacenti uguali | accetta, sbagliato | **rifiuta** |
-| `npair` troppo piccolo | accetta, troncato | accetta, troncato |
-| `npair` troppo grande | rifiuta (`POP` su stack vuoto) | rifiuta |
-| lunghezza negativa | non termina | **rifiuta** |
-| valore = sentinella | accetta | accetta |
+| reference | accepts, correct | accepts, correct |
+| run of length 0 | does not terminate | **rejects** |
+| two equal adjacent runs | accepts, wrong | **rejects** |
+| `npair` too small | accepts, truncated | accepts, truncated |
+| `npair` too large | rejects (`POP` on an empty stack) | rejects |
+| negative length | does not terminate | **rejects** |
+| value = sentinel | accepts | accepts |
 
-Tre casi passano da errore silenzioso o divergenza a rifiuto esplicito. Va
-sottolineato che l'asserzione `run > 0` è presente nel sorgente in entrambe le
-colonne: la colonna di sinistra non è "senza asserzione", è "con l'asserzione
-che non viene controllata".
+Three cases go from silent error or divergence to explicit rejection. Note that
+the assertion `run > 0` is in the source in both columns: the left column is
+not "without the assertion", it is "with an assertion that is not checked".
 
-Il costo della correzione, misurato prima di renderla definitiva:
-**nessuna regressione**. La suite Kairos dà 58 PASS / 4 FAIL identici, con gli
-stessi quattro fallimenti di prima. Tutti gli 87 programmi C di Mnemo, che è il
-generatore vero di `uncall`, danno uscita identica con e senza il controllo. Le
-due sole differenze osservate sono risultate artefatti: `PC.c` è
-nondeterministico di suo, perché lo scheduling di `par` cambia l'ordine
-dell'uscita da un'esecuzione all'altra; `maze_backtrack.c` impiega circa cinque
-minuti e il timeout dello sweep lo troncava in punti diversi, mentre eseguito
-fino in fondo dà lo stesso esito nelle due modalità. I due programmi
-`try_rollback.c` e `try_backtracking.c` falliscono sotto
-`--check-invertibility`, ma falliscono allo stesso modo anche sulla VM
-precedente alla modifica.
+The cost of the fix, measured before making it final: **no regressions**. The
+Kairos suite gave 58 PASS / 4 FAIL, identical, with the same four failures as
+before. All 87 C programs of Mnemo, the real generator of `uncall`, gave
+identical output with and without the check. The only two differences
+observed turned out to be artifacts: `PC.c` is nondeterministic by itself,
+because `par` scheduling changes the order of the output from run to run;
+`maze_backtrack.c` takes about five minutes and the sweep timeout cut it at
+different points, while run to the end it gives the same result in both modes.
+The two programs `try_rollback.c` and `try_backtracking.c` failed under
+`--check-invertibility`, but they failed the same way on the VM before the
+change.
 
-### Cosa resta fuori portata, e perché
+### What remains out of reach, and why
 
-**Il campo di conteggio.** `npair` è un ingresso dell'inverso, e nulla nel
-programma lo lega al contenuto di `dst`. Un conteggio troppo piccolo lascia
-coppie inutilizzate e nessuno se ne accorge. Verrebbe da concludere che i
-formati auto-delimitati siano preferibili, ma la conclusione è l'opposta: il
-ciclo di Kairos ha bisogno di un'asserzione d'ingresso che sia falsa a ogni
-rientro, e per un ciclo guidato dai dati quell'asserzione è naturalmente un
-contatore. **Il linguaggio spinge verso formati contati, non terminati**, e il
-prezzo è che il contatore va convalidato fuori dal programma. Nel driver lo si
-fa, controllando che `dst` finisca vuoto.
+**The count field.** `npair` is an input of the inverse, and nothing in the
+program ties it to the content of `dst`. A count that is too small leaves pairs
+unused and nobody notices. One would conclude that self-delimiting formats are
+preferable, but the conclusion is the opposite: a Kairos loop needs an entry
+assertion that is false on every re-entry, and for a data-driven loop that
+assertion is naturally a counter. **The language pushes towards counted
+formats, not terminated ones**, and the price is that the counter must be
+validated outside the program. The driver does it, checking that `dst` ends
+up empty.
 
-**La sentinella in banda.** Il valore -1 che ha semplificato le guardie è
-rappresentabile in formato B, quindi un file costruito ad arte può contenerlo e
-confondersi con il fondo dello stack. La pipeline reale non lo produce mai,
-perché i byte stanno fra 0 e 255, ma è una superficie d'attacco creata dalla
-scelta di codifica, non dal linguaggio.
+**The in-band sentinel.** The value -1 that simplified the guards can be
+represented in format B, so a crafted file can contain it and be confused with
+the bottom of the stack. The real pipeline never produces it, because bytes
+lie between 0 and 255, but it is an attack surface created by the encoding
+choice, not by the language.
 
-**La terminazione.** Nessun controllo di guardia rende decidibile se un inverso
-termina. Qui i due casi divergenti si sono chiusi perché l'asserzione li
-intercetta prima del ciclo, ma è una fortuna del caso specifico, non un
-teorema.
+**Termination.** No guard check makes it decidable whether an inverse
+terminates. Here the two divergent cases were closed because the assertion
+catches them before the loop, but that is luck of the specific case, not a
+theorem.
 
-## Il caso peggiore
+## The worst case
 
-Dati incomprimibili, ogni corsa lunga 1, quindi il formato B è grande il doppio
-del formato A.
+Incompressible data, every run of length 1, so format B is twice as large as
+format A.
 
-| n | corse | B/A | `call` | `uncall` | giro |
+| n | runs | B/A | `call` | `uncall` | round trip |
 |---|---|---|---|---|---|
-| 200 | 199 | 1,99 | 0,1 s | 0,2 s | identico |
-| 800 | 797 | 1,99 | 0,2 s | 0,3 s | identico |
+| 200 | 199 | 1.99 | 0.1 s | 0.2 s | identical |
+| 800 | 797 | 1.99 | 0.2 s | 0.3 s | identical |
 
-Il giro chiude comunque. Vale la pena dirlo esplicitamente perché è il punto
-che distingue questo lavoro da un compressore: **B non è "il file compresso",
-è "il file nell'altro formato"**, e la biiezione non dipende dal fatto che
-comprima. Un compressore che raddoppia i dati è inutile; un convertitore che
-raddoppia i dati è ancora un convertitore corretto.
+The round trip still closes. It is worth saying explicitly, because it is what
+distinguishes this work from a compressor: **B is not "the compressed file", it
+is "the file in the other format"**, and the bijection does not depend on
+whether it compresses. A compressor that doubles the data is useless; a
+converter that doubles the data is still a correct converter.
 
-## Confronto con la via C
+## Comparison with the C path
 
-Lo stesso identico algoritmo, sullo stesso identico file da 269 byte, scritto in
-C e passato per Mnemo, costa 290,5 s. Scritto in Kairos su stack costa 0,1 s.
-Tremila volte.
+The very same algorithm, on the very same 269-byte file, written in C and
+compiled by Mnemo, cost 290.5 s. Written in Kairos on stacks it costs 0.1 s:
+three thousand times less.
 
-La differenza non è nella VM, che è la stessa. È nella struttura dati. In C
-l'RLE si scrive su array con indice a runtime, e Mnemo abbassa ogni accesso
-indicizzato in una catena di confronti lunga quanto l'array: una scansione
-lineare diventa O(n²). Su stack la stessa scansione tocca solo la cima e resta
-O(n).
+The difference is not in the VM, which is the same. It is in the data
+structure. In C, RLE is written on arrays with a runtime index, and Mnemo
+lowered each indexed access to a chain of comparisons as long as the array: a
+linear scan became O(n²). On stacks the same scan only touches the top and
+stays O(n).
 
-Il confronto va letto con onestà: non dice che Kairos è meglio di C, dice che
-l'RLE è un algoritmo che scorre e non salta, e che scritto contro la struttura
-dati giusta non paga nulla. Un algoritmo che salta davvero, come la trasformata
-di Burrows e Wheeler, paga il fattore n su entrambe le strade.
+The comparison must be read honestly: it does not say that Kairos is better
+than C, it says that RLE is an algorithm that scans and never jumps, and that
+written against the right data structure it pays nothing. An algorithm that
+really jumps, like the Burrows–Wheeler transform, pays the factor n on both
+paths.
 
-## Sviluppi
+## Next steps
 
-**Lettura e scrittura di file dalla VM.** È l'intervento con il rapporto
-migliore fra costo e resa, e vale per entrambi gli studi. Stacca la dimensione
-del programma da quella del dato, elimina gli 87 s di parse, e porta il caso da
-65 KB da 90 s a 2 s. Non richiede di toccare la semantica reversibile: leggere
-e scrivere sono effetti al bordo, come `show`.
+**Reading and writing files from the VM.** It is the change with the best
+cost/benefit ratio, and it helps both studies. It decouples the program size
+from the data size, removes the 87 s of parsing, and brings the 65 KB case from
+90 s to 2 s. It does not touch the reversible semantics: reading and writing
+are effects at the boundary, like `show`.
 
-**Riconoscimento del formato dentro il programma.** Oggi il tipo arriva come
-variabile scritta dal generatore. Con la lettura da file, il programma
-leggerebbe da sé i byte di magia e sceglierebbe la direzione, che è la forma
-compiuta dell'idea.
+**Recognizing the format inside the program.** Today the type arrives as a
+variable written by the generator. With file reading, the program would read
+the magic bytes itself and choose the direction, which is the complete form of
+the idea.
 
-**Più di due formati.** Con tre rappresentazioni e le conversioni A→B e B→C si
-ottengono tutti e sei i percorsi orientati componendo `call` e `uncall`. Il
-guadagno però va dichiarato per quello che è: anche un convertitore
-convenzionale organizzato a stella scrive O(k) conversioni, non O(k²). Quello
-che la reversibilità aggiunge sono due cose, entrambe misurabili: **metà del
-codice**, perché di ogni conversione se ne scrive una direzione sola, e
-**l'impossibilità che le due direzioni divergano**, perché non sono due
-programmi che qualcuno deve tenere allineati. È un argomento più stretto di
-quello quadratico, ed è quello vero.
+**More than two formats.** With three representations and the conversions A→B
+and B→C, composing `call` and `uncall` gives all six directed paths. The gain
+must be stated for what it is: a conventional converter organized as a star
+also writes O(k) conversions, not O(k²). What reversibility adds is two
+things, both measurable: **half the code**, because each conversion is written
+in one direction only, and **the impossibility of the two directions
+diverging**, because they are not two programs someone must keep in sync. It
+is a narrower argument than the quadratic one, and it is the true one.
 
-**Convalida del conteggio dentro il linguaggio.** Oggi il fatto che `dst` finisca
-vuoto lo controlla il driver Python, fuori dal programma. Una primitiva che
-asserisca una pila vuota porterebbe il controllo dentro, e chiuderebbe l'ultima
-classe di ingressi malformati che l'inverso accetta in silenzio.
+**Validating the count inside the language.** Today the fact that `dst` ends up
+empty is checked by the Python driver, outside the program. A primitive
+asserting an empty stack would move the check inside, and close the last class
+of malformed inputs the inverse silently accepts.
 
-**Corse in parallelo.** L'immagine si divide in bande orizzontali indipendenti;
-i confini non si toccano perché una corsa non attraversa una banda se le bande
-si tagliano sulle righe. Ogni banda diventa un ramo di `par`, ed è il punto in
-cui reversibilità e concorrenza si vedono insieme su un file vero.
+**Runs in parallel.** The image splits into independent horizontal bands; the
+boundaries never touch because a run does not cross a band if the bands are
+cut on the rows. Each band becomes a `par` branch, and it is where
+reversibility and concurrency are seen together on a real file.
 
-**Codifiche più forti.** LZW e la trasformata di Burrows e Wheeler comprimono
-molto meglio dell'RLE su dati non sintetici, ma chiedono accesso casuale, che
-su stack costa un fattore n. Restano subordinate a una memoria indicizzata
-reversibile a costo costante.
+**Stronger encodings.** LZW and the Burrows–Wheeler transform compress much
+better than RLE on non-synthetic data, but they need random access, which on
+stacks costs a factor n. They depend on a reversible indexed memory with
+constant cost.

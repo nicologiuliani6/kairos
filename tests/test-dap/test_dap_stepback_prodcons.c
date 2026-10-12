@@ -72,7 +72,7 @@ int main(void)
     const char *src = "examples/prod_cons_sequenziale_cript.kairos";
     char *bytecode = compile_kairos_to_bytecode(src);
     if (!bytecode) {
-        fprintf(stderr, "ERRORE: impossibile generare bytecode da %s\n", src);
+        fprintf(stderr, "ERROR: cannot produce bytecode from %s\n", src);
         return 2;
     }
 

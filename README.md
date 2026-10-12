@@ -398,18 +398,17 @@ One line per instruction, `@SRC OPCODE arguments`, where `@SRC` is the source li
 
 | Message | Cause |
 |---|---|
-| `DELOCAL: valore finale errato` | the variable does not hold the value declared in `delocal` |
-| `[LOCAL] … non chiude il local aperto più di recente` | `local`/`delocal` are not a block (Janus rule) |
-| `DELOCAL: … non è nil/empty` | stack or channel not empty when closed |
-| `IF/FI non reversibile` | the exit assertion does not match the branch taken |
+| `DELOCAL: wrong final value (Deloc-Err …)` | the variable does not hold the value declared in `delocal` |
+| `[LOCAL] … does not close the local opened most recently` | `local`/`delocal` are not a block (Janus rule) |
+| `DELOCAL: … is not nil/empty` | stack or channel not empty when closed |
+| `IF/FI not reversible (IfError …)` | the exit assertion does not match the branch taken |
 | `FROM: … (LoopError1)` / `(LoopError2)` | loop entry guard false on entry / true on re-entry |
-| `POP: destinazione … non è zero (Pop-Err2)` | `pop` into a non-zero variable |
+| `POP: destination … is not zero before the pop (Pop-Err2 …)` | `pop` into a non-zero variable |
 | `Idx-Err` / `Div-Err` | index out of bounds / division by zero |
-| `[STATIC] race su int nel PAR` | written in one branch, used in another: use distinct variables or a channel |
-| `[VM] SESSIONE: …` | channel used by more than two branches, or a stuck protocol |
+| `[STATIC] race on int in PAR` | written in one branch, used in another: use distinct variables or a channel |
+| `[VM] SESSION: …` | channel used by more than two branches, or a deadlock (no partner can arrive) |
 | `cannot open shared object file: libvm.so` | run `make build-release` |
 
-Diagnostics are printed in Italian.
 
 ---
 

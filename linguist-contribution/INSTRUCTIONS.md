@@ -1,33 +1,33 @@
-# Registrare "Kairos" su GitHub (github-linguist)
+# Registering "Kairos" on GitHub (github-linguist)
 
-GitHub riconosce le lingue tramite [github-linguist](https://github.com/github-linguist/linguist).
-Per far comparire **Kairos** nella barra lingue di *tutte* le repo (kairos, mnemo, …)
-serve una PR upstream. Una volta merge-ata, l'effetto è globale e automatico.
+GitHub recognizes languages through [github-linguist](https://github.com/github-linguist/linguist).
+To show **Kairos** in the language bar of *every* repository (kairos, mnemo, …)
+an upstream PR is needed. Once merged, the effect is global and automatic.
 
-## Prerequisiti
-- **Grammar pubblicato con LICENSE.** Il grammar TextMate sta in
+## Prerequisites
+- **Grammar published with a LICENSE.** The TextMate grammar lives in
   `github.com/nicologiuliani6/kairos-vscode-debugger`
   (`syntaxes/kairos.tmLanguage.json`, `scopeName: source.kairos`).
-  `script/add-grammar` richiede che quel repo abbia un file `LICENSE`
-  (aggiunto: MIT). Assicurati che l'ultima versione del grammar — con
-  `try/rollback/yrt` — e il LICENSE siano **pushati**.
-- **Samples** in `samples/Kairos/` di questa cartella (≥ ~200 byte richiesti).
+  `script/add-grammar` requires that repository to have a `LICENSE` file
+  (added: MIT). Make sure the latest grammar (with `try/rollback/yrt`) and the
+  LICENSE are **pushed**.
+- **Samples** in `samples/Kairos/` of this folder (at least ~200 bytes required).
 
-## Come funziona il "fork" (in breve)
-Non hai i permessi di scrittura sul repo di GitHub (`github-linguist/linguist`).
-Il flusso standard è:
-1. **Fork** = una tua copia del repo sotto il tuo account
-   (`nicologiuliani6/linguist`). Clicchi "Fork" sul sito.
-2. Cloni il **tuo** fork, fai le modifiche su un branch, le pushi sul tuo fork.
-3. Apri una **Pull Request** dal tuo fork verso il repo originale: i maintainer
-   la revisionano e (se accettata) la fanno merge nel loro repo.
+## How the "fork" works (in short)
+You cannot write to GitHub's repository (`github-linguist/linguist`).
+The standard flow is:
+1. **Fork** = your own copy of the repository under your account
+   (`nicologiuliani6/linguist`). Click "Fork" on the website.
+2. Clone **your** fork, make the changes on a branch, push them to your fork.
+3. Open a **Pull Request** from your fork to the original repository: the
+   maintainers review it and, if accepted, merge it.
 
-## Passi
+## Steps
 
-1. **Fork** — apri `https://github.com/github-linguist/linguist`, click **Fork**
-   (in alto a destra). Crea `https://github.com/nicologiuliani6/linguist`.
+1. **Fork**: open `https://github.com/github-linguist/linguist`, click **Fork**
+   (top right). It creates `https://github.com/nicologiuliani6/linguist`.
 
-2. **Clone del tuo fork + branch**
+2. **Clone your fork and create a branch**
    ```bash
    git clone --recursive git@github.com:nicologiuliani6/linguist.git
    cd linguist
@@ -35,13 +35,13 @@ Il flusso standard è:
    bundle install
    ```
 
-3. **Aggiungi il grammar** (crea il submodule e aggiorna `grammars.yml` da solo):
+3. **Add the grammar** (it creates the submodule and updates `grammars.yml`):
    ```bash
    script/add-grammar https://github.com/nicologiuliani6/kairos-vscode-debugger
    ```
 
-4. **languages.yml** — in `lib/linguist/languages.yml`, in ordine alfabetico
-   (zona K), inserisci:
+4. **languages.yml**: in `lib/linguist/languages.yml`, in alphabetical order
+   (the K section), insert:
    ```yaml
    Kairos:
      type: programming
@@ -59,31 +59,32 @@ Il flusso standard è:
    cp ~/Desktop/kairos/linguist-contribution/samples/Kairos/*.kairos samples/Kairos/
    ```
 
-6. **language_id univoco + test**
+6. **Unique language_id and tests**
    ```bash
-   script/update-ids                 # valida/assegna language_id (cambia se collide)
-   bundle exec rake test             # deve passare
-   bin/github-linguist --breakdown   # opzionale: verifica .kairos -> Kairos
+   script/update-ids                 # validates/assigns language_id (changes it on a clash)
+   bundle exec rake test             # must pass
+   bin/github-linguist --breakdown   # optional: check that .kairos -> Kairos
    ```
 
-7. **Commit, push sul tuo fork, PR**
+7. **Commit, push to your fork, PR**
    ```bash
    git add -A
    git commit -m "Add Kairos language"
    git push origin add-kairos
    ```
-   Su GitHub apparirà il bottone per aprire la **Pull Request** verso
-   `github-linguist/linguist`. Compila il template (spunta le checkbox).
+   GitHub then shows the button to open the **Pull Request** towards
+   `github-linguist/linguist`. Fill in the template (tick the checkboxes).
 
-## ⚠️ Realtà
-- Il template della PR chiede che la lingua sia **in uso in più repository
-  pubblici**. Hai `kairos` + `mnemo` con `.kairos` (uso reale), ma i maintainer
-  possono chiedere più diffusione: accettazione **non garantita**, review
-  **lenta** (settimane–mesi).
-- Dopo merge + release Linguist + deploy GitHub: nessuna azione per-repo,
-  `.kairos` viene conteggiato come **Kairos** ovunque. A quel punto si può
-  rimuovere il mapping a Pascal dai `.gitattributes`.
+## ⚠️ Reality
+- The PR template asks that the language be **used in several public
+  repositories**. `kairos` and `mnemo` use `.kairos` for real, but the
+  maintainers may ask for wider use: acceptance is **not guaranteed**, and the
+  review is **slow** (weeks to months).
+- After the merge, a Linguist release and GitHub's deploy, nothing is needed
+  per repository: `.kairos` is counted as **Kairos** everywhere. At that point
+  the mapping to Pascal can be removed from the `.gitattributes`.
 
-## Alternativa già attiva (nel frattempo)
-I `.gitattributes` mappano i `.kairos` a **Pascal** così appaiono subito nella
-barra lingue (etichetta non "Kairos"). Restano fino al merge upstream.
+## Alternative already active (meanwhile)
+The `.gitattributes` map `.kairos` to **Pascal**, so they show up in the
+language bar right away (labelled Pascal, not "Kairos"). They stay until the
+upstream merge.

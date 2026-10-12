@@ -240,7 +240,7 @@ if __name__ == '__main__':
         print(exc)
         sys.exit(1)
     except Exception as exc:
-        print(f"[COMPILER] errore interno: {exc}")
+        print(f"[COMPILER] internal error: {exc}")
         sys.exit(1)
 
     with open("bytecode.txt", "w") as f:
