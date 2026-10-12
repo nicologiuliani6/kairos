@@ -1,9 +1,9 @@
 #!/bin/sh
 set -e
 
-# Ensure the dynamic linker cache sees /usr/local/lib/kairosapp.
-if [ ! -f /etc/ld.so.conf.d/kairosapp.conf ]; then
-  echo "/usr/local/lib/kairosapp" > /etc/ld.so.conf.d/kairosapp.conf
+# Ensure the dynamic linker cache sees /usr/local/lib/kairos.
+if [ ! -f /etc/ld.so.conf.d/kairos.conf ]; then
+  echo "/usr/local/lib/kairos" > /etc/ld.so.conf.d/kairos.conf
 fi
 
 ldconfig

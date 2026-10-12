@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # Build a Debian package that installs:
-# - KairosApp binary in /opt/kairosapp
-# - dap.so in /usr/local/lib/kairosapp
-# - symlink /usr/local/bin/kairosapp -> /opt/kairosapp/KairosApp
+# - kairos binary in /opt/kairos
+# - dap.so and libvm.so in /usr/local/lib/kairos
+# - symlink /usr/local/bin/kairos -> /opt/kairos/kairos
 
-PKG_NAME="${PKG_NAME:-kairosapp}"
+PKG_NAME="${PKG_NAME:-kairos}"
 PKG_ARCH="${PKG_ARCH:-$(dpkg --print-architecture)}"
 MAINTAINER="${MAINTAINER:-Nicolo Giuliani <nicolo.giuliani6@studio.unibo.it>}"
-DESCRIPTION="${DESCRIPTION:-KairosApp with dap shared library}"
+DESCRIPTION="${DESCRIPTION:-Kairos, reversible concurrent language: compiler, VM and debugger library}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
@@ -59,24 +59,25 @@ fi
 STAGE_DIR="${BUILD_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}"
 DEBIAN_DIR="${STAGE_DIR}/DEBIAN"
 
-# make release-app: PyInstaller --onefile → build/dist/KairosApp (file eseguibile).
-# Se passi a --onedir, l'eseguibile è build/dist/KairosApp/KairosApp.
+# make release-app: PyInstaller --onefile → build/dist/kairos (file eseguibile).
+# Se passi a --onedir, l'eseguibile è build/dist/kairos/kairos.
 DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
+VM_SRC="${PROJECT_ROOT}/build/libvm.so"
 
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
 echo "Running build pipeline..."
-# release-app dipende da release (libvm.so) e produce il bundle KairosApp.
+# release-app dipende da release (libvm.so) e produce il bundle kairos.
 (cd "${PROJECT_ROOT}" && make release-app && make build-dap)
 
-APP_ONEFILE="${PROJECT_ROOT}/build/dist/KairosApp"
-APP_ONEDIR="${PROJECT_ROOT}/build/dist/KairosApp/KairosApp"
+APP_ONEFILE="${PROJECT_ROOT}/build/dist/kairos"
+APP_ONEDIR="${PROJECT_ROOT}/build/dist/kairos/kairos"
 if [[ -f "${APP_ONEFILE}" && -x "${APP_ONEFILE}" ]]; then
   APP_SRC="${APP_ONEFILE}"
 elif [[ -f "${APP_ONEDIR}" && -x "${APP_ONEDIR}" ]]; then
   APP_SRC="${APP_ONEDIR}"
 else
-  echo "Missing KairosApp after make release. Expected one of:"
+  echo "Missing kairos after make release. Expected one of:"
   echo "  ${APP_ONEFILE}  (PyInstaller --onefile, default makefile)"
   echo "  ${APP_ONEDIR}   (PyInstaller --onedir)"
   exit 1
@@ -90,8 +91,8 @@ fi
 
 rm -rf "${STAGE_DIR}" "${ROOT_DIR}/${PKG_NAME}_"*"_${PKG_ARCH}.deb"
 mkdir -p "${DEBIAN_DIR}"
-mkdir -p "${STAGE_DIR}/opt/kairosapp"
-mkdir -p "${STAGE_DIR}/usr/local/lib/kairosapp"
+mkdir -p "${STAGE_DIR}/opt/kairos"
+mkdir -p "${STAGE_DIR}/usr/local/lib/kairos"
 mkdir -p "${STAGE_DIR}/usr/local/bin"
 cat > "${DEBIAN_DIR}/control" <<EOF
 Package: ${PKG_NAME}
@@ -101,6 +102,9 @@ Priority: optional
 Architecture: ${PKG_ARCH}
 Maintainer: ${MAINTAINER}
 Depends: libc6
+Provides: kairosapp
+Replaces: kairosapp
+Conflicts: kairosapp
 Description: ${DESCRIPTION}
 EOF
 
@@ -109,13 +113,15 @@ cp "${ROOT_DIR}/debian/prerm" "${DEBIAN_DIR}/prerm"
 cp "${ROOT_DIR}/debian/postrm" "${DEBIAN_DIR}/postrm"
 chmod 755 "${DEBIAN_DIR}/postinst" "${DEBIAN_DIR}/prerm" "${DEBIAN_DIR}/postrm"
 
-cp "${APP_SRC}" "${STAGE_DIR}/opt/kairosapp/KairosApp"
-chmod 755 "${STAGE_DIR}/opt/kairosapp/KairosApp"
+cp "${APP_SRC}" "${STAGE_DIR}/opt/kairos/kairos"
+chmod 755 "${STAGE_DIR}/opt/kairos/kairos"
 
-cp "${DAP_SRC}" "${STAGE_DIR}/usr/local/lib/kairosapp/dap.so"
-chmod 644 "${STAGE_DIR}/usr/local/lib/kairosapp/dap.so"
+cp "${DAP_SRC}" "${STAGE_DIR}/usr/local/lib/kairos/dap.so"
+chmod 644 "${STAGE_DIR}/usr/local/lib/kairos/dap.so"
+cp "${VM_SRC}" "${STAGE_DIR}/usr/local/lib/kairos/libvm.so"
+chmod 644 "${STAGE_DIR}/usr/local/lib/kairos/libvm.so"
 
-ln -s "/opt/kairosapp/KairosApp" "${STAGE_DIR}/usr/local/bin/kairosapp"
+ln -s "/opt/kairos/kairos" "${STAGE_DIR}/usr/local/bin/kairos"
 
 PKG_FILE="${ROOT_DIR}/${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.deb"
 dpkg-deb --build "${STAGE_DIR}" "${PKG_FILE}"

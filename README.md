@@ -69,18 +69,18 @@ Or directly:
 
 ## Linux packages
 
-Every [release](https://github.com/nicologiuliani6/kairos/releases) ships ready-made packages of **KairosApp** (standalone frontend + VM, no Python needed) built by the `release` workflow:
+Every [release](https://github.com/nicologiuliani6/kairos/releases) ships ready-made packages of **`kairos`** (standalone frontend + VM, no Python needed) built by the `release` workflow:
 
 | Distribution | File | Install |
 |---|---|---|
-| Debian / Ubuntu | `kairosapp_<version>_amd64.deb` | `sudo apt install ./kairosapp_<version>_amd64.deb` |
-| Fedora / RHEL | `kairosapp-<version>-1.<dist>.x86_64.rpm` | `sudo dnf install ./kairosapp-<version>-1.<dist>.x86_64.rpm` |
-| Arch Linux | `kairosapp-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./kairosapp-<version>-1-x86_64.pkg.tar.zst` |
+| Debian / Ubuntu | `kairos_<version>_amd64.deb` | `sudo apt install ./kairos_<version>_amd64.deb` |
+| Fedora / RHEL | `kairos-<version>-1.<dist>.x86_64.rpm` | `sudo dnf install ./kairos-<version>-1.<dist>.x86_64.rpm` |
+| Arch Linux | `kairos-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./kairos-<version>-1-x86_64.pkg.tar.zst` |
 
-The packages install `/usr/local/bin/kairosapp`, `/opt/kairosapp/KairosApp` and the debugger library `/usr/local/lib/kairosapp/dap.so`. Then:
+The packages install `/usr/local/bin/kairos`, `/opt/kairos/kairos`, the debugger library `/usr/local/lib/kairos/dap.so` and the VM `/usr/local/lib/kairos/libvm.so` (they replace the old `kairosapp` package). Then:
 
 ```bash
-kairosapp program.kairos
+kairos program.kairos
 ```
 
 To build a package locally use `packaging/linux/build-deb.sh`, `build-rpm.sh` or `build-arch.sh` (details in `packaging/linux/README.md`). Pushing a tag `vX.Y.Z` builds all three and attaches them to the release.
@@ -98,7 +98,7 @@ To build a package locally use `packaging/linux/build-deb.sh`, `build-rpm.sh` or
 | `make test` | runs `tests/`, `examples/` and `lossless/` (5 s timeout each; `KAIROS_EXCLUDE` in the makefile excludes files) |
 | `make test-error` | every program in `test_error/` must stop with its tagged error (`*_ok.kairos` must run) |
 | `make test-dap` | debugger smoke test (step, step back, streamed output) |
-| `make release-app` | standalone app `build/dist/KairosApp` (PyInstaller) |
+| `make release-app` | standalone app `build/dist/kairos` (PyInstaller) |
 | `make install-deps` / `make check-system` | venv and dependencies / system requirements check |
 | `make clean` | removes build artefacts |
 
@@ -403,5 +403,5 @@ Diagnostics are printed in Italian.
 
 ## Debugger and VS Code
 
-- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter: a completed call or `par` is undone as a whole with its inverse, and a `show` is undone by printing again (it is its own inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, inside the branches of a running `par`, or while stopped inside an `uncall` in progress, is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairosapp`, `kairos.libPath = /usr/local/lib/kairosapp/dap.so`.
+- **Debugger extension**: [kairos-vscode-debugger](https://github.com/nicologiuliani6/kairos-vscode-debugger), with forward and backward stepping (`Step Back`, `Reverse Continue`). A step back runs the inverse of the previous instruction inside the interpreter: a completed call or `par` is undone as a whole with its inverse, and a `show` is undone by printing again (it is its own inverse); the debugger keeps only the trace of positions, no data. Stepping back from the start of a procedure into its caller, inside the branches of a running `par`, or while stopped inside an `uncall` in progress, is not supported and is reported. With the package installed: `kairos.appPath = /usr/local/bin/kairos`, `kairos.libPath = /usr/local/lib/kairos/dap.so`.
 - **Standalone app**: `make release-app`.

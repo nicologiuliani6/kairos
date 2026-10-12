@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PKG_NAME="${PKG_NAME:-kairosapp}"
+PKG_NAME="${PKG_NAME:-kairos}"
 PKG_REL="${PKG_REL:-1}"
 MAINTAINER="${MAINTAINER:-Nicolo Giuliani <nicolo.giuliani6@studio.unibo.it>}"
-DESCRIPTION="${DESCRIPTION:-KairosApp with dap shared library}"
+DESCRIPTION="${DESCRIPTION:-Kairos, reversible concurrent language: compiler, VM and debugger library}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
@@ -58,8 +58,9 @@ if [[ -z "${PKG_VERSION:-}" ]]; then
   BUMP_VERSION_FILE=1
 fi
 
-APP_SRC="${PROJECT_ROOT}/build/dist/KairosApp"
+APP_SRC="${PROJECT_ROOT}/build/dist/kairos"
 DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
+VM_SRC="${PROJECT_ROOT}/build/libvm.so"
 
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
@@ -87,20 +88,25 @@ pkgdesc="${DESCRIPTION}"
 arch=('x86_64' 'aarch64')
 license=('custom')
 depends=('glibc')
+provides=('kairosapp')
+conflicts=('kairosapp')
+replaces=('kairosapp')
 options=('!debug' '!strip')
 source=()
 sha256sums=()
 pkgdir_ref="${ARCH_BUILD_DIR}/pkgdir"
 app_src="${APP_SRC}"
 dap_src="${DAP_SRC}"
+vm_src="${VM_SRC}"
 
 package() {
-  install -d "\${pkgdir}/opt/kairosapp"
-  install -d "\${pkgdir}/usr/local/lib/kairosapp"
+  install -d "\${pkgdir}/opt/kairos"
+  install -d "\${pkgdir}/usr/local/lib/kairos"
   install -d "\${pkgdir}/usr/local/bin"
-  install -m 755 "\${app_src}" "\${pkgdir}/opt/kairosapp/KairosApp"
-  install -m 644 "\${dap_src}" "\${pkgdir}/usr/local/lib/kairosapp/dap.so"
-  ln -sf /opt/kairosapp/KairosApp "\${pkgdir}/usr/local/bin/kairosapp"
+  install -m 755 "\${app_src}" "\${pkgdir}/opt/kairos/kairos"
+  install -m 644 "\${dap_src}" "\${pkgdir}/usr/local/lib/kairos/dap.so"
+  install -m 644 "\${vm_src}" "\${pkgdir}/usr/local/lib/kairos/libvm.so"
+  ln -sf /opt/kairos/kairos "\${pkgdir}/usr/local/bin/kairos"
 }
 EOF
 

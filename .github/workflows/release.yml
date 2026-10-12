@@ -1,4 +1,4 @@
-# Builds the Linux packages of KairosApp and attaches them to a GitHub release.
+# Builds the Linux packages of Kairos and attaches them to a GitHub release.
 # Runs when a tag vX.Y.Z is pushed (or by hand, giving the tag).
 name: release
 

@@ -165,17 +165,17 @@ test-error: build-release
 
 # PyInstaller standalone app (rinominato da `release` per non confondersi con la build libvm).
 release-app: release check-pyinstaller
-	@echo "$(CYAN)Build KairosApp standalone (PyInstaller)...$(RESET)"
+	@echo "$(CYAN)Build kairos standalone (PyInstaller)...$(RESET)"
 	@mkdir -p $(DIST_DIR)
 	$(PYINSTALLER) --onefile \
 		--log-level ERROR \
 		--distpath $(DIST_DIR) \
 		--workpath build/pyinstaller-work \
 		--specpath build \
-		--name KairosApp \
+		--name kairos \
 		--add-binary "$(abspath $(LIBVM)):." \
 		$(SRC_DIR)/kairos.py
-	@echo "$(GREEN)KairosApp OK: $(DIST_DIR)$(RESET)"
+	@echo "$(GREEN)kairos OK: $(DIST_DIR)$(RESET)"
 
 # Requisiti di SISTEMA, da avere prima di tutto il resto (si installano con il
 # gestore pacchetti; es. Debian/Ubuntu: sudo apt install build-essential python3 python3-venv).
@@ -235,7 +235,7 @@ help:
 	@echo "  $(GREEN)make run FILE=<f.kairos>$(RESET)       Esegue un singolo programma Kairos (FILE=... attaccato, no spazi)"
 	@echo "  $(GREEN)make test$(RESET)                     tests/*.kairos + examples/ + lossless/"
 	@echo "  $(GREEN)make test-error$(RESET)               test_error/: ogni programma si ferma con il suo errore"
-	@echo "  $(GREEN)make release-app$(RESET)              Build KairosApp standalone con PyInstaller"
+	@echo "  $(GREEN)make release-app$(RESET)              Build kairos standalone con PyInstaller"
 	@echo "  $(GREEN)make check-system$(RESET)             Controlla i requisiti di sistema (gcc, make, python3-venv)"
 	@echo "  $(GREEN)make install-deps$(RESET)             Controlla i requisiti, crea il venv e installa le dipendenze"
 	@echo "  $(GREEN)make clean$(RESET)                    Rimuove artefatti generati"

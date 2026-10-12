@@ -6,7 +6,7 @@
             "request": "launch",
             "name": "Debug Kairos",
             "program": "${file}",
-            "kairosApp": "/home/nico/Desktop/kairos/build/dist/KairosApp",
+            "kairosApp": "/home/nico/Desktop/kairos/build/dist/kairos",
             "kairosLib": "/home/nico/Desktop/kairos/build/libvm_dap.so",
             "stopOnEntry": false
         }

@@ -54,7 +54,7 @@ if __name__ == '__main__':
         pass
 
     if len(sys.argv) < 2:
-        print("Uso: python Kairos.py <file> [--dump-bytecode] [--dap] [--vm-stats]")
+        print("Uso: kairos <file> [--dump-bytecode] [--dap] [--vm-stats]")
         sys.exit(1)
 
     dap_mode = "--dap" in sys.argv
@@ -103,7 +103,7 @@ if __name__ == '__main__':
         lib_path = os.path.join(build_dir, 'libvm.so')
 
     if not os.path.exists(lib_path):
-        lib_path = '/opt/kairosapp/libvm.so'
+        lib_path = '/usr/local/lib/kairos/libvm.so'
 
     if not os.path.exists(lib_path):
         print("Errore: libreria non trovata in nessun percorso.")

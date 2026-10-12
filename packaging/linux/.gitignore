@@ -1,5 +1,8 @@
 .build/
+kairos_*.deb
+kairos-*.rpm
+kairos-*.pkg.tar.zst
+VERSION
 kairosapp_*.deb
 kairosapp-*.rpm
 kairosapp-*.pkg.tar.zst
-VERSION

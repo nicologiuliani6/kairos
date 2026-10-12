@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PKG_NAME="${PKG_NAME:-kairosapp}"
+PKG_NAME="${PKG_NAME:-kairos}"
 PKG_ARCH="${PKG_ARCH:-$(uname -m)}"
 RPM_RELEASE="${RPM_RELEASE:-1}"
 MAINTAINER="${MAINTAINER:-Nicolo Giuliani <nicolo.giuliani6@studio.unibo.it>}"
-DESCRIPTION="${DESCRIPTION:-KairosApp with dap shared library}"
+DESCRIPTION="${DESCRIPTION:-Kairos, reversible concurrent language: compiler, VM and debugger library}"
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
@@ -59,8 +59,9 @@ if [[ -z "${PKG_VERSION:-}" ]]; then
   BUMP_VERSION_FILE=1
 fi
 
-APP_SRC="${PROJECT_ROOT}/build/dist/KairosApp"
+APP_SRC="${PROJECT_ROOT}/build/dist/kairos"
 DAP_SRC="${PROJECT_ROOT}/build/libvm_dap.so"
+VM_SRC="${PROJECT_ROOT}/build/libvm.so"
 
 echo "Project root: ${PROJECT_ROOT}"
 echo "Version bump: ${CURRENT_VERSION} -> ${PKG_VERSION}"
@@ -89,21 +90,24 @@ Summary:        ${DESCRIPTION}
 License:        Proprietary
 BuildArch:      ${PKG_ARCH}
 Requires:       glibc
+Provides:       kairosapp = %{version}-%{release}
+Obsoletes:      kairosapp < %{version}-%{release}
 
 %description
 ${DESCRIPTION}
 
 %install
-mkdir -p %{buildroot}/opt/kairosapp
-mkdir -p %{buildroot}/usr/local/lib/kairosapp
+mkdir -p %{buildroot}/opt/kairos
+mkdir -p %{buildroot}/usr/local/lib/kairos
 mkdir -p %{buildroot}/usr/local/bin
-install -m 755 ${APP_SRC} %{buildroot}/opt/kairosapp/KairosApp
-install -m 644 ${DAP_SRC} %{buildroot}/usr/local/lib/kairosapp/dap.so
-ln -sf /opt/kairosapp/KairosApp %{buildroot}/usr/local/bin/kairosapp
+install -m 755 ${APP_SRC} %{buildroot}/opt/kairos/kairos
+install -m 644 ${DAP_SRC} %{buildroot}/usr/local/lib/kairos/dap.so
+install -m 644 ${VM_SRC} %{buildroot}/usr/local/lib/kairos/libvm.so
+ln -sf /opt/kairos/kairos %{buildroot}/usr/local/bin/kairos
 
 %post
-if [ ! -f /etc/ld.so.conf.d/kairosapp.conf ]; then
-  echo "/usr/local/lib/kairosapp" > /etc/ld.so.conf.d/kairosapp.conf
+if [ ! -f /etc/ld.so.conf.d/kairos.conf ]; then
+  echo "/usr/local/lib/kairos" > /etc/ld.so.conf.d/kairos.conf
 fi
 /sbin/ldconfig
 
@@ -112,18 +116,19 @@ fi
 
 %postun
 if [ \$1 -eq 0 ]; then
-  rm -f /etc/ld.so.conf.d/kairosapp.conf
+  rm -f /etc/ld.so.conf.d/kairos.conf
 fi
 /sbin/ldconfig
 
 %files
-/opt/kairosapp/KairosApp
-/usr/local/lib/kairosapp/dap.so
-/usr/local/bin/kairosapp
+/opt/kairos/kairos
+/usr/local/lib/kairos/dap.so
+/usr/local/lib/kairos/libvm.so
+/usr/local/bin/kairos
 
 %changelog
 * Thu Apr 09 2026 ${MAINTAINER} - ${PKG_VERSION}-${RPM_RELEASE}
-- Automated KairosApp RPM package build.
+- Automated kairos RPM package build.
 EOF
 
 rpmbuild --define "_topdir ${RPM_TOPDIR}" -bb "${SPEC_FILE}"
