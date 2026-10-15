@@ -403,7 +403,7 @@ static inline void op_ssend(VM *vm, const char *frame_name)
                 uintptr_t p = (uintptr_t)src->channel;
                 ENC_PUSH(CHANNEL_REF_MARKER);
                 ENC_PUSH((int)(uint32_t)(p & 0xffffffffu));
-                ENC_PUSH((int)(uint32_t)((p >> 32) & 0xffffffffu));
+                ENC_PUSH((int)(uint32_t)(((uint64_t)p >> 32) & 0xffffffffu));
             } else {
                 free(encoded);
                 vm_debug_panic("[VM] SSEND: unlinked parameter\n");
@@ -519,7 +519,7 @@ static inline void op_srecv(VM *vm, const char *frame_name)
             }
             uint32_t lo = (uint32_t)chv->channel->buf[read_idx++];
             uint32_t hi = (uint32_t)chv->channel->buf[read_idx++];
-            uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
+            uintptr_t p = (uintptr_t)(((uint64_t)hi << 32) | (uint64_t)lo);
             Channel *shared = (Channel *)p;
             if (dest->T != TYPE_CHANNEL || !shared) {
                 pthread_mutex_unlock(&chv->channel->mtx);
