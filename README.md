@@ -1,5 +1,7 @@
 # Kairos
 
+**Try it now:** [nicologiuliani.site/docs/kairos](https://nicologiuliani.site/docs/kairos/#playground) — write and run Kairos programs in your browser, nothing to install.
+
 Kairos is a **reversible, concurrent** programming language in the [Janus](https://en.wikipedia.org/wiki/Janus_%28time-reversible_computing_programming_language%29) family. Every program runs forwards and backwards: each command has a well-defined inverse, and `uncall` runs a procedure in reverse. Kairos follows Janus one-to-one on the reversible core (assignments, `if … fi`, `from … until`, `local … delocal`, `call`/`uncall`) and adds explicit parallelism (`par … and … rap`), synchronous channels with inferred protocols and channel passing (π-calculus style), stacks, arrays and a `try … rollback … yrt` construct.
 
 The frontend is written in Python (PLY) and produces a textual bytecode; the VM is written in C and interprets it both forwards and backwards.
