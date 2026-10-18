@@ -94,10 +94,10 @@ make run FILE=examples/fib.kairos     # runs a program
 Or directly:
 
 ```bash
-./venv/bin/python -m src.kairos examples/fib.kairos [--dump-bytecode] [--vm-stats]
+./venv/bin/python -m src.kairos examples/fib.kairos [--dump-bytecode] [--vm-stats] [--compiled-uncall]
 ```
 
-`--dump-bytecode` writes the bytecode to `bytecode.txt`; `--vm-stats` (or `KAIROS_VM_STATS=1`) prints how many cells are still alive at the end. After editing the VM's C sources run `make build-release` again, otherwise the old `libvm.so` stays in use (the frontend warns about it on stderr).
+`--dump-bytecode` writes the bytecode to `bytecode.txt`; `--vm-stats` (or `KAIROS_VM_STATS=1`) prints how many cells are still alive at the end; `--compiled-uncall` compiles the inverse of every procedure (see [Procedures](#procedures-call-and-uncall)). After editing the VM's C sources run `make build-release` again, otherwise the old `libvm.so` stays in use (the frontend warns about it on stderr).
 
 ---
 
@@ -256,7 +256,9 @@ procedure main()
     delocal int a = 0
 ```
 
-`uncall p` runs `p` backwards: commands in reverse order, each replaced by its inverse. For **recursive** procedures (mutual recursion included) the frontend compiles the inverse body `p__inv` by induction on the syntax (`inverse.py`): `uncall p` becomes an ordinary forward call to `p__inv`, and the VM does the same when it inverts a `call p` inside another inversion.
+`uncall p` runs `p` backwards: commands in reverse order, each replaced by its inverse. For **recursive** procedures (mutual recursion included) the frontend compiles the inverse body `p__inv` by induction on the syntax (`inverse.py`): `uncall p` becomes an ordinary forward call to `p__inv`, and the VM does the same when it inverts a `call p` inside another inversion. The other procedures are inverted by the VM at run time, at every `uncall`.
+
+With `--compiled-uncall` the frontend compiles `p__inv` for every procedure that uses neither `par` nor channels, directly or through the procedures it calls, and every `uncall p` becomes a call to `p__inv`. The result is the same; the program is faster when it uncalls often (the inverse is not rebuilt at every call), but the inverse is fixed at compile time.
 
 ### `if … fi`
 
