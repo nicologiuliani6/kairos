@@ -327,7 +327,32 @@ static __thread int g_inversion_depth = 0;
 extern pthread_mutex_t var_indexer_mtx;
 extern CharIdMap       FrameIndexer;
 
+/* strtok_r di glibc con i due insiemi di separatori che la VM usa quasi sempre
+ * scritti in linea: " \t" (i campi di un'istruzione) e "" (il resto della
+ * riga). Stessa semantica, passo per passo; ogni altro insieme va a strtok_r. */
+static inline char *vm_strtok_r(char *s, const char *delim, char **save)
+{
+    if (delim[0] == ' ' && delim[1] == '\t' && delim[2] == '\0') {
+        if (s == NULL) s = *save;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '\0') { *save = s; return NULL; }
+        char *e = s;
+        while (*e && *e != ' ' && *e != '\t') e++;
+        if (*e == '\0') { *save = e; return s; }
+        *e = '\0';
+        *save = e + 1;
+        return s;
+    }
+    if (delim[0] == '\0') {
+        if (s == NULL) s = *save;
+        if (*s == '\0') { *save = s; return NULL; }
+        *save = s + strlen(s);
+        return s;
+    }
+    return strtok_r(s, delim, save);
+}
+
 #undef  strtok
-#define strtok(str, delim) strtok_r((str), (delim), &strtok_saveptr)
+#define strtok(str, delim) vm_strtok_r((str), (delim), &strtok_saveptr)
 
 #endif /* VM_TYPES_H */

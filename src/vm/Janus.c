@@ -147,6 +147,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         char *nl;
         int opc = -1;
         const char *argp = NULL;
+        uint krow = UINT_MAX;
         const char *ib = g_line_index.base;
         if (ib && ptr >= ib && ptr < ib + g_line_index.len) {
             size_t q = (size_t)(ptr - ib);
@@ -156,10 +157,55 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                 nl = g_line_index.fine[k] == SIZE_MAX ? NULL : (char *)ib + g_line_index.fine[k];
                 argp = ib + g_line_index.arg[k];
                 kk = k + 1;
+                krow = k;
             } else nl = strchr(ptr, '\n');
         } else nl = strchr(ptr, '\n');
         if (!nl) break;
         if (opc == OPC_VUOTA) { ptr = nl + 1; continue; }
+        /* PROC e PARAM qui non fanno nulla (niente debugger, niente
+         * statistiche): si saltano senza copiare la riga. */
+        if (opc == OPC_PARAM || opc == OPC_PROC) { ptr = nl + 1; continue; }
+        /* Riga decodificata (vm_dec.h): niente copia e niente strtok. */
+        if (krow != UINT_MAX && vm_dec_ammessa(opc)) {
+            VmDec *d = vm_dec_riga(krow);
+            if (d) {
+                if (vm->dbg && vm->dbg->initialized) {
+                    VM_LINE_DUP(raw, ptr, nl);    /* riga intatta, per il debugger */
+                    int can = (g_run_bt_depth == 1 && !current_thread_args);
+                    int back = dbg_hook(vm->dbg, extract_srcline(raw), fname, raw, can);
+                    if (vm->dbg->mode == VM_MODE_DONE && g_inversion_depth == 0) goto done;
+                    if (back) {
+                        ptr = dbg_step_back_here(vm, orig, fname, ptr,
+                                                 cs_top >= 0 ? cs[cs_top].hist_at_call : -1);
+                        continue;
+                    }
+                }
+                vm_stats_sample(vm);
+                switch (opc) {
+                case OPC_PUSHEQ:  vm_x_pusheq (vm, fname, cur_fi, d); break;
+                case OPC_MINEQ:   vm_x_mineq  (vm, fname, cur_fi, d); break;
+                case OPC_XOREQ:   vm_x_xoreq  (vm, fname, cur_fi, d); break;
+                case OPC_SWAP:    vm_x_swap   (vm, fname, cur_fi, d); break;
+                case OPC_PUSH:    vm_x_push   (vm, fname, cur_fi, d); break;
+                case OPC_POP:     vm_x_pop    (vm, fname, cur_fi, d); break;
+                case OPC_EVAL:    vm_x_eval   (vm, fname, cur_fi, d); break;
+                case OPC_ASSERT:  vm_x_assert (vm, fname, cur_fi, d); break;
+                case OPC_LOCAL:   vm_x_local  (vm, fname, cur_fi, d); break;
+                case OPC_DELOCAL: vm_x_delocal(vm, fname, cur_fi, d); break;
+                case OPC_LABEL:   vm_x_label  (vm, fname, cur_fi, orig, d); break;
+                case OPC_JMPF: {
+                    char *np = vm_x_jmpf(vm, fname, cur_fi, orig, d);
+                    ptr = np ? np : nl + 1;
+                    continue;
+                }
+                case OPC_JMP:
+                    ptr = vm_x_jmp(vm, fname, cur_fi, orig, d);
+                    continue;
+                }
+                ptr = nl + 1;
+                continue;
+            }
+        }
         /* le righe rare (istruzione sconosciuta, THREAD_, PAR_END) come prima,
          * perche' i loro messaggi citano la parola */
         const char *copia_da = (opc > OPC_UNKNOWN && opc != OPC_THREAD && opc != OPC_PAR_END &&
@@ -240,8 +286,18 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
              * della call esterna non vengono liberati dal delocal di quella
              * interna. In un ramo di par le attivazioni si contano sul frame
              * del thread, che e' solo suo. */
-            uint base_fi_pn = current_thread_args ? clone_frame_for_thread(vm, pn)
-                                                  : char_id_map_get(&FrameIndexer, pn);
+            /* Riga gia' vista (vm_call_cache, vm_helpers.h): indice del frame base
+             * del chiamato e, piu' sotto, degli argomenti. */
+            VmCallSlot *cc = (copia_da == argp && argp) ? vm_call_cache(ptr) : NULL;
+            uint base_fi_pn;
+            if (current_thread_args)
+                base_fi_pn = clone_frame_for_thread(vm, pn);
+            else if (cc && cc->base_ok && cc->run == g_vm_run_id)
+                base_fi_pn = cc->base_fi;
+            else {
+                base_fi_pn = char_id_map_get(&FrameIndexer, pn);
+                if (cc) { cc->base_fi = base_fi_pn; cc->base_ok = 1; }
+            }
             int  reentrant  = !is_rec && vm->frames[base_fi_pn]->active > 0;
             int  reent_depth = reentrant ? vm->frames[base_fi_pn]->active + 1 : 0;
             uint cfi;
@@ -277,16 +333,36 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             }
             for (int k = 0; k < pc; k++) cs[cs_top].saved_params[k] = vm->frames[cfi]->vars[pi[k]];
             char *p = NULL; int ii = 0;
-            while ((p = strtok(NULL, " \t")) && ii < pc) {
-                if (!char_id_map_exists(&vm->frames[cfi_cur]->VarIndexer, p))
-                    { vm_debug_panic("[VM] CALL: '%s' not defined\n", p);}
-                int src = char_id_map_get(&vm->frames[cfi_cur]->VarIndexer, p);
-                if (!vm->frames[cfi_cur]->vars[src])
-                    { vm_debug_panic("[VM] CALL: '%s' NULL\n", p);}
-                vm->frames[cfi]->vars[pi[ii++]] = vm->frames[cfi_cur]->vars[src];
-            }
-            if (ii != pc) { 
-                vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn); 
+            if (cc && cc->run == g_vm_run_id && cc->fi == cfi_cur &&
+                cc->gen == vm->frames[cfi_cur]->gen && cc->pc == pc) {
+                for (; ii < pc; ii++) {
+                    Var *src = vm->frames[cfi_cur]->vars[cc->idx[ii]];
+                    if (!src) { vm_debug_panic("[VM] CALL: '%s' NULL\n", cc->nomi[ii]); }
+                    vm->frames[cfi]->vars[pi[ii]] = src;
+                }
+            } else {
+                int  *idx  = (cc && pc > 0) ? (int *)malloc(sizeof(int) * (size_t)pc) : NULL;
+                char **nm  = (cc && pc > 0) ? (char **)calloc((size_t)pc, sizeof(char *)) : NULL;
+                while ((p = strtok(NULL, " \t")) && ii < pc) {
+                    if (!char_id_map_exists(&vm->frames[cfi_cur]->VarIndexer, p))
+                        { vm_debug_panic("[VM] CALL: '%s' not defined\n", p);}
+                    int src = char_id_map_get(&vm->frames[cfi_cur]->VarIndexer, p);
+                    if (!vm->frames[cfi_cur]->vars[src])
+                        { vm_debug_panic("[VM] CALL: '%s' NULL\n", p);}
+                    if (idx && nm) { idx[ii] = src; nm[ii] = char_id_strdup(p); }
+                    vm->frames[cfi]->vars[pi[ii++]] = vm->frames[cfi_cur]->vars[src];
+                }
+                if (ii != pc) {
+                    vm_debug_panic("ERROR: params mismatch UNCALL '%s'\n", pn);
+                }
+                if (cc && (pc == 0 || (idx && nm))) {
+                    vm_call_slot_svuota(cc);
+                    cc->idx = idx; cc->nomi = nm; cc->pc = pc;
+                    cc->fi = cfi_cur; cc->gen = vm->frames[cfi_cur]->gen; cc->run = g_vm_run_id;
+                } else {
+                    if (nm) for (int k = 0; k < pc; k++) free(nm[k]);
+                    free(nm); free(idx);
+                }
             }
             if (is_rec) {
                 vm->frames[cfi]->recursion_depth = new_depth;
@@ -727,6 +803,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm_if_free_branch_stack();    /* vettori __thread del thread chiamante */
     vm_invert_free_cache();
     vm_cexpr_free_cache();
+    vm_dec_free_cache();
 }
 
 void vm_run_from_string(const char *bytecode)

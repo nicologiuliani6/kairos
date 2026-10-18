@@ -365,6 +365,7 @@ thread_exit:
     vm_if_free_branch_stack();   /* vettori __thread di questo thread */
     vm_invert_free_cache();
     vm_cexpr_free_cache();
+    vm_dec_free_cache();
     /* Sveglia sender pendente prima di terminare */
     if (args->sender_to_notify) {
         ThreadArgs *s = args->sender_to_notify;

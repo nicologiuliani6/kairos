@@ -580,26 +580,36 @@ static inline void var_stack_push(Var *v, int64_t val)
  *  alloc_var — usata da op_local e vm_exec
  * ====================================================================== */
 
-static inline void alloc_var(Var *v, const char *type, const char *name)
+/* Tipo di una dichiarazione: TYPE_*, -1 se sconosciuto. */
+static inline int vm_tipo_cod(const char *type)
+{
+    if (strcmp(type, "int") == 0)     return TYPE_INT;
+    if (strcmp(type, "stack") == 0)   return TYPE_STACK;
+    if (strcmp(type, "array") == 0)   return TYPE_ARRAY;
+    if (strcmp(type, "channel") == 0) return TYPE_CHANNEL;
+    return -1;
+}
+
+static inline void alloc_var_tipo(Var *v, int T, const char *name)
 {
     memset(v, 0, sizeof(Var));
     v->name     = char_id_strdup(name);
     v->is_local = 1;
 
-    if (strcmp(type, "int") == 0) {
+    if (T == TYPE_INT) {
         v->T     = TYPE_INT;
         v->value = calloc(1, sizeof(int64_t));
-    } else if (strcmp(type, "stack") == 0) {
+    } else if (T == TYPE_STACK) {
         v->T         = TYPE_STACK;
         v->stack_len = 0;
         v->stack_cap = 0;
         var_stack_reserve(v, VAR_STACK_INIT_CAP);   /* cresce con i push */
-    } else if (strcmp(type, "array") == 0) {
+    } else if (T == TYPE_ARRAY) {
         /* Le celle le alloca op_local, che conosce la lunghezza. */
         v->T         = TYPE_ARRAY;
         v->stack_len = 0;
         v->value     = NULL;
-    } else if (strcmp(type, "channel") == 0) {
+    } else if (T == TYPE_CHANNEL) {
         v->T         = TYPE_CHANNEL;
         v->stack_len = 0;
         v->value     = NULL;
@@ -611,6 +621,11 @@ static inline void alloc_var(Var *v, const char *type, const char *name)
     } else {
         vm_debug_panic("[VM] unsupported type\n");
     }
+}
+
+static inline void alloc_var(Var *v, const char *type, const char *name)
+{
+    alloc_var_tipo(v, vm_tipo_cod(type), name);
 }
 
 
@@ -851,22 +866,30 @@ static inline CNode *cn_cerca(CTab *t, const char *testo, int luogo)
             pt->run = g_vm_run_id;
         }
         const char *key = tl_riga_orig + (testo - tl_riga_copia);
-        size_t len = strlen(testo);
         if (pt->s) {
+            /* Un testo che comincia a un dato indirizzo della riga e' sempre lo
+             * stesso campo (la riga si divide sempre allo stesso modo): basta
+             * controllare che finisca dove finiva. */
             uint32_t i = cp_hash(key) & pt->mask;
             while (pt->s[i].key) {
-                if (pt->s[i].key == key && pt->s[i].len == len) return pt->s[i].n;
+                if (pt->s[i].key == key) {
+                    size_t l = pt->s[i].len;
+                    if (testo + l <= tl_riga_fine && testo[l] == '\0' && (l == 0 || testo[l - 1]))
+                        return pt->s[i].n;
+                    break;
+                }
                 i = (i + 1) & pt->mask;
             }
         }
+        size_t len = strlen(testo);
         CNode *n = cn_cerca_testo(t, testo, luogo);
         if (!pt->s || 2 * (pt->count + 1) > pt->mask + 1) cp_tab_cresci(pt);
         uint32_t i = cp_hash(key) & pt->mask;
-        while (pt->s[i].key) i = (i + 1) & pt->mask;
+        while (pt->s[i].key && pt->s[i].key != key) i = (i + 1) & pt->mask;
+        if (!pt->s[i].key) pt->count++;
         pt->s[i].key = key;
         pt->s[i].len = len;
         pt->s[i].n = n;
-        pt->count++;
         return n;
     }
     return cn_cerca_testo(t, testo, luogo);
@@ -885,9 +908,75 @@ static void cn_tab_libera(CTab *t)
     memset(t, 0, sizeof *t);
 }
 
+/* --- argomenti di una CALL, per riga --- */
+
+/* Una riga CALL del programma (per indirizzo): con quale frame chiamante
+ * (indice, gen) e in quale esecuzione si sono trovati gli indici dei suoi
+ * argomenti, e quali. La tabella dei nomi di un frame cresce soltanto: con
+ * lo stesso frame gli stessi nomi hanno gli stessi indici. */
+typedef struct {
+    const char *riga;
+    unsigned    run, gen;
+    uint        fi, base_fi;
+    int         base_ok;
+    int         pc;
+    int        *idx;
+    char      **nomi;
+} VmCallSlot;
+typedef struct { VmCallSlot *s; uint32_t mask, count; unsigned run; } VmCallTab;
+static __thread VmCallTab tl_call_tab;
+
+static void vm_call_slot_svuota(VmCallSlot *c)
+{
+    for (int k = 0; c->nomi && k < c->pc; k++) free(c->nomi[k]);
+    free(c->nomi);
+    free(c->idx);
+    c->nomi = NULL; c->idx = NULL; c->pc = -1;
+}
+
+static void vm_call_tab_libera(VmCallTab *t)
+{
+    if (t->s)
+        for (uint32_t i = 0; i <= t->mask; i++)
+            if (t->s[i].riga) vm_call_slot_svuota(&t->s[i]);
+    free(t->s);
+    memset(t, 0, sizeof *t);
+}
+
+static inline VmCallSlot *vm_call_cache(const char *riga)
+{
+    VmCallTab *t = &tl_call_tab;
+    if (t->run != g_vm_run_id) { vm_call_tab_libera(t); t->run = g_vm_run_id; }
+    if (!t->s || 2 * (t->count + 1) > t->mask + 1) {
+        uint32_t nc = t->s ? (t->mask + 1) * 2 : 256;
+        VmCallSlot *ns = (VmCallSlot *)calloc(nc, sizeof(VmCallSlot));
+        if (!ns) return NULL;
+        if (t->s) {
+            for (uint32_t i = 0; i <= t->mask; i++) {
+                if (!t->s[i].riga) continue;
+                uint32_t j = cp_hash(t->s[i].riga) & (nc - 1);
+                while (ns[j].riga) j = (j + 1) & (nc - 1);
+                ns[j] = t->s[i];
+            }
+            free(t->s);
+        }
+        t->s = ns; t->mask = nc - 1;
+    }
+    uint32_t i = cp_hash(riga) & t->mask;
+    while (t->s[i].riga && t->s[i].riga != riga) i = (i + 1) & t->mask;
+    if (!t->s[i].riga) {
+        t->s[i].riga = riga;
+        t->s[i].run = 0;
+        t->s[i].pc = -1;
+        t->count++;
+    }
+    return &t->s[i];
+}
+
 /* Alla fine di un'esecuzione o di un thread di par: le tabelle sono __thread. */
 static inline void vm_cexpr_free_cache(void)
 {
+    vm_call_tab_libera(&tl_call_tab);
     cp_tab_libera(&tl_cp_espr);
     cp_tab_libera(&tl_cp_luogo);
     cn_tab_libera(&tl_cn_espr);
@@ -971,9 +1060,8 @@ static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
 }
 
 /* Luogo di un assegnamento: una variabile int o una cella di array. */
-static inline int64_t *lvalue_ptr(VM *vm, uint fi, const char *id, Var **vout, const char *op)
+static inline int64_t *lvalue_ptr_nodo(VM *vm, uint fi, CNode *n, Var **vout, const char *op)
 {
-    CNode *n = cn_cerca(&tl_cn_luogo, id, 1);
     if (n->k != CN_VAR)
         return cn_cella(vm, fi, n, vout, op);
     int idx = cn_indice(vm, fi, n);
@@ -985,6 +1073,11 @@ static inline int64_t *lvalue_ptr(VM *vm, uint fi, const char *id, Var **vout, c
     if (v->T != TYPE_INT) vm_debug_panic("[VM] %s on a non-int\n", op);
     *vout = v;
     return v->value;
+}
+
+static inline int64_t *lvalue_ptr(VM *vm, uint fi, const char *id, Var **vout, const char *op)
+{
+    return lvalue_ptr_nodo(vm, fi, cn_cerca(&tl_cn_luogo, id, 1), vout, op);
 }
 
 #endif /* VM_HELPERS_H */

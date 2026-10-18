@@ -831,7 +831,13 @@ static inline int loop_entry_guard(VM *vm, const char *fname, char *buf, const c
     if (!fw || strcmp(fw, "EVAL") != 0)
         vm_debug_panic("[VM] FROM: entry guard of loop %s not found\n", uid);
     uint saved = thread_val_IF;
+    /* La copia e' quella di una riga del programma, divisa come la divide
+     * op_eval: la si pubblica come riga corrente (cn_cerca, vm_helpers.h), e
+     * le sue espressioni si ritrovano dall'indirizzo invece che dall'hash. */
+    const char *rc = tl_riga_copia, *rf = tl_riga_fine, *ro = tl_riga_orig;
+    tl_riga_copia = line; tl_riga_fine = line + line_len; tl_riga_orig = ln;
     op_eval(vm, fname);
+    tl_riga_copia = rc; tl_riga_fine = rf; tl_riga_orig = ro;
     int b1 = thread_val_IF ? 1 : 0;
     thread_val_IF = saved;
     return b1;
@@ -1083,5 +1089,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
 }
 
+
+#include "vm_dec.h"   /* righe decodificate: usa le op_* qui sopra */
 
 #endif /* VM_OPS_H */
