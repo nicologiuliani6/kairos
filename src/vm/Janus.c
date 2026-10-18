@@ -108,14 +108,14 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         int    hist_at_call;  /* debugger: indice nella storia della riga CALL */
     } CallRecord;
     /* Call stack dinamico: cresce on-demand (raddoppia). Nessun hard cap.
-     * Gli slot nuovi sono azzerati: i loro buffer partono vuoti. */
-    uint cs_cap = 64;
-    CallRecord *cs = calloc(cs_cap, sizeof(CallRecord));
-    if (!cs) vm_debug_panic("[VM] call stack: out of memory\n");
+     * Gli slot nuovi sono azzerati: i loro buffer partono vuoti. Si alloca
+     * alla prima CALL: molte esecuzioni annidate (le uncall) non ne fanno. */
+    uint cs_cap = 0;
+    CallRecord *cs = NULL;
     int cs_top = -1;
 #define VM_CS_ENSURE(needed) do { \
     if ((uint)(needed) >= cs_cap) { \
-        uint _nc = cs_cap; while (_nc <= (uint)(needed)) _nc *= 2; \
+        uint _nc = cs_cap ? cs_cap : 16; while (_nc <= (uint)(needed)) _nc *= 2; \
         CallRecord *_nb = (CallRecord *)realloc(cs, sizeof(CallRecord) * _nc); \
         if (!_nb) vm_debug_panic("[VM] CALL: realloc(%u) failed\n", _nc); \
         memset(_nb + cs_cap, 0, sizeof(CallRecord) * (_nc - cs_cap)); \

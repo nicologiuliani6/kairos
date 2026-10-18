@@ -58,8 +58,9 @@ static inline int vm_cmp(int c, int64_t l, int64_t r)
 
 /* Un nome da cercare in una tabella del frame (variabili o etichette), con
  * l'esito dell'ultima ricerca. Le tabelle crescono soltanto: un indice
- * trovato vale finche' il frame resta lo stesso (fi e gen), un'assenza
- * finche' la tabella non ha voci nuove. */
+ * trovato vale finche' il frame resta lo stesso, un'assenza finche' la
+ * tabella non ha voci nuove. Il gen del frame (unico nel processo, mai 0 per
+ * un frame inizializzato) identifica il frame e la sua inizializzazione. */
 typedef struct {
     const char *s;
     uint32_t    h;
@@ -82,7 +83,7 @@ static inline int vm_nome_cerca(VM *vm, uint fi, VmNome *n, int etichetta)
 {
     Frame *f = vm->frames[fi];
     CharIdMap *m = etichetta ? &f->LabelIndexer : &f->VarIndexer;
-    if (n->run == g_vm_run_id && n->fi == fi && n->gen == f->gen) {
+    if (n->gen == f->gen && n->gen) {
         if (n->idx >= 0) return n->idx;
         if (n->count == __atomic_load_n(&m->count, __ATOMIC_ACQUIRE)) return -1;
     }
@@ -324,7 +325,7 @@ static inline void vm_x_pusheq(VM *vm, const char *fname, uint fi, VmDec *d)
     Var *v;
     int64_t *cell = lvalue_ptr_f(vm->frames[fi], d->a, &v, "PUSHEQ");
     var_par_mut_acquire(v);
-    *cell = (int64_t)((uint64_t)*cell + (uint64_t)cn_valuta_f(vm->frames[fi], d->b));
+    *cell = (int64_t)((uint64_t)*cell + (uint64_t)cn_val(vm->frames[fi], d->b));
     var_par_mut_release(v);
 }
 
@@ -336,7 +337,7 @@ static inline void vm_x_mineq(VM *vm, const char *fname, uint fi, VmDec *d)
     if (d->stesso)
         vm_debug_panic("[VM] MINEQ: `%s -= %s` is not reversible (it loses information)\n", d->t1, d->t2);
     var_par_mut_acquire(v);
-    *cell = (int64_t)((uint64_t)*cell - (uint64_t)cn_valuta_f(vm->frames[fi], d->b));
+    *cell = (int64_t)((uint64_t)*cell - (uint64_t)cn_val(vm->frames[fi], d->b));
     var_par_mut_release(v);
 }
 
@@ -348,7 +349,7 @@ static inline void vm_x_xoreq(VM *vm, const char *fname, uint fi, VmDec *d)
     if (d->stesso)
         vm_debug_panic("[VM] XOREQ: `%s ^= %s` is not reversible (it loses information)\n", d->t1, d->t2);
     var_par_mut_acquire(v);
-    *cell ^= cn_valuta_f(vm->frames[fi], d->b);
+    *cell ^= cn_val(vm->frames[fi], d->b);
     var_par_mut_release(v);
 }
 
@@ -424,8 +425,8 @@ static inline void vm_x_pop(VM *vm, const char *frame_name, uint fi, VmDec *d)
 static inline void vm_x_eval(VM *vm, const char *fname, uint fi, VmDec *d)
 {
     (void)fname;
-    int64_t lval = cn_valuta_f(vm->frames[fi], d->a);
-    int64_t rval = cn_valuta_f(vm->frames[fi], d->b);
+    int64_t lval = cn_val(vm->frames[fi], d->a);
+    int64_t rval = cn_val(vm->frames[fi], d->b);
     thread_val_IF = vm_cmp(d->cmp, lval, rval);
 }
 
@@ -446,8 +447,8 @@ static inline void vm_x_assert(VM *vm, const char *frame_name, uint fi, VmDec *d
         }
         return;
     }
-    int64_t lval = cn_valuta_f(vm->frames[fi], d->a);
-    int64_t rval = cn_valuta_f(vm->frames[fi], d->b);
+    int64_t lval = cn_val(vm->frames[fi], d->a);
+    int64_t rval = cn_val(vm->frames[fi], d->b);
     if (!vm_cmp(d->cmp, lval, rval))
         vm_debug_panic("[VM] ASSERT failed: %s %s %s\n", d->t1, d->t2, d->t3);
 }
@@ -460,8 +461,7 @@ static inline const char *vm_x_guardia_riga(VM *vm, uint fi, char *buf, VmDec *d
     Frame *f = vm->frames[fi];
     int cnt = __atomic_load_n(&f->LabelIndexer.count, __ATOMIC_ACQUIRE);
     VmSalto *s = &d->g;
-    if (s->dest && s->run == g_vm_run_id && s->fi == fi && s->gen == f->gen &&
-        s->buf == buf && s->count == cnt)
+    if (s->dest && s->gen == f->gen && s->gen && s->buf == buf && s->count == cnt)
         return s->dest;
     uint back = 3;
     int li = vm_nome_cerca(vm, fi, &d->back, 1);
@@ -514,8 +514,8 @@ static inline void vm_x_label(VM *vm, const char *fname, uint fi, char *buf, VmD
 static inline char *vm_x_salto_noto(VM *vm, uint fi, const char *buf, VmDec *d)
 {
     VmSalto *s = &d->j;
-    if (s->dest && s->run == g_vm_run_id && s->fi == fi && s->gen == vm->frames[fi]->gen &&
-        s->buf == buf)
+    unsigned gen = vm->frames[fi]->gen;
+    if (s->dest && s->gen == gen && gen && s->buf == buf)
         return s->dest;
     return NULL;
 }
@@ -611,7 +611,7 @@ static inline void vm_x_local(VM *vm, const char *frame_name, uint fi, VmDec *d)
         int64_t fill = 0;
         if (c_val) {
             if (vm_nome_cerca(vm, fi, &d->n2, 0) >= 0)
-                fill = cn_valuta_f(vm->frames[fi], d->a);
+                fill = cn_val(vm->frames[fi], d->a);
             else
                 fill = d->num;
         }
@@ -653,7 +653,7 @@ static inline void vm_x_delocal(VM *vm, const char *frame_name, uint fi, VmDec *
     int64_t Vvalue = 0;
     if (c_val) {
         if (vm_nome_cerca(vm, fi, &d->n2, 0) >= 0)
-            Vvalue = cn_valuta_f(vm->frames[fi], d->a);
+            Vvalue = cn_val(vm->frames[fi], d->a);
         else
             Vvalue = d->num;
     }

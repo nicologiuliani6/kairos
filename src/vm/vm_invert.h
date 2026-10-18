@@ -665,13 +665,13 @@ static inline void do_eval(VM *vm, uint fi, const char *id, const char *op,
     Frame *f = vm->frames[fi];
     int64_t lval;
     if (strchr(id, '[') || id[0] == '(') {
-        lval = cn_valuta_f(f, g->id_n);           /* cella di array o espressione */
+        lval = cn_val(f, g->id_n);           /* cella di array o espressione */
     } else {
         int vi = vm_nome_cerca(vm, fi, &g->id_nome, 0);
         if (vi < 0) vi = char_id_map_get(&f->VarIndexer, id);
         lval = *(f->vars[vi]->value);
     }
-    int64_t rval = cn_valuta_f(f, g->val_n);
+    int64_t rval = cn_val(f, g->val_n);
     thread_val_IF = g->cmp != VMC_NO ? vm_cmp(g->cmp, lval, rval) : eval_cond(lval, op, rval);
 }
 
@@ -702,7 +702,7 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
     if (id && (id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))) {
         lval = (int64_t)strtoll(id, NULL, 10);
     } else if (id && (strchr(id, '[') || id[0] == '(')) {
-        lval = cn_valuta_f(f, g->id_n);          /* cella di array o espressione */
+        lval = cn_val(f, g->id_n);          /* cella di array o espressione */
     } else {
         /* Var fuori scope (slot delocal'd ma ancora nell'indexer) → lval=0
          * invece di NULL-deref. Succede invertendo la guardia di un IF il cui
@@ -717,7 +717,7 @@ static inline void do_eval_if_entry(VM *vm, uint fi, const char *id, const char 
         else
             lval = 0;
     }
-    int64_t rval = cn_valuta_f(f, g->val_n);
+    int64_t rval = cn_val(f, g->val_n);
     thread_val_IF = g->cmp != VMC_NO ? vm_cmp(g->cmp, lval, rval) : eval_cond(lval, op, rval);
 }
 
@@ -765,8 +765,8 @@ static inline void check_if_entry_inverse(VM *vm, uint fi,
 
     GuardiaC *g = guardia_c(&d->g_entry, vm_name_get(d->eval_entry_id), d->eval_entry_op,
                             vm_name_get(d->eval_entry_val));
-    int64_t lval = cn_valuta_f(vm->frames[fi], g->id_n);
-    int64_t rval = cn_valuta_f(vm->frames[fi], g->val_n);
+    int64_t lval = cn_val(vm->frames[fi], g->id_n);
+    int64_t rval = cn_val(vm->frames[fi], g->val_n);
     int guardia = (g->cmp != VMC_NO ? vm_cmp(g->cmp, lval, rval)
                                     : eval_cond(lval, d->eval_entry_op, rval)) ? 1 : 0;
     if (guardia != took_then) {
@@ -997,39 +997,77 @@ static inline uint8_t inv_tag_da_opc(int opc)
     return INVOP_UNKNOWN;          /* PROC, riga senza istruzione, sconosciuta */
 }
 
-/* La raccolta dal testo indicizzato: righe (stop, start] fino al primo END_PROC
- * o alla prima riga senza '\n', saltando le righe vuote (il loro numero
- * fisico, atoi, vale 0). Nel testo indicizzato il numero fisico di ogni riga
- * non vuota e' la sua posizione, k + 1. Lo stesso risultato della scansione,
- * senza scorrere il testo. */
-static void inv_righe_indice(uint start, uint stop, InvRighe *r)
+/* Righe [k0, kend) del testo indicizzato (tutte con '\n'), copiate in
+ * un'arena con un '\0' al posto di ogni '\n'. Nel testo indicizzato il
+ * numero fisico (atoi) di una riga non vuota e' la sua posizione, k + 1, e
+ * quello di una riga vuota 0: le righe vuote si saltano, o con con_vuote si
+ * tengono con numero 0, come le tengono le scansioni che le copiano. */
+static void inv_righe_da(uint k0, uint kend, int con_vuote, size_t cap, InvRighe *r)
 {
-    size_t cap = (start > stop) ? (size_t)(start - stop) + 2 : 2;
     memset(r, 0, sizeof *r);
     r->lp = (char **)malloc(sizeof(char *) * cap);
     r->ln = (uint *)malloc(sizeof(uint) * cap);
     r->op = (uint8_t *)malloc(cap);
     if (!r->lp || !r->ln || !r->op) vm_debug_panic("[UNCALL] out of memory\n");
-    uint n = g_line_index.n;
-    if (start <= stop || stop >= n) return;
-    uint k0 = stop, k1 = start < n ? start : n, kend = k1;
-    for (uint k = k0; k < k1; k++)
-        if (g_line_index.fine[k] == SIZE_MAX || g_line_index.op[k] == OPC_END_PROC) { kend = k; break; }
     if (kend <= k0) return;
     size_t a = g_line_index.off[k0], b = g_line_index.fine[kend - 1];
     r->arena = (char *)malloc(b - a + 1);
     if (!r->arena) vm_debug_panic("[UNCALL] arena malloc failed\n");
     memcpy(r->arena, g_line_index.base + a, b - a);
     r->arena[b - a] = '\0';
-    for (uint k = k0; k < kend; k++) {
+    for (uint k = k0; k < kend && (size_t)r->n < cap; k++) {
         size_t o = g_line_index.off[k] - a, f = g_line_index.fine[k] - a;
         r->arena[f] = '\0';
-        if (f == o) continue;
+        if (f == o && !con_vuote) continue;
         r->lp[r->n] = r->arena + o;
-        r->ln[r->n] = k + 1;
+        r->ln[r->n] = f == o ? 0 : k + 1;
         r->op[r->n] = inv_tag_da_opc(g_line_index.op[k]);
         r->n++;
     }
+}
+
+/* La raccolta di invert_op_to_line dal testo indicizzato: righe (stop, start]
+ * fino al primo END_PROC o alla prima riga senza '\n', senza le righe vuote
+ * (numero 0, fuori intervallo). Lo stesso risultato della scansione. */
+static void inv_righe_indice(uint start, uint stop, InvRighe *r)
+{
+    size_t cap = (start > stop) ? (size_t)(start - stop) + 2 : 2;
+    uint n = g_line_index.n;
+    uint k0 = stop, kend = stop;
+    if (start > stop && stop < n) {
+        uint k1 = start < n ? start : n;
+        kend = k1;
+        for (uint k = k0; k < k1; k++)
+            if (g_line_index.fine[k] == SIZE_MAX || g_line_index.op[k] == OPC_END_PROC) { kend = k; break; }
+    }
+    inv_righe_da(k0, kend, 0, cap, r);
+}
+
+/* Le righe di un tratto [from_line, to_line) come le scorre exec_branch_inverse
+ * (e i due controlli sotto): da go_to_line(buf, from_line) finche' il numero
+ * fisico resta sotto to_line (una riga vuota, numero 0, non ferma) e c'e' un
+ * '\n'. Restituisce l'indice di fine, escluso; *k0 quello d'inizio. */
+static inline uint inv_tratto(uint from_line, uint to_line, uint *k0)
+{
+    uint n = g_line_index.n;
+    uint k = from_line ? from_line - 1 : 0;
+    *k0 = k;
+    for (; k < n; k++) {
+        if (g_line_index.fine[k] == SIZE_MAX) break;
+        uint num = g_line_index.fine[k] == g_line_index.off[k] ? 0 : k + 1;
+        if (num >= to_line) break;
+    }
+    return k < n ? k : n;
+}
+
+/* Il primo argomento della riga k comincia con pre (come strtok + strncmp
+ * sulla copia della riga). */
+static inline int inv_arg_inizia(uint k, const char *pre)
+{
+    const char *a = g_line_index.base + g_line_index.arg[k];
+    while (*a == ' ' || *a == '\t') a++;
+    if (*a == '\n' || *a == '\0') return 0;
+    return strncmp(a, pre, strlen(pre)) == 0;
 }
 
 typedef struct {
@@ -1116,32 +1154,10 @@ static void vm_invert_free_cache(void)
 
 
 
-void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
-                       uint start, uint stop, int honor_if_line_skip)
+/* La voce della cache per la procedura base di frame_name, creata la prima
+ * volta: descrittori di cicli, if e par, righe dentro gli if. */
+static int fa_voce(VM *vm, const char *frame_name, char *orig, const char *base, uint fi_reset)
 {
-    //fprintf(stderr, "[INVERT] frame='%s' start=%u stop=%u depth=%d\n", frame_name, start, stop, g_inversion_depth);
-    /* Il bytecode è condiviso in sola lettura: le righe si leggono per copia. */
-    char *orig = buffer;
-    VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
-    g_inversion_depth++;   
-    VM_FRAME_BASE(base, frame_name);
-    uint fi_reset = char_id_map_get(&FrameIndexer, base);
-    /* Svuota tenendo il buffer: lo stack non è stato salvato da nessuno qui. */
-    if (!(g_inv_branch_lo && fi_reset == g_inv_branch_frame))
-        stack_clear(&vm->frames[fi_reset]->LocalVariables);
-
-    /* Per-frame analysis cache. collect_loops/ifs/par_ranges scan ~50KB
-       bytecode per invocation. Molte UNCALL sulle stesse procedure →
-       cache per base name evita N rescan. */
-    /* `ifs` heap-allocato a capacità = righe del frame: una else-if chain
-     * (store a indice runtime su array di N elementi) ha ~N IF annidati.
-     * nifs ≤ righe del frame, quindi la capacità per-frame è un bound esatto e
-     * compatto. Loop e par in vettori che crescono (collect_loops /
-     * collect_par_ranges): nessun numero massimo per procedura. */
-    LoopDescriptor *loops;
-    IfDescriptor   *ifs;
-    ParRange       *pars;
-    int nloops, nifs, npars;
     int _fa_hit = -1;
     for (int _c = 0; _c < _fa_cache_n; _c++) {
         if (!strcmp(_fa_cache[_c].base, base)) { _fa_hit = _c; break; }
@@ -1180,6 +1196,36 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
         _fa_hit = _fa_cache_n;
         _fa_cache[_fa_cache_n++] = e;
     }
+    return _fa_hit;
+}
+
+void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
+                       uint start, uint stop, int honor_if_line_skip)
+{
+    //fprintf(stderr, "[INVERT] frame='%s' start=%u stop=%u depth=%d\n", frame_name, start, stop, g_inversion_depth);
+    /* Il bytecode è condiviso in sola lettura: le righe si leggono per copia. */
+    char *orig = buffer;
+    VMLOG("[INVERT] frame='%s' start=%u stop=%u\n", frame_name, start, stop);
+    g_inversion_depth++;   
+    VM_FRAME_BASE(base, frame_name);
+    uint fi_reset = char_id_map_get(&FrameIndexer, base);
+    /* Svuota tenendo il buffer: lo stack non è stato salvato da nessuno qui. */
+    if (!(g_inv_branch_lo && fi_reset == g_inv_branch_frame))
+        stack_clear(&vm->frames[fi_reset]->LocalVariables);
+
+    /* Per-frame analysis cache. collect_loops/ifs/par_ranges scan ~50KB
+       bytecode per invocation. Molte UNCALL sulle stesse procedure →
+       cache per base name evita N rescan. */
+    /* `ifs` heap-allocato a capacità = righe del frame: una else-if chain
+     * (store a indice runtime su array di N elementi) ha ~N IF annidati.
+     * nifs ≤ righe del frame, quindi la capacità per-frame è un bound esatto e
+     * compatto. Loop e par in vettori che crescono (collect_loops /
+     * collect_par_ranges): nessun numero massimo per procedura. */
+    LoopDescriptor *loops;
+    IfDescriptor   *ifs;
+    ParRange       *pars;
+    int nloops, nifs, npars;
+    int _fa_hit = fa_voce(vm, frame_name, orig, base, fi_reset);
     loops  = _fa_cache[_fa_hit].loops;  nloops = _fa_cache[_fa_hit].nloops;
     ifs    = _fa_cache[_fa_hit].ifs;    nifs   = _fa_cache[_fa_hit].nifs;
     pars   = _fa_cache[_fa_hit].pars;   npars  = _fa_cache[_fa_hit].npars;
@@ -1599,6 +1645,14 @@ void invert_op_to_line(VM *vm, const char *frame_name, char *buffer,
 
 static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_line)
 {
+    if (g_line_index.base && buf == g_line_index.base) {
+        uint k0, kend = inv_tratto(from_line, to_line, &k0);
+        for (uint k = k0; k < kend; k++) {
+            int o = g_line_index.op[k];
+            if ((o == OPC_LABEL || o == OPC_JMPF) && inv_arg_inizia(k, "FROM_")) return 1;
+        }
+        return 0;
+    }
     char *ptr = go_to_line(buf, from_line);
     if (!ptr) return 0;
     while (ptr && *ptr) {
@@ -1621,6 +1675,12 @@ static inline int branch_span_has_from_loop(char *buf, uint from_line, uint to_l
  * if_branch_stack → invertirebbe entrambi rami. Fall back a invert_op_to_line. */
 static inline int branch_span_has_nested_if(char *buf, uint from_line, uint to_line)
 {
+    if (g_line_index.base && buf == g_line_index.base) {
+        uint k0, kend = inv_tratto(from_line, to_line, &k0);
+        for (uint k = k0; k < kend; k++)
+            if (g_line_index.op[k] == OPC_JMPF && inv_arg_inizia(k, "ELSE_")) return 1;
+        return 0;
+    }
     char *ptr = go_to_line(buf, from_line);
     if (!ptr) return 0;
     while (ptr && *ptr) {
@@ -1756,13 +1816,16 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
     Var **tmp_alloc = (Var **)calloc((size_t)_vcap, sizeof(Var *));
     for (int v = 0; !in_branch && v < vm->frames[cfi]->var_count; v++) {
         if (!vm->frames[cfi]->vars[v]) {
-            vm->frames[cfi]->vars[v]        = calloc(1, sizeof(Var));
-            vm->frames[cfi]->vars[v]->T     = TYPE_INT;
-            vm->frames[cfi]->vars[v]->value = calloc(1, sizeof(int64_t));
-            vm->frames[cfi]->vars[v]->name  = char_id_strdup(saved[v] ? saved[v]->name : "");
-            tmp_alloc[v] = vm->frames[cfi]->vars[v];
+            /* int a 0, non local: come una calloc con nome e cella */
+            Var *seg = vm_var_nuova(TYPE_INT, saved[v] ? saved[v]->name : "");
+            seg->is_local = 0;
+            vm->frames[cfi]->vars[v] = seg;
+            tmp_alloc[v] = seg;
         }
     }
+    /* Dal testo indicizzato: righe del tratto senza copiarle una a una,
+     * istruzioni semplici dalla riga decodificata (vm_dec.h). */
+    int dec_ok = (g_line_index.base && original_buffer == g_line_index.base);
 
     if (branch_span_has_from_loop(original_buffer, from_line, to_line)) {
         /* Attiva range-scoped IF skip: invert_op_to_line(honor=0) altrimenti
@@ -1785,12 +1848,27 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
          * troncava le else-if chain di store a indice runtime su array grandi
          * (> ~256 elementi, fino a ARR_MAX=1024) → collect_ifs parziale →
          * branch-pairing errato → POP sbilanciato. */
-        uint _ebi_fi = get_findex(frame_name);
-        int local_max_ifs = (int)(vm->frames[_ebi_fi]->end_addr -
-                                  vm->frames[_ebi_fi]->addr) + 2;
-        if (local_max_ifs < 256) local_max_ifs = 256;
-        IfDescriptor  *ifs = calloc((size_t)local_max_ifs, sizeof(IfDescriptor));
-        int nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, local_max_ifs);
+        /* Gli stessi descrittori della cache di invert_op_to_line: collect_ifs
+         * sulla stessa procedura, con una capacita' che in entrambi i casi
+         * supera le righe della procedura (quindi lo stesso risultato). */
+        IfDescriptor *ifs;
+        int nifs2;
+        int ifs_propri = 0;
+        if (dec_ok) {
+            VM_FRAME_BASE(ebase, frame_name);
+            uint ebase_fi = char_id_map_get(&FrameIndexer, ebase);
+            int voce = fa_voce(vm, frame_name, original_buffer, ebase, ebase_fi);
+            ifs   = _fa_cache[voce].ifs;
+            nifs2 = _fa_cache[voce].nifs;
+        } else {
+            uint _ebi_fi = get_findex(frame_name);
+            int local_max_ifs = (int)(vm->frames[_ebi_fi]->end_addr -
+                                      vm->frames[_ebi_fi]->addr) + 2;
+            if (local_max_ifs < 256) local_max_ifs = 256;
+            ifs = calloc((size_t)local_max_ifs, sizeof(IfDescriptor));
+            nifs2 = collect_ifs(vm, frame_name, original_buffer, ifs, local_max_ifs);
+            ifs_propri = 1;
+        }
 
         /* Heap, dimensionato allo span del branch: con [512] fisso un branch
          * THEN/ELSE > 512 righe (es. `if lc1 != 0` che racchiude un from-loop con
@@ -1798,20 +1876,55 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
          * → la coda del loop (EVAL until, peel) cadeva fuori → peel zone mai
          * rilevata → loop counter non invertito (DELOCAL lc0 atteso=0 trovato<0). */
         int lp_cap = (to_line > from_line) ? (int)(to_line - from_line) + 2 : 2;
-        char **lp = malloc(sizeof(char *) * (size_t)lp_cap);
-        uint  *ln = malloc(sizeof(uint)   * (size_t)lp_cap);
+        char **lp;
+        uint  *ln;
+        uint8_t *lop = NULL;
         int nl = 0;
-        char *p3 = go_to_line(original_buffer, from_line);
-        while (p3 && *p3 && nl < lp_cap) {
-            char *nl3 = strchr(p3, '\n'); if (!nl3) break;
-            uint cur_ln = (uint)atoi(p3);
-            if (cur_ln >= to_line) break;
-            lp[nl] = strndup(p3, (size_t)(nl3 - p3)); ln[nl] = cur_ln; nl++;
-            p3 = nl3 + 1;
+        InvRighe rr;
+        if (dec_ok) {
+            uint k0, kend = inv_tratto(from_line, to_line, &k0);
+            inv_righe_da(k0, kend, 1, (size_t)lp_cap, &rr);
+            lp = rr.lp; ln = rr.ln; lop = rr.op; nl = rr.n;
+        } else {
+            lp = malloc(sizeof(char *) * (size_t)lp_cap);
+            ln = malloc(sizeof(uint)   * (size_t)lp_cap);
+            char *p3 = go_to_line(original_buffer, from_line);
+            while (p3 && *p3 && nl < lp_cap) {
+                char *nl3 = strchr(p3, '\n'); if (!nl3) break;
+                uint cur_ln = (uint)atoi(p3);
+                if (cur_ln >= to_line) break;
+                lp[nl] = strndup(p3, (size_t)(nl3 - p3)); ln[nl] = cur_ln; nl++;
+                p3 = nl3 + 1;
+            }
         }
         int idx = nl - 1;
         while (idx >= 0) {
             uint cur = ln[idx];
+            /* Istruzione semplice: nessun if annidato comincia sulla sua riga
+             * (i JMPF ELSE_ sono altre righe); se non e' dentro uno di essi,
+             * l'inversa dalla riga decodificata. */
+            int opc_s = lop ? inv_opc_semplice(lop[idx]) : -1;
+            if (opc_s >= 0 && cur >= 1) {
+                int dentro = 0;
+                for (int k = 0; k < nifs2; k++) {
+                    if (ifs[k].jmpf_else_line <= from_line) continue;
+                    if (ifs[k].assert_line >= to_line) continue;
+                    if ((cur > ifs[k].jmpf_else_line && cur < ifs[k].jmp_fi_line) ||
+                        (cur > ifs[k].else_label_line && cur < ifs[k].fi_label_line) ||
+                        cur == ifs[k].jmp_fi_line || cur == ifs[k].else_label_line ||
+                        cur == ifs[k].fi_label_line || cur == ifs[k].eval_exit_line ||
+                        cur == ifs[k].assert_line  || cur == ifs[k].eval_entry_line) {
+                        dentro = 1; break;
+                    }
+                }
+                if (dentro) { idx--; continue; }
+                VmDec *dv = vm_dec_riga(cur - 1);
+                if (dv && dv->opc == opc_s) {
+                    inv_esegui_semplice(vm, frame_name, cfi, lop[idx], dv);
+                    idx--;
+                    continue;
+                }
+            }
             VM_LINE_COPY(ob, lp[idx]);
             char *fw = strtok(skip_lineno(ob), " \t");
             if (!fw) { idx--; continue; }
@@ -1901,23 +2014,48 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "SHOW"))   op_show(vm, frame_name);
             idx--;
         }
-        for (int j = 0; j < nl; j++) free(lp[j]);
-        free(lp); free(ln);
-        if_descs_free(ifs, nifs2);
-        free(ifs);
+        if (dec_ok) {
+            inv_righe_libera(&rr);
+        } else {
+            for (int j = 0; j < nl; j++) free(lp[j]);
+            free(lp); free(ln);
+        }
+        if (ifs_propri) {
+            if_descs_free(ifs, nifs2);
+            free(ifs);
+        }
     } else {
         int lines_cap = (to_line > from_line) ? (int)(to_line - from_line) + 2 : 2;
-        char **lines = malloc(sizeof(char *) * (size_t)lines_cap); int count = 0;
-        char *p2 = go_to_line(original_buffer, from_line);
-        if (p2 && *p2) {
-            while (p2 && *p2 && count < lines_cap) {
-                char *nl2 = strchr(p2, '\n'); if (!nl2) break;
-                if ((uint)atoi(p2) >= to_line) break;
-                lines[count++] = strndup(p2, (size_t)(nl2 - p2));
-                p2 = nl2 + 1;
+        char **lines;
+        int count = 0;
+        InvRighe rl;
+        uint8_t *lop = NULL;
+        uint *lln = NULL;
+        if (dec_ok) {
+            uint k0, kend = inv_tratto(from_line, to_line, &k0);
+            inv_righe_da(k0, kend, 1, (size_t)lines_cap, &rl);
+            lines = rl.lp; count = rl.n; lop = rl.op; lln = rl.ln;
+        } else {
+            lines = malloc(sizeof(char *) * (size_t)lines_cap);
+            char *p2 = go_to_line(original_buffer, from_line);
+            if (p2 && *p2) {
+                while (p2 && *p2 && count < lines_cap) {
+                    char *nl2 = strchr(p2, '\n'); if (!nl2) break;
+                    if ((uint)atoi(p2) >= to_line) break;
+                    lines[count++] = strndup(p2, (size_t)(nl2 - p2));
+                    p2 = nl2 + 1;
+                }
             }
         }
         for (int i = count - 1; i >= 0; i--) {
+            int opc_s = lop ? inv_opc_semplice(lop[i]) : -1;
+            if (opc_s >= 0 && lln[i] >= 1) {
+                VmDec *dv = vm_dec_riga(lln[i] - 1);
+                if (dv && dv->opc == opc_s) {
+                    inv_esegui_semplice(vm, frame_name, cfi, lop[i], dv);
+                    continue;
+                }
+            }
             VM_LINE_COPY(ob, lines[i]);
             char *clean = skip_lineno(ob);
             char *fw = strtok(clean, " \t");
@@ -1945,13 +2083,17 @@ static void exec_branch_inverse(VM *vm, char *original_buffer,
             else if (!strcmp(fw, "DELOCAL"))op_local     (vm, frame_name);
             else if (!strcmp(fw, "SHOW"))   op_show(vm, frame_name);
         }
-        for (int i = 0; i < count; i++) free(lines[i]);
-        free(lines);
+        if (dec_ok) {
+            inv_righe_libera(&rl);
+        } else {
+            for (int i = 0; i < count; i++) free(lines[i]);
+            free(lines);
+        }
     }
 
     for (int v = 0; v < vm->frames[cfi]->var_count && v < _vcap; v++)
         if (tmp_alloc[v] && vm->frames[cfi]->vars[v] == tmp_alloc[v]) {
-            free(tmp_alloc[v]->value); free(tmp_alloc[v]->name); free(tmp_alloc[v]);
+            vm_var_scorta_metti(tmp_alloc[v]);
             vm->frames[cfi]->vars[v] = NULL;
         }
 

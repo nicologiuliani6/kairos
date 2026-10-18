@@ -553,6 +553,19 @@ static inline void vm_var_scorta_libera(void)
 
 static inline void alloc_var_tipo(Var *v, int T, const char *name);
 
+/* Una Var che non serve piu', come free di cella, nome e Var: le int
+ * restano per il prossimo LOCAL. */
+static inline void vm_var_scorta_metti(Var *v)
+{
+    if (v->T == TYPE_INT && v->value && v->name && tl_var_scorta_n < VM_VAR_SCORTA) {
+        tl_var_scorta[tl_var_scorta_n++] = v;
+        return;
+    }
+    free(v->value);
+    free(v->name);
+    free(v);
+}
+
 /* Var nuova come malloc + alloc_var_tipo; NULL se manca memoria. */
 static inline Var *vm_var_nuova(int T, const char *name)
 {
@@ -707,8 +720,7 @@ typedef struct CNode {
     int64_t       num;          /* CN_NUM */
     char         *name;         /* nome (CN_VAR, CN_ARR), token (CN_NUM, CN_MALE) */
     struct CNode *a, *b;        /* CN_BIN: operandi; CN_ARR: indice in a */
-    unsigned      c_run, c_gen;
-    const void   *c_f;         /* frame dell'ultima ricerca */
+    unsigned      c_gen;       /* gen del frame dell'ultima ricerca, 0 = nessuna */
     int           c_idx;
 } CNode;
 
@@ -1038,22 +1050,34 @@ static inline void vm_cexpr_free_cache(void)
 
 /* --- valutazione --- */
 
-/* Le funzioni qui sotto ricevono il frame (Frame *) invece di vm e fi: i
- * frame non si spostano e non si liberano durante un'esecuzione (uno slot
- * riusato da un clone cambia gen), quindi frame e gen ne identificano la
- * tabella dei nomi. */
+/* Le funzioni qui sotto ricevono il frame (Frame *) invece di vm e fi. Ogni
+ * (re)inizializzazione di un frame gli da' un gen nuovo, unico nel processo
+ * (vm_next_gen, mai 0 per un frame inizializzato): il gen da solo identifica
+ * la tabella dei nomi in cui si e' trovato un indice, anche fra esecuzioni
+ * diverse. Un nodo nuovo ha c_gen 0. */
 static inline int cn_indice(Frame *f, CNode *n)
 {
-    unsigned run = g_vm_run_id;
-    if (n->c_run == run && n->c_f == f && n->c_gen == f->gen) return n->c_idx;
+    if (n->c_gen == f->gen && n->c_gen) return n->c_idx;
     int idx = char_id_map_lookup(&f->VarIndexer, n->name);
     if (idx >= 0) {
-        n->c_run = run; n->c_f = f; n->c_gen = f->gen; n->c_idx = idx;
+        n->c_gen = f->gen; n->c_idx = idx;
     }
     return idx;
 }
 
 static int64_t cn_valuta_f(Frame *f, CNode *n);
+
+/* I casi frequenti senza chiamata: un numero, una variabile gia' trovata in
+ * questo frame e aperta. Tutto il resto (errori compresi) e' cn_valuta_f. */
+static inline __attribute__((always_inline)) int64_t cn_val(Frame *f, CNode *n)
+{
+    if (n->k == CN_NUM) return n->num;
+    if (n->k == CN_VAR && n->c_gen == f->gen && n->c_gen) {
+        Var *v = f->vars[n->c_idx];
+        if (v && v->value) return *(v->value);
+    }
+    return cn_valuta_f(f, n);
+}
 
 /* Come array_cell, dopo il parsing. */
 static inline int64_t *cn_cella(Frame *f, CNode *n, Var **vout, const char *op)
@@ -1068,7 +1092,7 @@ static inline int64_t *cn_cella(Frame *f, CNode *n, Var **vout, const char *op)
         vm_debug_panic("[VM] %s: variable '%s' is NULL\n", op, n->name);
     if (v->T != TYPE_ARRAY)
         vm_debug_panic("[VM] %s: '%s' is not an array\n", op, n->name);
-    int64_t i = cn_valuta_f(f, n->a);
+    int64_t i = cn_val(f, n->a);
     if (i < 0 || (uint64_t)i >= (uint64_t)v->stack_len)
         vm_debug_panic("[VM] Idx-Err: index %lld out of the bounds of '%s' (length %zu)\n",
                        (long long)i, n->name, v->stack_len);
@@ -1098,8 +1122,8 @@ static int64_t cn_valuta_f(Frame *f, CNode *n)
         return *cn_cella(f, n, &av, "lettura");
     }
     default: {
-        int64_t l = cn_valuta_f(f, n->a);
-        int64_t r = cn_valuta_f(f, n->b);
+        int64_t l = cn_val(f, n->a);
+        int64_t r = cn_val(f, n->b);
         return apply_binop(n->op, l, r);
     }
     }
@@ -1107,12 +1131,12 @@ static int64_t cn_valuta_f(Frame *f, CNode *n)
 
 static inline int64_t cn_valuta(VM *vm, uint fi, CNode *n)
 {
-    return cn_valuta_f(vm->frames[fi], n);
+    return cn_val(vm->frames[fi], n);
 }
 
 static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 {
-    return cn_valuta_f(vm->frames[fi], cn_cerca(&tl_cn_espr, tok, 0));
+    return cn_val(vm->frames[fi], cn_cerca(&tl_cn_espr, tok, 0));
 }
 
 static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
