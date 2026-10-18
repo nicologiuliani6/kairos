@@ -531,10 +531,62 @@ static inline char *normalize_bytecode_physical_lines(const char *input)
     return out;
 }
 
+/* Var int chiuse da un DELOCAL (o liberate da un LOCAL che riusa lo slot),
+ * tenute per il prossimo LOCAL del thread con il loro nome e la loro cella:
+ * una coppia local/delocal in un ciclo costava tre malloc e tre free. Il
+ * nome si riusa se e' lo stesso. Il puntatore restituito e' quello che
+ * malloc avrebbe ridato subito dopo la free (l'ultima liberata), come prima. */
+#define VM_VAR_SCORTA 64
+static __thread Var *tl_var_scorta[VM_VAR_SCORTA];
+static __thread int  tl_var_scorta_n = 0;
+
+/* Alla fine di un'esecuzione o di un thread di par. */
+static inline void vm_var_scorta_libera(void)
+{
+    while (tl_var_scorta_n > 0) {
+        Var *v = tl_var_scorta[--tl_var_scorta_n];
+        free(v->value);
+        free(v->name);
+        free(v);
+    }
+}
+
+static inline void alloc_var_tipo(Var *v, int T, const char *name);
+
+/* Var nuova come malloc + alloc_var_tipo; NULL se manca memoria. */
+static inline Var *vm_var_nuova(int T, const char *name)
+{
+    if (T == TYPE_INT && tl_var_scorta_n > 0) {
+        Var *v = tl_var_scorta[--tl_var_scorta_n];
+        int64_t *cella = v->value;
+        char *nome = v->name;
+        if (strcmp(nome, name) != 0) {
+            free(nome);
+            nome = char_id_strdup(name);
+        }
+        memset(v, 0, sizeof(Var));
+        v->name     = nome;
+        v->is_local = 1;
+        v->T        = TYPE_INT;
+        v->value    = cella;
+        *cella      = 0;
+        return v;
+    }
+    Var *v = (Var *)malloc(sizeof(Var));
+    if (!v) return NULL;
+    alloc_var_tipo(v, T, name);
+    return v;
+}
+
 static inline void delete_var(Var *vars[], int *size, int n)
 {
     if (n < 0 || n >= *size) { printf("Index out of range\n"); return; }
     Var *v = vars[n];
+    if (v->T == TYPE_INT && v->value && v->name && tl_var_scorta_n < VM_VAR_SCORTA) {
+        tl_var_scorta[tl_var_scorta_n++] = v;
+        vars[n] = NULL;
+        return;
+    }
     if (v->T == TYPE_CHANNEL && v->channel) {
         pthread_mutex_lock(&v->channel->mtx);
         v->channel->refcount--;
@@ -655,7 +707,8 @@ typedef struct CNode {
     int64_t       num;          /* CN_NUM */
     char         *name;         /* nome (CN_VAR, CN_ARR), token (CN_NUM, CN_MALE) */
     struct CNode *a, *b;        /* CN_BIN: operandi; CN_ARR: indice in a */
-    unsigned      c_run, c_gen, c_fi;
+    unsigned      c_run, c_gen;
+    const void   *c_f;         /* frame dell'ultima ricerca */
     int           c_idx;
 } CNode;
 
@@ -985,34 +1038,37 @@ static inline void vm_cexpr_free_cache(void)
 
 /* --- valutazione --- */
 
-static inline int cn_indice(VM *vm, uint fi, CNode *n)
+/* Le funzioni qui sotto ricevono il frame (Frame *) invece di vm e fi: i
+ * frame non si spostano e non si liberano durante un'esecuzione (uno slot
+ * riusato da un clone cambia gen), quindi frame e gen ne identificano la
+ * tabella dei nomi. */
+static inline int cn_indice(Frame *f, CNode *n)
 {
-    Frame *f = vm->frames[fi];
     unsigned run = g_vm_run_id;
-    if (n->c_run == run && n->c_fi == fi && n->c_gen == f->gen) return n->c_idx;
+    if (n->c_run == run && n->c_f == f && n->c_gen == f->gen) return n->c_idx;
     int idx = char_id_map_lookup(&f->VarIndexer, n->name);
     if (idx >= 0) {
-        n->c_run = run; n->c_fi = fi; n->c_gen = f->gen; n->c_idx = idx;
+        n->c_run = run; n->c_f = f; n->c_gen = f->gen; n->c_idx = idx;
     }
     return idx;
 }
 
-static int64_t cn_valuta(VM *vm, uint fi, CNode *n);
+static int64_t cn_valuta_f(Frame *f, CNode *n);
 
 /* Come array_cell, dopo il parsing. */
-static inline int64_t *cn_cella(VM *vm, uint fi, CNode *n, Var **vout, const char *op)
+static inline int64_t *cn_cella(Frame *f, CNode *n, Var **vout, const char *op)
 {
     if (n->k == CN_MALE)
         vm_debug_panic("[VM] %s: malformed array cell '%s'\n", op, n->name);
-    int idx = cn_indice(vm, fi, n);
+    int idx = cn_indice(f, n);
     if (idx < 0)
         vm_debug_panic("[VM] %s: variable '%s' is not defined\n", op, n->name);
-    Var *v = vm->frames[fi]->vars[idx];
+    Var *v = f->vars[idx];
     if (!v)
         vm_debug_panic("[VM] %s: variable '%s' is NULL\n", op, n->name);
     if (v->T != TYPE_ARRAY)
         vm_debug_panic("[VM] %s: '%s' is not an array\n", op, n->name);
-    int64_t i = cn_valuta(vm, fi, n->a);
+    int64_t i = cn_valuta_f(f, n->a);
     if (i < 0 || (uint64_t)i >= (uint64_t)v->stack_len)
         vm_debug_panic("[VM] Idx-Err: index %lld out of the bounds of '%s' (length %zu)\n",
                        (long long)i, n->name, v->stack_len);
@@ -1020,15 +1076,15 @@ static inline int64_t *cn_cella(VM *vm, uint fi, CNode *n, Var **vout, const cha
     return &v->value[i];
 }
 
-static int64_t cn_valuta(VM *vm, uint fi, CNode *n)
+static int64_t cn_valuta_f(Frame *f, CNode *n)
 {
     switch (n->k) {
     case CN_NUM:
         return n->num;
     case CN_VAR: {
-        int idx = cn_indice(vm, fi, n);
+        int idx = cn_indice(f, n);
         if (idx >= 0) {
-            Var *v = vm->frames[fi]->vars[idx];
+            Var *v = f->vars[idx];
             if (v && v->value)
                 return *(v->value);
             vm_debug_panic("[VM] read: variable '%s' outside its local/delocal block\n", n->name);
@@ -1039,19 +1095,24 @@ static int64_t cn_valuta(VM *vm, uint fi, CNode *n)
     case CN_ARR:
     case CN_MALE: {
         Var *av;
-        return *cn_cella(vm, fi, n, &av, "lettura");
+        return *cn_cella(f, n, &av, "lettura");
     }
     default: {
-        int64_t l = cn_valuta(vm, fi, n->a);
-        int64_t r = cn_valuta(vm, fi, n->b);
+        int64_t l = cn_valuta_f(f, n->a);
+        int64_t r = cn_valuta_f(f, n->b);
         return apply_binop(n->op, l, r);
     }
     }
 }
 
+static inline int64_t cn_valuta(VM *vm, uint fi, CNode *n)
+{
+    return cn_valuta_f(vm->frames[fi], n);
+}
+
 static inline int64_t resolve_expr(VM *vm, uint fi, const char *tok)
 {
-    return cn_valuta(vm, fi, cn_cerca(&tl_cn_espr, tok, 0));
+    return cn_valuta_f(vm->frames[fi], cn_cerca(&tl_cn_espr, tok, 0));
 }
 
 static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
@@ -1060,19 +1121,24 @@ static inline int64_t resolve_value(VM *vm, uint fi, const char *tok)
 }
 
 /* Luogo di un assegnamento: una variabile int o una cella di array. */
-static inline int64_t *lvalue_ptr_nodo(VM *vm, uint fi, CNode *n, Var **vout, const char *op)
+static inline int64_t *lvalue_ptr_f(Frame *f, CNode *n, Var **vout, const char *op)
 {
     if (n->k != CN_VAR)
-        return cn_cella(vm, fi, n, vout, op);
-    int idx = cn_indice(vm, fi, n);
+        return cn_cella(f, n, vout, op);
+    int idx = cn_indice(f, n);
     if (idx < 0)
         vm_debug_panic("[VM] %s: variable '%s' is not defined\n", op, n->name);
-    Var *v = vm->frames[fi]->vars[idx];
+    Var *v = f->vars[idx];
     if (!v)
         vm_debug_panic("[VM] %s: variable '%s' is NULL\n", op, n->name);
     if (v->T != TYPE_INT) vm_debug_panic("[VM] %s on a non-int\n", op);
     *vout = v;
     return v->value;
+}
+
+static inline int64_t *lvalue_ptr_nodo(VM *vm, uint fi, CNode *n, Var **vout, const char *op)
+{
+    return lvalue_ptr_f(vm->frames[fi], n, vout, op);
 }
 
 static inline int64_t *lvalue_ptr(VM *vm, uint fi, const char *id, Var **vout, const char *op)

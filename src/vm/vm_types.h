@@ -318,6 +318,15 @@ struct ThreadArgs {
 };
 
 extern __thread ThreadArgs *current_thread_args;
+/* Rami di par vivi nel processo. Un ramo si conta prima di impostare
+ * current_thread_args e si sconta quando non esegue piu' istruzioni: se il
+ * conteggio e' 0, il thread che guarda non e' un ramo di par e le variabili
+ * __thread dei rami (care da leggere in una libreria condivisa) non servono. */
+static int g_par_attivi = 0;
+static inline int vm_par_attivo(void)
+{
+    return __atomic_load_n(&g_par_attivi, __ATOMIC_RELAXED) && current_thread_args;
+}
 extern __thread char       *strtok_saveptr;
 extern __thread uint        thread_val_IF;
 /* Profondita' d'inversione del thread: ogni ramo di par ha la sua (la eredita

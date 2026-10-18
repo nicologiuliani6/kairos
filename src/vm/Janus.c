@@ -139,8 +139,18 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     tl_fx_nome = fname; tl_fx_fi = cur_fi;
 #define VM_FNAME_CAMBIATO() do { tl_fx_nome = NULL; cur_fi = get_findex(fname); \
                                  tl_fx_nome = fname; tl_fx_fi = cur_fi; } while (0)
+    /* Righe decodificate del thread (vm_dec.h): la tabella non cambia fino
+     * alla fine dell'esecuzione. */
+    VmDec **dec   = vm_dec_tab();
+    uint    dec_n = dec ? tl_dec_n : 0;
+    /* La riga pubblicata per cn_cerca (tl_riga_*) si ritira all'istruzione
+     * dopo; le righe decodificate non la pubblicano. */
+    int riga_pubblicata = 0;
     while (*ptr) {
-        tl_riga_copia = tl_riga_fine = tl_riga_orig = NULL;
+        if (riga_pubblicata) {
+            tl_riga_copia = tl_riga_fine = tl_riga_orig = NULL;
+            riga_pubblicata = 0;
+        }
         /* Riga e codice d'istruzione dall'indice del programma (vm_helpers.h);
          * fuori dal testo indicizzato, come prima. Dall'indice si copia solo
          * cio' che segue la prima parola, e strtok riparte da li'. */
@@ -166,8 +176,9 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
          * statistiche): si saltano senza copiare la riga. */
         if (opc == OPC_PARAM || opc == OPC_PROC) { ptr = nl + 1; continue; }
         /* Riga decodificata (vm_dec.h): niente copia e niente strtok. */
-        if (krow != UINT_MAX && vm_dec_ammessa(opc)) {
-            VmDec *d = vm_dec_riga(krow);
+        if (krow < dec_n) {
+            VmDec *d = dec[krow];
+            if ((uintptr_t)d <= 2) d = (d == VMD_TESTO) ? NULL : vm_dec_riga(krow);
             if (d) {
                 if (vm->dbg && vm->dbg->initialized) {
                     VM_LINE_DUP(raw, ptr, nl);    /* riga intatta, per il debugger */
@@ -180,7 +191,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                         continue;
                     }
                 }
-                vm_stats_sample(vm);
+                if (g_vm_stats_enabled) vm_stats_sample(vm);
                 switch (opc) {
                 case OPC_PUSHEQ:  vm_x_pusheq (vm, fname, cur_fi, d); break;
                 case OPC_MINEQ:   vm_x_mineq  (vm, fname, cur_fi, d); break;
@@ -236,7 +247,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     continue;
                 }
             }
-            vm_stats_sample(vm);
+            if (g_vm_stats_enabled) vm_stats_sample(vm);
         }
 
         if (opc == OPC_END_PROC) {
@@ -435,7 +446,8 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             par_block_free(&pb);
             continue;
         }
-        else if ((tl_riga_copia = lb, tl_riga_fine = lb + lb_len, tl_riga_orig = copia_da, 0)) { }
+        else if ((tl_riga_copia = lb, tl_riga_fine = lb + lb_len, tl_riga_orig = copia_da,
+                  riga_pubblicata = 1, 0)) { }
         else if (opc == OPC_LOCAL)   op_local  (vm, fname);
         else if (opc == OPC_DELOCAL) op_delocal(vm, fname);
         else if (opc == OPC_SHOW)    op_show   (vm, fname);
@@ -472,6 +484,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         else { vm_debug_panic("[VM] unknown op: '%s'\n", fw); }
 
         tl_riga_copia = tl_riga_fine = tl_riga_orig = NULL;
+        riga_pubblicata = 0;
         ptr = nl + 1;
     }
 
@@ -804,6 +817,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     vm_invert_free_cache();
     vm_cexpr_free_cache();
     vm_dec_free_cache();
+    vm_var_scorta_libera();
 }
 
 void vm_run_from_string(const char *bytecode)

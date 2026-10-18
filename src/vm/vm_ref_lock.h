@@ -25,7 +25,7 @@ void vm_debug_panic(const char *fmt, ...);
  */
 static inline void var_par_mut_acquire(Var *v)
 {
-    if (!current_thread_args || !v || v->T != TYPE_INT) return;
+    if (!vm_par_attivo() || !v || v->T != TYPE_INT) return;
     pthread_t self = pthread_self();
 
     int atteso = 0;
@@ -47,7 +47,7 @@ static inline void var_par_mut_acquire(Var *v)
 
 static inline void var_par_mut_release(Var *v)
 {
-    if (!current_thread_args || !v || v->T != TYPE_INT) return;
+    if (!vm_par_attivo() || !v || v->T != TYPE_INT) return;
     int prima = __atomic_fetch_sub(&v->ref_lock_depth, 1, __ATOMIC_ACQ_REL);
     if (prima <= 0)
         vm_debug_panic("[VM] inconsistent par-mut unlock for '%s'\n", v->name);
@@ -55,7 +55,7 @@ static inline void var_par_mut_release(Var *v)
 
 static inline void var_par_mut_acquire2(Var *a, Var *b)
 {
-    if (!current_thread_args) return;
+    if (!vm_par_attivo()) return;
     if (a == b) {
         var_par_mut_acquire(a);
         return;
@@ -71,7 +71,7 @@ static inline void var_par_mut_acquire2(Var *a, Var *b)
 
 static inline void var_par_mut_release2(Var *a, Var *b)
 {
-    if (!current_thread_args) return;
+    if (!vm_par_attivo()) return;
     if (a == b) {
         var_par_mut_release(a);
         return;

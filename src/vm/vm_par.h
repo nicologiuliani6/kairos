@@ -187,6 +187,7 @@ static void *thread_entry(void *arg)
     //fprintf(stderr, "[THREAD_ENTRY] ptr=%p is_inverse=%d\n", (void*)args, args->is_inverse);
     VM         *vm   = args->vm;
     const char *fname = args->frame_name;   /* vive quanto il thread */
+    __atomic_add_fetch(&g_par_attivi, 1, __ATOMIC_SEQ_CST);   /* prima di current_thread_args */
     current_thread_args = args;
     g_branch_path = args->branch_path;
     g_inversion_depth = args->inversion_depth;
@@ -366,7 +367,9 @@ thread_exit:
     vm_invert_free_cache();
     vm_cexpr_free_cache();
     vm_dec_free_cache();
+    vm_var_scorta_libera();
     /* Sveglia sender pendente prima di terminare */
+    __atomic_sub_fetch(&g_par_attivi, 1, __ATOMIC_SEQ_CST);   /* niente piu' istruzioni qui */
     if (args->sender_to_notify) {
         ThreadArgs *s = args->sender_to_notify;
         args->sender_to_notify = NULL;

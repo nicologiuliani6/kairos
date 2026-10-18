@@ -101,7 +101,8 @@ static __thread uint   g_branch_locals_fi = 0;
 
 static inline Stack *frame_locals(VM *vm, uint fi)
 {
-    if (g_branch_locals && fi == g_branch_locals_fi) return g_branch_locals;
+    if (__atomic_load_n(&g_par_attivi, __ATOMIC_RELAXED) &&   /* g_branch_locals: solo nei rami */
+        g_branch_locals && fi == g_branch_locals_fi) return g_branch_locals;
     return &vm->frames[fi]->LocalVariables;
 }
 
@@ -937,9 +938,8 @@ static inline void op_local(VM *vm, const char *frame_name)
         delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
     }
 
-    vm->frames[fi]->vars[vi] = malloc(sizeof(Var));
+    vm->frames[fi]->vars[vi] = vm_var_nuova(vm_tipo_cod(Vtype), Vname);
     if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: allocation failed\n");
-    alloc_var(vm->frames[fi]->vars[vi], Vtype, Vname);
 
     /* Massimo atomico: due rami di par possono aprire local nello stesso frame. */
     int vc = __atomic_load_n(&vm->frames[fi]->var_count, __ATOMIC_RELAXED);

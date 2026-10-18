@@ -120,6 +120,7 @@ typedef struct VmDec {
     VmSalto     j;              /* JMPF, JMP: destinazione */
     VmSalto     g;              /* FROM_START_<uid>: riga della guardia d'ingresso */
     uint        gk;             /* indice di quella riga, UINT_MAX se fuori indice */
+    struct VmDec *ge;           /* quella riga decodificata, quando lo e' */
     VmNome      back;           /* FROM_START_<uid>: FROM_BACK_<uid> */
     char       *back_s;
 } VmDec;
@@ -272,8 +273,10 @@ static inline void vm_dec_free_cache(void)
     tl_dec_run = 0;
 }
 
-/* La riga k decodificata, o NULL per la via del testo. */
-static inline VmDec *vm_dec_riga(uint k)
+/* La tabella del thread per l'esecuzione corrente, creata se manca (NULL
+ * senza indice o senza memoria): resta la stessa fino alla fine
+ * dell'esecuzione, e vm_run_BT la legge una volta sola. */
+static inline VmDec **vm_dec_tab(void)
 {
     if (tl_dec_run != g_vm_run_id || !tl_dec) {
         vm_dec_free_cache();
@@ -283,7 +286,13 @@ static inline VmDec *vm_dec_riga(uint k)
         tl_dec_n = g_line_index.n;
         tl_dec_run = g_vm_run_id;
     }
-    if (k >= tl_dec_n) return NULL;
+    return tl_dec;
+}
+
+/* La riga k decodificata, o NULL per la via del testo. */
+static inline VmDec *vm_dec_riga(uint k)
+{
+    if (!vm_dec_tab() || k >= tl_dec_n) return NULL;
     VmDec *d = tl_dec[k];
     if ((uintptr_t)d > 2) return d;
     if (d == VMD_TESTO) return NULL;
@@ -313,9 +322,9 @@ static inline void vm_x_pusheq(VM *vm, const char *fname, uint fi, VmDec *d)
 {
     (void)fname;
     Var *v;
-    int64_t *cell = lvalue_ptr_nodo(vm, fi, d->a, &v, "PUSHEQ");
+    int64_t *cell = lvalue_ptr_f(vm->frames[fi], d->a, &v, "PUSHEQ");
     var_par_mut_acquire(v);
-    *cell = (int64_t)((uint64_t)*cell + (uint64_t)cn_valuta(vm, fi, d->b));
+    *cell = (int64_t)((uint64_t)*cell + (uint64_t)cn_valuta_f(vm->frames[fi], d->b));
     var_par_mut_release(v);
 }
 
@@ -323,11 +332,11 @@ static inline void vm_x_mineq(VM *vm, const char *fname, uint fi, VmDec *d)
 {
     (void)fname;
     Var *v;
-    int64_t *cell = lvalue_ptr_nodo(vm, fi, d->a, &v, "MINEQ");
+    int64_t *cell = lvalue_ptr_f(vm->frames[fi], d->a, &v, "MINEQ");
     if (d->stesso)
         vm_debug_panic("[VM] MINEQ: `%s -= %s` is not reversible (it loses information)\n", d->t1, d->t2);
     var_par_mut_acquire(v);
-    *cell = (int64_t)((uint64_t)*cell - (uint64_t)cn_valuta(vm, fi, d->b));
+    *cell = (int64_t)((uint64_t)*cell - (uint64_t)cn_valuta_f(vm->frames[fi], d->b));
     var_par_mut_release(v);
 }
 
@@ -335,11 +344,11 @@ static inline void vm_x_xoreq(VM *vm, const char *fname, uint fi, VmDec *d)
 {
     (void)fname;
     Var *v;
-    int64_t *cell = lvalue_ptr_nodo(vm, fi, d->a, &v, "XOREQ");
+    int64_t *cell = lvalue_ptr_f(vm->frames[fi], d->a, &v, "XOREQ");
     if (d->stesso)
         vm_debug_panic("[VM] XOREQ: `%s ^= %s` is not reversible (it loses information)\n", d->t1, d->t2);
     var_par_mut_acquire(v);
-    *cell ^= cn_valuta(vm, fi, d->b);
+    *cell ^= cn_valuta_f(vm->frames[fi], d->b);
     var_par_mut_release(v);
 }
 
@@ -347,8 +356,8 @@ static inline void vm_x_swap(VM *vm, const char *fname, uint fi, VmDec *d)
 {
     (void)fname;
     Var *v1, *v2;
-    int64_t *c1 = lvalue_ptr_nodo(vm, fi, d->a, &v1, "SWAP");
-    int64_t *c2 = lvalue_ptr_nodo(vm, fi, d->b, &v2, "SWAP");
+    int64_t *c1 = lvalue_ptr_f(vm->frames[fi], d->a, &v1, "SWAP");
+    int64_t *c2 = lvalue_ptr_f(vm->frames[fi], d->b, &v2, "SWAP");
     var_par_mut_acquire2(v1, v2);
     int64_t tmp = *c1;
     *c1 = *c2;
@@ -415,8 +424,8 @@ static inline void vm_x_pop(VM *vm, const char *frame_name, uint fi, VmDec *d)
 static inline void vm_x_eval(VM *vm, const char *fname, uint fi, VmDec *d)
 {
     (void)fname;
-    int64_t lval = cn_valuta(vm, fi, d->a);
-    int64_t rval = cn_valuta(vm, fi, d->b);
+    int64_t lval = cn_valuta_f(vm->frames[fi], d->a);
+    int64_t rval = cn_valuta_f(vm->frames[fi], d->b);
     thread_val_IF = vm_cmp(d->cmp, lval, rval);
 }
 
@@ -437,8 +446,8 @@ static inline void vm_x_assert(VM *vm, const char *frame_name, uint fi, VmDec *d
         }
         return;
     }
-    int64_t lval = cn_valuta(vm, fi, d->a);
-    int64_t rval = cn_valuta(vm, fi, d->b);
+    int64_t lval = cn_valuta_f(vm->frames[fi], d->a);
+    int64_t rval = cn_valuta_f(vm->frames[fi], d->b);
     if (!vm_cmp(d->cmp, lval, rval))
         vm_debug_panic("[VM] ASSERT failed: %s %s %s\n", d->t1, d->t2, d->t3);
 }
@@ -467,6 +476,7 @@ static inline const char *vm_x_guardia_riga(VM *vm, uint fi, char *buf, VmDec *d
     s->run = g_vm_run_id; s->fi = fi; s->gen = f->gen; s->buf = buf; s->count = cnt;
     s->dest = ln;
     d->gk = vm_dec_riga_di(ln);
+    d->ge = NULL;
     return ln;
 }
 
@@ -475,7 +485,7 @@ static inline int vm_x_guardia(VM *vm, const char *fname, uint fi, char *buf, Vm
 {
     const char *ln = vm_x_guardia_riga(vm, fi, buf, d);
     if (ln && d->gk != UINT_MAX && g_line_index.op[d->gk] == OPC_EVAL) {
-        VmDec *e = vm_dec_riga(d->gk);
+        VmDec *e = d->ge ? d->ge : (d->ge = vm_dec_riga(d->gk));
         if (e) {
             uint saved = thread_val_IF;
             vm_x_eval(vm, fname, fi, e);
@@ -574,9 +584,8 @@ static inline void vm_x_local(VM *vm, const char *frame_name, uint fi, VmDec *d)
         delete_var(vm->frames[fi]->vars, &vm->frames[fi]->var_count, (int)vi);
     }
 
-    vm->frames[fi]->vars[vi] = malloc(sizeof(Var));
+    vm->frames[fi]->vars[vi] = vm_var_nuova(d->tipo, Vname);
     if (!vm->frames[fi]->vars[vi]) vm_debug_panic("[VM] LOCAL: allocation failed\n");
-    alloc_var_tipo(vm->frames[fi]->vars[vi], d->tipo, Vname);
 
     int vc = __atomic_load_n(&vm->frames[fi]->var_count, __ATOMIC_RELAXED);
     while ((int)vi >= vc &&
@@ -602,7 +611,7 @@ static inline void vm_x_local(VM *vm, const char *frame_name, uint fi, VmDec *d)
         int64_t fill = 0;
         if (c_val) {
             if (vm_nome_cerca(vm, fi, &d->n2, 0) >= 0)
-                fill = cn_valuta(vm, fi, d->a);
+                fill = cn_valuta_f(vm->frames[fi], d->a);
             else
                 fill = d->num;
         }
@@ -644,7 +653,7 @@ static inline void vm_x_delocal(VM *vm, const char *frame_name, uint fi, VmDec *
     int64_t Vvalue = 0;
     if (c_val) {
         if (vm_nome_cerca(vm, fi, &d->n2, 0) >= 0)
-            Vvalue = cn_valuta(vm, fi, d->a);
+            Vvalue = cn_valuta_f(vm->frames[fi], d->a);
         else
             Vvalue = d->num;
     }
