@@ -54,7 +54,7 @@ if __name__ == '__main__':
         pass
 
     if len(sys.argv) < 2:
-        print("Usage: kairos <file> [--dump-bytecode] [--dap] [--vm-stats]")
+        print("Usage: kairos <file> [--dump-bytecode] [--dap] [--vm-stats] [--compiled-uncall]")
         sys.exit(1)
 
     dap_mode = "--dap" in sys.argv
@@ -68,7 +68,9 @@ if __name__ == '__main__':
             raise KairosCompileError("PARSER", "compilation stopped: no AST produced")
         ast = desugar_try(ast)
         run_static_checks(ast)
-        BT_Compiler = ByteCode_Compiler()
+        # --compiled-uncall: inversi calcolati in compilazione per ogni procedura,
+        # uncall eseguita in avanti (vedi src/frontend/bytecode.py).
+        BT_Compiler = ByteCode_Compiler(compiled_uncall="--compiled-uncall" in sys.argv)
         BT_Compiler.process(ast)
     except KairosCompileError as exc:
         print(exc)

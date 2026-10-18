@@ -64,6 +64,7 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     stack_release(&clone->LocalVariables);
 
     memset(clone, 0, sizeof(Frame));
+    clone->gen = vm_next_gen();
     /* Copia profonda: il clone inserisce i suoi LOCAL nella sua mappa. */
     char_id_map_copy(&clone->VarIndexer,   &base->VarIndexer);
     char_id_map_copy(&clone->LabelIndexer, &base->LabelIndexer);

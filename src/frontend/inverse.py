@@ -70,6 +70,49 @@ def cyclic_procedures(procs):
     return {n for n in graph if reaches(n, n)}
 
 
+def _usa_par_o_canali(stmts):
+    """Il corpo apre un par o usa un canale (dichiarazione, ssend, srecv)?"""
+    for s in stmts or []:
+        if not isinstance(s, tuple) or not s:
+            continue
+        tag = s[0]
+        if tag == 'par':
+            return True
+        if tag == 'call_direct' and str(s[1]).lower() in ('ssend', 'srecv'):
+            return True
+        if tag in ('decl', 'local', 'delocal') and str(s[1]) == 'channel':
+            return True
+        if tag == 'if' and (_usa_par_o_canali(s[2]) or _usa_par_o_canali(s[3])):
+            return True
+        if tag == 'from' and (_usa_par_o_canali(s[2]) or _usa_par_o_canali(from_second_body(s))):
+            return True
+    return False
+
+
+def procedure_con_par_o_canali(procs):
+    """Procedure che, direttamente o attraverso le chiamate, aprono un par o
+    usano canali. Per queste l'inverso resta quello della VM, che conosce le
+    sessioni dei canali anche all'indietro: il corpo inverso compilato,
+    eseguito in avanti, non le ricostruirebbe allo stesso modo."""
+    graph, dirette = {}, set()
+    for p in procs:
+        if isinstance(p, tuple) and p and p[0] == 'procedure':
+            callees = set()
+            _calls_in(p[3], callees)
+            graph[p[1]] = callees
+            if _usa_par_o_canali(p[3]) or any(t == 'channel' for t, _n in (p[2] or [])):
+                dirette.add(p[1])
+    tutte = set(dirette)
+    cambiato = True
+    while cambiato:
+        cambiato = False
+        for n, callees in graph.items():
+            if n not in tutte and callees & tutte:
+                tutte.add(n)
+                cambiato = True
+    return tutte
+
+
 def _inv_stmt(s, cyclic):
     tag = s[0]
     if tag == 'assign':

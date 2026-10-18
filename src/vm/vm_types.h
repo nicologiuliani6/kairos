@@ -213,7 +213,20 @@ typedef struct {
      * self-rec, altrimenti il delocal della call annidata libera i LOCAL int
      * condivisi del frame base → `push(x)` su Var* NULL. */
     int       active;
+    /* gen: numero unico dato a ogni (re)inizializzazione del frame. Le cache
+     * dei nomi (vm_cexpr) ricordano frame e gen: uno slot di clone riusato per
+     * un'altra procedura cambia gen e le invalida. */
+    unsigned  gen;
 } Frame;
+
+static unsigned g_frame_gen_counter = 0;
+static inline unsigned vm_next_gen(void)
+{
+    return __atomic_add_fetch(&g_frame_gen_counter, 1, __ATOMIC_RELAXED);
+}
+/* Esecuzione corrente (vm_exec): le cache di un thread non valgono fra due
+ * programmi eseguiti nello stesso processo. */
+static unsigned g_vm_run_id = 0;
 
 /* Capacità iniziale di vm->frames; cresce dinamicamente (raddoppia)
  * via vm_ensure_frame_cap quando clone_frame_for_* o vm_exec creano

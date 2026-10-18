@@ -2,7 +2,7 @@ import sys
 from queue import Queue
 
 from src.frontend.errors import KairosCompileError
-from src.frontend.inverse import cyclic_procedures, inverse_procedure, INV_SUFFIX
+from src.frontend.inverse import cyclic_procedures, inverse_procedure, procedure_con_par_o_canali, INV_SUFFIX
 from src.frontend.parser import (
     lexer, parser, run_static_checks, desugar_try, from_second_body,
     _BUILTIN_CALL_OPCODES,
@@ -23,7 +23,12 @@ _ASSIGN_OPS = {
 # restare allineate, e parser.py non può importare da qui (dipendenza circolare).
 
 class ByteCode_Compiler:
-    def __init__(self):
+    def __init__(self, compiled_uncall=False):
+        # compiled_uncall: ogni procedura (non solo le ricorsive) riceve il corpo
+        # inverso calcolato qui, e ogni `uncall f` diventa `CALL f__inv`, eseguita
+        # in avanti: la VM non ricostruisce piu' l'inverso a tempo di esecuzione.
+        # Le procedure di cui non si sa calcolare l'inverso restano a `UNCALL`.
+        self.compiled_uncall = compiled_uncall
         self.queue = Queue()
         self.addr  = 0
         self.current_lineno = 0
@@ -74,10 +79,17 @@ class ByteCode_Compiler:
                 # `uncall f` esegue in avanti `f__inv`, senza dedurre a tempo di
                 # esecuzione quante volte f si e' richiamata.
                 cyc = cyclic_procedures(procs)
+                # con compiled_uncall, tutte le altre procedure tranne quelle con
+                # par o canali (vedi procedure_con_par_o_canali)
+                extra = set()
+                if self.compiled_uncall:
+                    esclusi = procedure_con_par_o_canali(procs)
+                    extra = {p[1] for p in procs if p[0] == 'procedure' and p[1] not in esclusi}
                 self.inv_procs = set()
                 inverses = {}
                 for proc in procs:
-                    if proc[0] == 'procedure' and proc[1] in cyc and proc[1] != 'main':
+                    if (proc[0] == 'procedure' and (proc[1] in cyc or proc[1] in extra)
+                            and proc[1] != 'main'):
                         inv = inverse_procedure(proc, cyc)
                         if inv is not None:
                             inverses[proc[1]] = inv

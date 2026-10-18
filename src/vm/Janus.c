@@ -123,20 +123,60 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
     } \
 } while (0)
     g_run_bt_depth++;
+    /* Frame e riga pubblicati da chi ci ha chiamato: si rimettono all'uscita. */
+    const char *fx_prima = tl_fx_nome;
+    uint        fx_fi_prima = tl_fx_fi;
+    const char *rc_prima = tl_riga_copia, *rf_prima = tl_riga_fine, *ro_prima = tl_riga_orig;
+    tl_riga_copia = tl_riga_fine = tl_riga_orig = NULL;
     uint  si  = char_id_map_get(&FrameIndexer, fname);
     char *ptr = go_to_line(orig, vm->frames[si]->addr + 1);
     if (!ptr) { fprintf(stderr, "ERROR: '%s' not found\n", fname); goto done; }
 
+    uint kk = 0;   /* riga attesa dopo un'istruzione in sequenza */
+    /* Il frame corrente, pubblicato per get_findex (vm_helpers.h): si ricalcola
+     * solo quando cambia fname. */
+    uint        cur_fi = si;
+    tl_fx_nome = fname; tl_fx_fi = cur_fi;
+#define VM_FNAME_CAMBIATO() do { tl_fx_nome = NULL; cur_fi = get_findex(fname); \
+                                 tl_fx_nome = fname; tl_fx_fi = cur_fi; } while (0)
     while (*ptr) {
-        char *nl = strchr(ptr, '\n'); if (!nl) break;
-        VM_LINE_DUP(lb, ptr, nl);
-        char *fw = strtok(skip_lineno(lb), " \t");
-
-        if (!fw) { ptr = nl + 1; continue; }
+        tl_riga_copia = tl_riga_fine = tl_riga_orig = NULL;
+        /* Riga e codice d'istruzione dall'indice del programma (vm_helpers.h);
+         * fuori dal testo indicizzato, come prima. Dall'indice si copia solo
+         * cio' che segue la prima parola, e strtok riparte da li'. */
+        char *nl;
+        int opc = -1;
+        const char *argp = NULL;
+        const char *ib = g_line_index.base;
+        if (ib && ptr >= ib && ptr < ib + g_line_index.len) {
+            size_t q = (size_t)(ptr - ib);
+            uint k = (kk < g_line_index.n && g_line_index.off[kk] == q) ? kk : vm_line_of(q);
+            if (g_line_index.off[k] == q) {
+                opc = g_line_index.op[k];
+                nl = g_line_index.fine[k] == SIZE_MAX ? NULL : (char *)ib + g_line_index.fine[k];
+                argp = ib + g_line_index.arg[k];
+                kk = k + 1;
+            } else nl = strchr(ptr, '\n');
+        } else nl = strchr(ptr, '\n');
+        if (!nl) break;
+        if (opc == OPC_VUOTA) { ptr = nl + 1; continue; }
+        /* le righe rare (istruzione sconosciuta, THREAD_, PAR_END) come prima,
+         * perche' i loro messaggi citano la parola */
+        const char *copia_da = (opc > OPC_UNKNOWN && opc != OPC_THREAD && opc != OPC_PAR_END &&
+                                argp <= nl) ? argp : ptr;
+        VM_LINE_DUP(lb, copia_da, nl);
+        char *fw;
+        if (copia_da == argp) {
+            strtok_saveptr = lb;            /* come dopo strtok della prima parola */
+            fw = lb;                        /* (la parola serve solo ai messaggi) */
+        } else {
+            fw = strtok(skip_lineno(lb), " \t");
+            if (!fw) { ptr = nl + 1; continue; }
+            if (opc < 0) opc = vm_opc(fw);
+        }
 
         /* ── DEBUG HOOK ── chiamato prima di ogni istruzione breakpointable ── */
-        if (strcmp(fw, "PROC") != 0 && strcmp(fw, "PARAM") != 0 &&
-            strcmp(fw, "HALT") != 0) {
+        if (opc != OPC_PROC && opc != OPC_PARAM && opc != OPC_HALT) {
             if (vm->dbg && vm->dbg->initialized) {
                 VM_LINE_DUP(raw, ptr, nl);    /* riga intatta, per il debugger */
                 int can = (g_run_bt_depth == 1 && !current_thread_args);
@@ -153,7 +193,7 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             vm_stats_sample(vm);
         }
 
-        if (!strcmp(fw, "END_PROC")) {
+        if (opc == OPC_END_PROC) {
             uint fi = get_findex(fname);
             if (stack_size(&vm->frames[fi]->LocalVariables) > -1) {
                 vm_debug_panic("[VM] END_PROC: LOCAL variables not closed\n");
@@ -171,11 +211,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                  * fine esecuzione deduplica i Var* condivisi. */
                 ptr = cs[cs_top].return_ptr;
                 vm_buf_set(&fname, &fname_cap, cs[cs_top].caller_frame);
+                VM_FNAME_CAMBIATO();
                 cs_top--;
             } else break;
             continue;
         }
-        else if (!strcmp(fw, "CALL")) {
+        else if (opc == OPC_CALL) {
             char *pn      = strtok(NULL, " \t");
             uint  cfi_cur = get_findex(fname);
             int   is_rec    = vm_base_eq(fname, pn);
@@ -270,11 +311,12 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
                     memcpy(nfname, pn, strlen(pn) + 1);
             }
             vm_buf_set(&fname, &fname_cap, nfname);
+            VM_FNAME_CAMBIATO();
             ptr = go_to_line(orig, vm->frames[cfi]->addr + 1);
             if (!ptr) vm_debug_panic("[VM] CALL: address not found\n");
             continue;
         }
-        else if (!strcmp(fw, "UNCALL")) {
+        else if (opc == OPC_UNCALL) {
             char *pn  = strtok(NULL, " \t");
             VMLOG("[UNCALL] called for '%s'\n", pn ? pn : "NULL");
             uint  cfi = current_thread_args ? clone_frame_for_thread(vm, pn)
@@ -310,41 +352,42 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
             VM_PARAM_SAVE_FREE(sv);
             ptr = nl + 1; continue;
         }
-        else if (!strcmp(fw, "PAR_START")) {
+        else if (opc == OPC_PAR_START) {
             ParBlock pb = scan_par_block(nl + 1);
             exec_par_threads(vm, orig, fname, &pb, 0);
             ptr = pb.after_end ? pb.after_end : nl + 1;
             par_block_free(&pb);
             continue;
         }
-        else if (!strcmp(fw, "LOCAL"))   op_local  (vm, fname);
-        else if (!strcmp(fw, "DELOCAL")) op_delocal(vm, fname);
-        else if (!strcmp(fw, "SHOW"))    op_show   (vm, fname);
-        else if (!strcmp(fw, "PUSHEQ"))  op_pusheq (vm, fname);
-        else if (!strcmp(fw, "MINEQ"))   op_mineq  (vm, fname);
-        else if (!strcmp(fw, "XOREQ"))   op_xoreq  (vm, fname);
-        else if (!strcmp(fw, "SWAP"))    op_swap   (vm, fname);
-        else if (!strcmp(fw, "PUSH"))  op_push (vm, fname);
-        else if (!strcmp(fw, "POP"))   op_pop  (vm, fname);
-        else if (!strcmp(fw, "SSEND")) op_ssend(vm, fname);
-        else if (!strcmp(fw, "SRECV")) op_srecv(vm, fname);
-        else if (!strcmp(fw, "EVAL"))    op_eval   (vm, fname);
-        else if (!strcmp(fw, "ASSERT"))  op_assert (vm, fname);
-        else if (!strcmp(fw, "JMPF")) {
+        else if ((tl_riga_copia = lb, tl_riga_fine = lb + lb_len, tl_riga_orig = copia_da, 0)) { }
+        else if (opc == OPC_LOCAL)   op_local  (vm, fname);
+        else if (opc == OPC_DELOCAL) op_delocal(vm, fname);
+        else if (opc == OPC_SHOW)    op_show   (vm, fname);
+        else if (opc == OPC_PUSHEQ)  op_pusheq (vm, fname);
+        else if (opc == OPC_MINEQ)   op_mineq  (vm, fname);
+        else if (opc == OPC_XOREQ)   op_xoreq  (vm, fname);
+        else if (opc == OPC_SWAP)    op_swap   (vm, fname);
+        else if (opc == OPC_PUSH)  op_push (vm, fname);
+        else if (opc == OPC_POP)   op_pop  (vm, fname);
+        else if (opc == OPC_SSEND) op_ssend(vm, fname);
+        else if (opc == OPC_SRECV) op_srecv(vm, fname);
+        else if (opc == OPC_EVAL)    op_eval   (vm, fname);
+        else if (opc == OPC_ASSERT)  op_assert (vm, fname);
+        else if (opc == OPC_JMPF) {
             char *np = op_jmpf(vm, fname, orig);
             ptr = np ? np : nl + 1; continue;
         }
-        else if (!strcmp(fw, "JMP")) {
+        else if (opc == OPC_JMP) {
             ptr = op_jmp(vm, fname, orig); continue;
         }
-        else if (!strcmp(fw, "LABEL"))  op_label (vm, fname, orig);
-        else if (!strcmp(fw, "START") ||
-                 !strcmp(fw, "PROC") || !strcmp(fw, "PARAM") ||
-                 !strcmp(fw, "DECL") || !strcmp(fw, "HALT"))  { /* skip */ }
+        else if (opc == OPC_LABEL)  op_label (vm, fname, orig);
+        else if (opc == OPC_START ||
+                 opc == OPC_PROC || opc == OPC_PARAM ||
+                 opc == OPC_DECL || opc == OPC_HALT)  { /* skip */ }
         /* Dopo END_PROC il return_ptr può cadere su THREAD_* o PAR_END: è la fine
          * del branch fisico nel bytecode. thread_entry salta così; qui vm_run_BT
          * annidato (CALL da worker) deve terminare allo stesso modo. */
-        else if (strncmp(fw, "THREAD_", 7) == 0 || !strcmp(fw, "PAR_END")) {
+        else if (opc == OPC_THREAD || opc == OPC_PAR_END) {
             if (current_thread_args) {
                 goto done;
             }
@@ -352,10 +395,14 @@ void vm_run_BT(VM *vm, char *buffer, char *frame_name_init)
         }
         else { vm_debug_panic("[VM] unknown op: '%s'\n", fw); }
 
+        tl_riga_copia = tl_riga_fine = tl_riga_orig = NULL;
         ptr = nl + 1;
     }
 
 done:
+#undef VM_FNAME_CAMBIATO
+    tl_fx_nome = fx_prima; tl_fx_fi = fx_fi_prima;
+    tl_riga_copia = rc_prima; tl_riga_fine = rf_prima; tl_riga_orig = ro_prima;
     g_run_bt_depth--;
     for (uint k = 0; k < cs_cap; k++) {
         free(cs[k].caller_frame);
@@ -373,6 +420,8 @@ void vm_exec(VM *vm, char *buffer)
 {
     char *orig = strdup(buffer);
     char *ptr  = buffer;
+    vm_line_index_build(orig);     /* il testo eseguito non cambia piu' */
+    __atomic_add_fetch(&g_vm_run_id, 1, __ATOMIC_RELAXED);
     int   line = 1;
     /* Nomi che il testo della procedura corrente può introdurre (DECL, PARAM,
      * LOCAL, DELOCAL) e LOCAL: a END_PROC dimensionano vars[] e lo stack dei
@@ -410,6 +459,7 @@ void vm_exec(VM *vm, char *buffer)
                 stack_init(&vm->frames[idx]->LocalVariables);
                 vm_str_replace(&vm->frames[idx]->name, name);
                 vm->frames[idx]->addr = line;
+                vm->frames[idx]->gen  = vm_next_gen();
                 proc_names = proc_locals = 0;
                 VMLOG("[EXEC] PROC '%s' addr=%u\n", name, line);
 
@@ -471,6 +521,7 @@ void vm_exec(VM *vm, char *buffer)
     /* nuovo programma: nessun par aperto, solo il thread principale */
     __atomic_store_n(&g_runnable, 1, __ATOMIC_SEQ_CST);
     vm_run_BT(vm, orig, "main");
+    vm_line_index_free();
     free(orig);
 }
 
@@ -675,6 +726,7 @@ static void vm_run_from_string_impl(const char *bytecode, int dump_after)
     free(vm);
     vm_if_free_branch_stack();    /* vettori __thread del thread chiamante */
     vm_invert_free_cache();
+    vm_cexpr_free_cache();
 }
 
 void vm_run_from_string(const char *bytecode)
