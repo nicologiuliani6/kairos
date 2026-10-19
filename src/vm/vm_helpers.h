@@ -1028,8 +1028,18 @@ static void vm_call_tab_libera(VmCallTab *t)
     memset(t, 0, sizeof *t);
 }
 
+/* Thread-local cache per vm_call_cache: evita di ricreare lo stesso slot per
+   chiamate consecutive con stessa riga. */
+static __thread const char *last_call_riga = NULL;
+static __thread VmCallSlot *cached_call_slot = NULL;
+
 static inline VmCallSlot *vm_call_cache(const char *riga)
 {
+    /* Cache lookup per chiamate consecutive */
+    if (last_call_riga && last_call_riga == riga) {
+        return cached_call_slot;
+    }
+    
     VmCallTab *t = &tl_call_tab;
     if (t->run != g_vm_run_id) { vm_call_tab_libera(t); t->run = g_vm_run_id; }
     if (!t->s || 2 * (t->count + 1) > t->mask + 1) {
@@ -1055,6 +1065,11 @@ static inline VmCallSlot *vm_call_cache(const char *riga)
         t->s[i].pc = -1;
         t->count++;
     }
+    
+    /* Aggiorna cache */
+    last_call_riga = riga;
+    cached_call_slot = &t->s[i];
+    
     return &t->s[i];
 }
 
@@ -1073,6 +1088,23 @@ static inline void vm_cexpr_free_cache(void)
     }
     last_name = NULL;
     last_depth = -1;
+    /* Libera i cache per clone_frame_for_depth */
+    cached_clone_fi_depth = 0;
+    last_clone_name_depth = NULL;
+    last_clone_depth = -1;
+    /* Libera i cache per clone_frame_for_thread */
+    cached_clone_fi_thread = 0;
+    last_clone_name_thread = NULL;
+    /* Libera i cache per vm_call_cache */
+    cached_call_slot = NULL;
+    last_call_riga = NULL;
+    /* Libera il cache per frame riutilizzati */
+    if (cached_frame_for_depth) {
+        free(cached_frame_for_depth);
+        cached_frame_for_depth = NULL;
+    }
+    last_cached_frame_name = NULL;
+    last_cached_frame_depth = -1;
 }
 
 /* --- valutazione --- */

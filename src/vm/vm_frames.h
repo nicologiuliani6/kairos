@@ -50,6 +50,37 @@ static inline void vm_ensure_frame_cap(VM *vm, uint needed)
  *  Clone frame — corpo comune estratto
  * ====================================================================== */
 
+/* Thread-local cache per frame riutilizzati: evita di creare nuovi frame quando
+   possiamo riutilizzare quelli esistenti. */
+static __thread Frame *cached_frame_for_depth = NULL;
+static __thread const char *last_cached_frame_name = NULL;
+static __thread int last_cached_frame_depth = -1;
+
+/* Funzione per riutilizzare frame quando possibile */
+static inline Frame* get_or_create_frame(VM *vm, const char *proc, int depth)
+{
+    /* Se abbiamo un frame cached con gli stessi parametri, lo usiamo */
+    if (cached_frame_for_depth && last_cached_frame_name && 
+        strcmp(last_cached_frame_name, proc) == 0 && 
+        last_cached_frame_depth == depth) {
+        return cached_frame_for_depth;
+    }
+    
+    /* Altrimenti creiamo un nuovo frame e lo cache */
+    uint clone_fi = clone_frame_for_depth(vm, proc, depth);
+    Frame *frame = vm->frames[clone_fi];
+    
+    /* Cache il frame per future chiamate */
+    if (cached_frame_for_depth) {
+        free(cached_frame_for_depth);
+    }
+    cached_frame_for_depth = frame;
+    last_cached_frame_name = proc;
+    last_cached_frame_depth = depth;
+    
+    return frame;
+}
+
 static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const char *key)
 {
     vm_ensure_frame_cap(vm, clone_fi);
@@ -153,8 +184,19 @@ static inline void init_clone_frame(VM *vm, uint clone_fi, uint base_fi, const c
     }
 }
 
+/* Thread-local cache per clone_frame_for_depth: evita di ricreare lo stesso frame
+   per chiamate consecutive con stessi argomenti. */
+static __thread const char *last_clone_name_depth = NULL;
+static __thread int last_clone_depth = -1;
+static __thread uint cached_clone_fi_depth = 0;
+
 static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
 {
+    /* Cache lookup per chiamate consecutive */
+    if (last_clone_name_depth && strcmp(last_clone_name_depth, proc) == 0 && last_clone_depth == depth) {
+        return cached_clone_fi_depth;
+    }
+    
     pthread_mutex_lock(&var_indexer_mtx);
     VM_FRAME_KEY_BUF(key, proc);
     if (current_thread_args)
@@ -163,18 +205,36 @@ static inline uint clone_frame_for_depth(VM *vm, const char *proc, int depth)
         make_frame_key(proc, depth, key, sizeof(key));
     if (char_id_map_exists(&FrameIndexer, key)) {
         uint r = (uint)char_id_map_get(&FrameIndexer, key);
+        /* Aggiorna cache */
+        last_clone_name_depth = proc;
+        last_clone_depth = depth;
+        cached_clone_fi_depth = r;
         pthread_mutex_unlock(&var_indexer_mtx);
         return r;
     }
     uint base_fi  = (uint)char_id_map_get(&FrameIndexer, proc);
     uint clone_fi = (uint)char_id_map_get(&FrameIndexer, key);
     init_clone_frame(vm, clone_fi, base_fi, key);
+    /* Aggiorna cache */
+    last_clone_name_depth = proc;
+    last_clone_depth = depth;
+    cached_clone_fi_depth = clone_fi;
     pthread_mutex_unlock(&var_indexer_mtx);
     return clone_fi;
 }
 
+/* Thread-local cache per clone_frame_for_thread: evita di ricreare lo stesso frame
+   per chiamate consecutive con stessi argomenti. */
+static __thread const char *last_clone_name_thread = NULL;
+static __thread uint cached_clone_fi_thread = 0;
+
 static inline uint clone_frame_for_thread(VM *vm, const char *proc)
 {
+    /* Cache lookup per chiamate consecutive */
+    if (last_clone_name_thread && strcmp(last_clone_name_thread, proc) == 0) {
+        return cached_clone_fi_thread;
+    }
+    
     VM_FRAME_KEY_BUF(key, proc);
     make_thread_frame_key(proc, key, sizeof(key));
 
@@ -185,17 +245,28 @@ static inline uint clone_frame_for_thread(VM *vm, const char *proc)
        ritrova. Prendere qui un mutex unico per tutto il processo, come si faceva,
        serializzava OGNI chiamata di procedura di OGNI ramo. */
     int gia = char_id_map_lookup(&FrameIndexer, key);
-    if (gia >= 0) return (uint)gia;
+    if (gia >= 0) {
+        /* Aggiorna cache */
+        last_clone_name_thread = proc;
+        cached_clone_fi_thread = (uint)gia;
+        return (uint)gia;
+    }
 
     pthread_mutex_lock(&var_indexer_mtx);
     gia = char_id_map_lookup(&FrameIndexer, key);   /* ricontrollo sotto lock */
     if (gia >= 0) {
         pthread_mutex_unlock(&var_indexer_mtx);
+        /* Aggiorna cache */
+        last_clone_name_thread = proc;
+        cached_clone_fi_thread = (uint)gia;
         return (uint)gia;
     }
     uint base_fi  = (uint)char_id_map_get(&FrameIndexer, proc);
     uint clone_fi = (uint)char_id_map_get(&FrameIndexer, key);
     init_clone_frame(vm, clone_fi, base_fi, key);
+    /* Aggiorna cache */
+    last_clone_name_thread = proc;
+    cached_clone_fi_thread = clone_fi;
     pthread_mutex_unlock(&var_indexer_mtx);
     return clone_fi;
 }
