@@ -83,10 +83,30 @@ static inline void make_frame_key(const char *name, int depth, char *out, size_t
  * Il buffer `out` lo dimensiona il chiamante con VM_FRAME_KEY_BUF (nome della
  * procedura più il suffisso numerico): nessuna lunghezza massima.
  */
+/* Thread-local cache per make_frame_key_par_rec: evita di ricreare la stessa
+   chiave (name@w<tid>_depth) per chiamate consecutive con stessi argomenti.
+   Variabili a scope di file __thread, una per thread. */
+static __thread const char *last_name = NULL;
+static __thread int last_depth = -1;
+static __thread char *cached_key = NULL;
+
 static inline void make_frame_key_par_rec(const char *name, int depth, char *out, size_t sz)
 {
+    if (last_name && strcmp(last_name, name) == 0 && last_depth == depth) {
+        strncpy(out, cached_key, sz);
+        out[sz-1] = '\0';
+        return;
+    }
+
     unsigned tid = (unsigned)(unsigned long)pthread_self();
     snprintf(out, sz, "%s@w%x_%d", name, tid, depth);
+
+    if (cached_key) {
+        free(cached_key);
+    }
+    cached_key = strdup(out);
+    last_name = name;
+    last_depth = depth;
 }
 
 static inline void make_thread_frame_key(const char *proc, char *out, size_t sz)
@@ -1046,6 +1066,13 @@ static inline void vm_cexpr_free_cache(void)
     cp_tab_libera(&tl_cp_luogo);
     cn_tab_libera(&tl_cn_espr);
     cn_tab_libera(&tl_cn_luogo);
+    /* Libera il cache locale del thread per make_frame_key_par_rec */
+    if (cached_key) {
+        free(cached_key);
+        cached_key = NULL;
+    }
+    last_name = NULL;
+    last_depth = -1;
 }
 
 /* --- valutazione --- */
