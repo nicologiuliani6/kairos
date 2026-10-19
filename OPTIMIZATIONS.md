@@ -1,39 +1,45 @@
-# Ottimizzazioni VM Implementate
+# Optimizations for Kairos VM
 
-## 1. Caching thread-local per make_frame_key_par_rec
+This document describes the 5 optimizations implemented in the Kairos VM to improve performance while maintaining byte-by-byte compatibility, identical error messages, and control flow.
 
-- Aggiunte variabili `__thread` a scope di file per memorizzare l'ultima chiave generata
-- Implementata logica di cache nella funzione `make_frame_key_par_rec` per evitare ricreazione della stessa chiave
-- Aggiunta pulizia della cache in `vm_cexpr_free_cache`
-- Mantenuti output byte-for-byte identici, errori e flussi di controllo
-- Nessun cambiamento ai file build/, venv/, packaging/, tests/
-- Utilizzati interi a 64 bit, senza modifiche alla sintassi
-- Commenti in italiano, seguendo lo stile esistente
+## 1. Thread-local caching for `make_frame_key_par_rec`
 
-## 2. Frame Cloning Optimization
+**Problem**: The `make_frame_key_par_rec` function was creating the same frame keys repeatedly for concurrent threads working on the same procedure at the same depth, causing unnecessary string operations and memory allocation.
 
-- Implementata cache thread-local per `clone_frame_for_depth` per evitare ricreazione di frame identici
-- Implementata cache thread-local per `clone_frame_for_thread` per evitare ricreazione di frame identici
-- Aggiunta logica di cache lookup per chiamate consecutive con stessi parametri
-- Aggiornamento cache a ogni creazione di frame per mantenere la consistenza
-- Mantenuti output byte-for-byte identici, errori e flussi di controllo
+**Solution**: Added thread-local caching to avoid recomputing identical keys. When called with the same parameters consecutively, it returns a cached key instead of computing it again.
 
-## 3. Call/Uncall Caching
+**Impact**: Eliminates redundant computations for repeated calls within the same thread.
 
-- Implementata cache thread-local per `vm_call_cache` per evitare ricreazione di slot identici per stessa riga
-- Aggiunta logica di cache lookup per chiamate consecutive con stessa riga
-- Aggiornamento cache a ogni creazione di slot per mantenere la consistenza
-- Mantenuti output byte-for-byte identici, errori e flussi di controllo
+## 2. Frame Cloning Optimization with thread-local caching
 
-## 4. Frame Reuse Strategy
+**Problem**: The `clone_frame_for_depth` function was repeatedly creating frames for the same procedure and depth combination without reusing previously created frames.
 
-- Implementata strategia di riutilizzo dei frame tramite caching thread-local
-- Aggiunta funzione `get_or_create_frame` che tenta di riutilizzare frame esistenti
-- Mantenuti output byte-for-byte identici, errori e flussi di controllo
+**Solution**: Implemented thread-local caching to reuse frames when possible, reducing allocation overhead.
 
-## 5. Thread-Local Frame Indexing
+**Impact**: Significant reduction in frame creation overhead for recursive procedures.
 
-- Implementata cache thread-local per il lookup degli indici dei frame
-- Aggiunta logica di cache per evitare ricerche ripetute nella stessa mappa
-- Implementata funzione `get_frame_index_cached` con supporto per cache locale per thread
-- Mantenuti output byte-for-byte identici, errori e flussi di controllo
+## 3. Call/Uncall Caching with thread-local storage
+
+**Problem**: The `vm_call_cache` function was repeatedly parsing the same call lines without proper caching.
+
+**Solution**: Implemented thread-local caching to store previously computed call slots, avoiding redundant parsing.
+
+**Impact**: Improved performance for frequently called procedures.
+
+## 4. Frame Reuse Strategy with thread-local frame caching
+
+**Problem**: Creating new frames when existing ones could be reused was inefficient.
+
+**Solution**: Added a frame reuse strategy that caches frames for later use instead of creating new ones every time.
+
+**Impact**: Reduced memory allocation and improved performance for frequently used frames.
+
+## 5. Thread-Local Frame Indexing with proper cache management
+
+**Problem**: The `clone_frame_for_thread` function wasn't properly utilizing thread-local caching to avoid redundant lookups.
+
+**Solution**: Enhanced caching logic to maintain thread-local frame references for faster access.
+
+**Impact**: Reduced lookup time and improved performance for thread-specific frame operations.
+
+All optimizations maintain complete byte-for-byte compatibility, identical error messages, and control flow as required.
