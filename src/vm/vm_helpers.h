@@ -528,7 +528,10 @@ static inline char *normalize_bytecode_physical_lines(const char *input)
     }
 
     out[out_len] = '\0';
-    return out;
+    /* out_cap e' un margine di 8x: il testo resta in memoria per tutta la
+     * esecuzione, quindi si restringe alla lunghezza vera. */
+    char *stretto = (char *)realloc(out, out_len + 1);
+    return stretto ? stretto : out;
 }
 
 /* Var int chiuse da un DELOCAL (o liberate da un LOCAL che riusa lo slot),
@@ -839,6 +842,7 @@ static __thread CTab tl_cn_espr, tl_cn_luogo;
  * senza calcolarne l'hash. Un testo altrove passa dall'hash del contenuto. */
 static __thread const char *tl_riga_copia = NULL, *tl_riga_fine = NULL, *tl_riga_orig = NULL;
 
+#define VM_CP_MAX 16384u   /* celle massime di ogni tabella per thread */
 typedef struct { const char *key; size_t len; CNode *n; } CPSlot;
 typedef struct { CPSlot *s; uint32_t mask, count; unsigned run; } CPTab;
 static __thread CPTab tl_cp_espr, tl_cp_luogo;
@@ -948,7 +952,17 @@ static inline CNode *cn_cerca(CTab *t, const char *testo, int luogo)
         }
         size_t len = strlen(testo);
         CNode *n = cn_cerca_testo(t, testo, luogo);
-        if (!pt->s || 2 * (pt->count + 1) > pt->mask + 1) cp_tab_cresci(pt);
+        if (!pt->s || 2 * (pt->count + 1) > pt->mask + 1) {
+            /* E' solo un acceleratore del percorso per contenuto: oltre un
+             * tetto si svuota invece di crescere, cosi' la memoria per thread
+             * non dipende dalla lunghezza del programma. */
+            if (pt->s && pt->mask + 1 >= VM_CP_MAX) {
+                memset(pt->s, 0, (size_t)(pt->mask + 1) * sizeof(CPSlot));
+                pt->count = 0;
+            } else {
+                cp_tab_cresci(pt);
+            }
+        }
         uint32_t i = cp_hash(key) & pt->mask;
         while (pt->s[i].key && pt->s[i].key != key) i = (i + 1) & pt->mask;
         if (!pt->s[i].key) pt->count++;
