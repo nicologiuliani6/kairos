@@ -1,0 +1,27 @@
+// call e uncall ripetuti di un par con rendez-vous, dentro un ciclo.
+procedure rv(channel c, int v, int w)
+    par
+        ssend(<v>, c)
+    and
+        srecv(<w>, c)
+    rap
+
+procedure main()
+    local channel c = empty
+    local int v = 1
+    local int w = 0
+    local int i = 0
+    from i == 0 do
+        call rv(c, v, w)
+        uncall rv(c, v, w)
+        call rv(c, v, w)
+        uncall rv(c, v, w)
+    loop
+        i += 1
+    until i == 3
+    show(v)
+    show(w)
+    delocal int i = 3
+    delocal int w = 0
+    delocal int v = 1
+    delocal channel c = empty

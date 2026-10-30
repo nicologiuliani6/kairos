@@ -194,4 +194,17 @@ static inline void session_delegate_release(Channel *ch, const char *name)
     pthread_mutex_unlock(&g_session_mtx);
 }
 
+/* Il thread corrente e' ancora titolare del canale? Dopo averlo ceduto (delega) il
+   canale e' di altri, e il suo buffer puo' essere occupato dai loro scambi: il
+   delocal di chi lo ha ceduto non deve guardarlo. */
+static inline int session_holds(Channel *ch)
+{
+    if (!ch) return 0;
+    pthread_mutex_lock(&g_session_mtx);
+    session_purge(&ch->session);
+    int r = session_is_owner(&ch->session, g_my_serial);
+    pthread_mutex_unlock(&g_session_mtx);
+    return r;
+}
+
 #endif /* VM_SESSION_H */

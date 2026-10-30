@@ -1,0 +1,27 @@
+// Name passing: ciascun ramo crea un canale privato, uno lo spedisce e riceve la
+// risposta su di esso, l'altro lo riceve e risponde. call e uncall.
+procedure np(channel d, int x, int y)
+    par
+        local channel e = empty
+        ssend(<e>, d)
+        srecv(<y>, e)
+        delocal channel e = empty
+    and
+        local channel f = empty
+        srecv(<f>, d)
+        ssend(<x>, f)
+        delocal channel f = empty
+    rap
+
+procedure main()
+    local channel d = empty
+    local int x = 9
+    local int y = 0
+    call np(d, x, y)
+    show(y)
+    uncall np(d, x, y)
+    show(x)
+    show(y)
+    delocal int y = 0
+    delocal int x = 9
+    delocal channel d = empty

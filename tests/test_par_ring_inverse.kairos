@@ -1,0 +1,40 @@
+// Anello di tre rami con tre canali, ognuno con due titolari. call e uncall.
+procedure ring(channel ab, channel bc, channel ca, int a, int b, int c, int ra, int rb, int rc)
+    par
+        ssend(<a>, ab)
+        srecv(<ra>, ca)
+    and
+        srecv(<rb>, ab)
+        ssend(<b>, bc)
+    and
+        srecv(<rc>, bc)
+        ssend(<c>, ca)
+    rap
+
+procedure main()
+    local channel ab = empty
+    local channel bc = empty
+    local channel ca = empty
+    local int a = 1
+    local int b = 2
+    local int c = 3
+    local int ra = 0
+    local int rb = 0
+    local int rc = 0
+    call ring(ab, bc, ca, a, b, c, ra, rb, rc)
+    show(ra)
+    show(rb)
+    show(rc)
+    uncall ring(ab, bc, ca, a, b, c, ra, rb, rc)
+    show(a)
+    show(b)
+    show(c)
+    delocal int rc = 0
+    delocal int rb = 0
+    delocal int ra = 0
+    delocal int c = 3
+    delocal int b = 2
+    delocal int a = 1
+    delocal channel ca = empty
+    delocal channel bc = empty
+    delocal channel ab = empty

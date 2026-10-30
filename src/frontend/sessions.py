@@ -222,6 +222,11 @@ def _session_of_stmt(stmt, ch, ctx):
         lname = name.lower()
         if lname in ('ssend', 'srecv') and args and args[-1] == ch:
             return ('!' if lname == 'ssend' else '?', len(args) - 1, _S_END)
+        if lname in ('ssend', 'srecv') and ch in args[:-1]:
+            # `ch` viaggia come payload: lo si cede o lo si riceve (delega). Da qui in
+            # poi chi lo usa e' un altro, e il frammento di tipi non lo segue: non
+            # determinato, senza segnalare conflitti.
+            return _S_ANY
         if lname in _builtin_names():
             return _S_END
         return _session_of_call(name, args, ch, ctx)

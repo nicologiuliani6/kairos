@@ -1047,7 +1047,7 @@ static inline void op_delocal(VM *vm, const char *frame_name)
     }
     else if (V->T == TYPE_INT)     ok = (*(V->value) == Vvalue);
     else if (V->T == TYPE_STACK)   ok = (V->stack_len == 0 && c_val && strcmp(c_val, "nil")   == 0);
-    else if (V->T == TYPE_CHANNEL) ok = (V->channel->buf_len == 0 && c_val && strcmp(c_val, "empty") == 0);
+    else if (V->T == TYPE_CHANNEL) ok = ((V->channel->buf_len == 0 || !session_holds(V->channel)) && c_val && strcmp(c_val, "empty") == 0);
 
     if (!ok) {
         if (V->T == TYPE_ARRAY)

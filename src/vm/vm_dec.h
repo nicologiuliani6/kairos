@@ -685,7 +685,7 @@ static inline void vm_x_delocal(VM *vm, const char *frame_name, uint fi, VmDec *
     }
     else if (V->T == TYPE_INT)     ok = (*(V->value) == Vvalue);
     else if (V->T == TYPE_STACK)   ok = (V->stack_len == 0 && c_val && d->nil);
-    else if (V->T == TYPE_CHANNEL) ok = (V->channel->buf_len == 0 && c_val && d->empty);
+    else if (V->T == TYPE_CHANNEL) ok = ((V->channel->buf_len == 0 || !session_holds(V->channel)) && c_val && d->empty);
 
     if (!ok) {
         if (V->T == TYPE_ARRAY)

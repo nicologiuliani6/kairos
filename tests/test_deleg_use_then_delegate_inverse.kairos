@@ -1,0 +1,40 @@
+// Delega dopo l'uso: A e B si scambiano un valore su c, poi A cede c a C, e B
+// riceve da C sullo stesso canale. Il controllo statico non deve rifiutarlo (c
+// viaggia come payload, il frammento di tipi non lo segue) e l'uncall deve
+// riportare tutto com'era in ogni esecuzione: prima il delocal di C guardava il
+// buffer di un canale ormai ceduto e falliva a seconda dello scheduling.
+procedure deleg(channel c, channel d, int v, int a, int b, int w)
+    par
+        ssend(<v>, c)
+        ssend(<c>, d)
+    and
+        srecv(<a>, c)
+        srecv(<b>, c)
+    and
+        local channel e = empty
+        srecv(<e>, d)
+        ssend(<w>, e)
+        delocal channel e = empty
+    rap
+
+procedure main()
+    local channel c = empty
+    local channel d = empty
+    local int v = 1
+    local int a = 0
+    local int b = 0
+    local int w = 2
+    call deleg(c, d, v, a, b, w)
+    show(a)
+    show(b)
+    uncall deleg(c, d, v, a, b, w)
+    show(v)
+    show(a)
+    show(b)
+    show(w)
+    delocal int w = 2
+    delocal int b = 0
+    delocal int a = 0
+    delocal int v = 1
+    delocal channel d = empty
+    delocal channel c = empty

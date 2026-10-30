@@ -1,0 +1,33 @@
+// par annidati con due canali (c fra i rami esterni, d fra i due interni), call e uncall.
+procedure inner(channel d, int x, int y)
+    par
+        ssend(<x>, d)
+    and
+        srecv(<y>, d)
+    rap
+
+procedure outer(channel c, channel d, int x, int y, int z)
+    par
+        call inner(d, x, y)
+        ssend(<y>, c)
+    and
+        srecv(<z>, c)
+    rap
+
+procedure main()
+    local channel c = empty
+    local channel d = empty
+    local int x = 5
+    local int y = 0
+    local int z = 0
+    call outer(c, d, x, y, z)
+    show(z)
+    uncall outer(c, d, x, y, z)
+    show(x)
+    show(y)
+    show(z)
+    delocal int z = 0
+    delocal int y = 0
+    delocal int x = 5
+    delocal channel d = empty
+    delocal channel c = empty

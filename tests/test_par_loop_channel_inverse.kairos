@@ -1,0 +1,44 @@
+// Un ramo manda tre volte sullo stesso canale (ciclo), l'altro riceve tre volte;
+// poi uncall. L'accoppiamento all'indietro deve essere lo stesso in ogni esecuzione.
+procedure pc(channel c, int v)
+    local int i = 0
+    from i == 0 do
+        v += 1
+        ssend(<v>, c)
+    loop
+        i += 1
+    until i == 2
+    delocal int i = 2
+
+procedure qc(channel c, int t1, int t2, int t3)
+    srecv(<t1>, c)
+    srecv(<t2>, c)
+    srecv(<t3>, c)
+
+procedure both(channel c, int v, int t1, int t2, int t3)
+    par
+        call pc(c, v)
+    and
+        call qc(c, t1, t2, t3)
+    rap
+
+procedure main()
+    local channel c = empty
+    local int v = 0
+    local int t1 = 0
+    local int t2 = 0
+    local int t3 = 0
+    call both(c, v, t1, t2, t3)
+    show(t1)
+    show(t2)
+    show(t3)
+    uncall both(c, v, t1, t2, t3)
+    show(v)
+    show(t1)
+    show(t2)
+    show(t3)
+    delocal int t3 = 0
+    delocal int t2 = 0
+    delocal int t1 = 0
+    delocal int v = 0
+    delocal channel c = empty
