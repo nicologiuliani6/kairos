@@ -98,11 +98,21 @@ static inline void session_thread_begin(void)
     pthread_mutex_unlock(&g_session_mtx);
 }
 
-/* Alla fine del thread: le sue titolarita' scadono. */
-static inline void session_thread_end(void)
+/* Il thread finisce: NON scadono ancora le sue titolarita'. Scadono quando il
+   par che lo ha lanciato fa il join di tutti i rami (session_serial_kill).
+   Cosi' una titolarita' dura quanto il par intero: se in un par tre rami
+   usano lo stesso canale, il terzo viene sempre fermato, qualunque sia lo
+   scheduling. Se scadessero a fine ramo, l'esito dipenderebbe da chi finisce
+   per primo, e all'indietro l'accoppiamento di ssend/srecv sarebbe ambiguo. */
+static inline void session_thread_end(void) { }
+
+static inline unsigned long session_thread_serial(void) { return g_my_serial; }
+
+/* Al join del par: le titolarita' del thread con questo serial scadono. */
+static inline void session_serial_kill(unsigned long sr)
 {
     pthread_mutex_lock(&g_session_mtx);
-    if (g_my_serial < g_serial_cap) g_serial_alive[g_my_serial] = 0;
+    if (sr != 0 && sr < g_serial_cap) g_serial_alive[sr] = 0;
     pthread_mutex_unlock(&g_session_mtx);
 }
 

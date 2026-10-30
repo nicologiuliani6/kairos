@@ -170,6 +170,7 @@ static inline void exec_par_threads(VM *vm, char *buffer, const char *frame_name
 
     for (int t = 0; t < pb->count; t++) {
         pthread_join(args[t]->tid, NULL);
+        session_serial_kill(args[t]->session_serial);
         free(args[t]->frame_name);
         free(args[t]->branch_path);
         free(args[t]);
@@ -192,6 +193,7 @@ static void *thread_entry(void *arg)
     g_branch_path = args->branch_path;
     g_inversion_depth = args->inversion_depth;
     session_thread_begin();   /* vm_session.h */
+    args->session_serial = session_thread_serial();
     //fprintf(stderr, "[THREAD] avviato is_inverse=%d\n", args->is_inverse);
     Stack branch_locals;
     stack_init(&branch_locals);

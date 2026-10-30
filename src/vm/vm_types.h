@@ -308,6 +308,7 @@ struct ThreadArgs {
     char      *frame_name;          /* heap */
     char      *start_ptr;
     int        finished, blocked, turn_done;
+    unsigned long session_serial;   /* serial del thread, vive fino al join del par */
     int        is_inverse;
     pthread_t  tid;
     pthread_mutex_t *done_mtx;
