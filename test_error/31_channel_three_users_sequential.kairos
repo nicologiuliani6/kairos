@@ -1,0 +1,27 @@
+// Errore VM atteso, SEMPRE: terzo titolare di 'c'. Un ramo manda due volte, gli
+// altri due ricevono una volta ciascuno. La titolarita' dura fino al join del par,
+// quindi il terzo ramo e' fermato qualunque sia lo scheduling. Prima durava fino a
+// fine ramo: il programma riusciva o falliva a seconda di chi finiva prima, e
+// l'uncall abbinava ssend e srecv in modo ambiguo (errori SRECV dest not zero).
+// P manda due volte su c; Q e R ricevono una volta ciascuno.
+// Tre thread usano c, ma mai tutti e tre insieme se Q finisce prima che R inizi.
+procedure main()
+    local channel c = empty
+    local int v = 1
+    local int a = 0
+    local int b = 0
+    par
+        ssend(<v>, c)
+        v += 1
+        ssend(<v>, c)
+    and
+        srecv(<a>, c)
+    and
+        srecv(<b>, c)
+    rap
+    show(a)
+    show(b)
+    delocal int b = 1
+    delocal int a = 1
+    delocal int v = 0
+    delocal channel c = empty
