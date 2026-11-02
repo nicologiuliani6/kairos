@@ -33,7 +33,7 @@ jobs:
       - name: Build dap.so
         run: |
           make install-deps
-          make build-dap
+          make build build-dap   # test-dap compiles its fixtures with the kairos app, which needs libvm.so
           make test-dap
           NEED="$(objdump -T build/libvm_dap.so | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           echo "dap.so needs ${NEED}"
