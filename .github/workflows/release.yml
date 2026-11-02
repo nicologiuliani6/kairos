@@ -18,25 +18,56 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # dap.so is loaded inside the editor's process (VS Code via koffi): a VS Code
+  # snap brings its own glibc 2.31 (core20), so the library is built on Debian
+  # bullseye (glibc 2.31) and the same file goes into every package.
+  dap:
+    runs-on: ubuntu-latest
+    container: debian:bullseye
+    steps:
+      - name: System packages
+        run: apt-get update && apt-get install -y gcc make python3 python3-venv binutils git
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build dap.so
+        run: |
+          make install-deps
+          make build-dap
+          make test-dap
+          NEED="$(objdump -T build/libvm_dap.so | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          echo "dap.so needs ${NEED}"
+          [ "$(printf '%s\nGLIBC_2.31\n' "${NEED}" | sort -V | tail -1)" = GLIBC_2.31 ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dap
+          path: build/libvm_dap.so
+
   deb:
+    needs: dap
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dap
+          path: dap-prebuilt
       - name: System packages
         run: sudo apt-get update && sudo apt-get install -y build-essential python3 python3-venv dpkg-dev
       - name: Build .deb
         run: |
           make install-deps
           make test
-          PKG_VERSION="${TAG#v}" packaging/linux/build-deb.sh
+          DAP_PREBUILT="$PWD/dap-prebuilt/libvm_dap.so" PKG_VERSION="${TAG#v}" packaging/linux/build-deb.sh
       - uses: actions/upload-artifact@v4
         with:
           name: deb
           path: packaging/linux/*.deb
 
   rpm:
+    needs: dap
     runs-on: ubuntu-latest
     container: fedora:41
     steps:
@@ -45,16 +76,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dap
+          path: dap-prebuilt
       - name: Build .rpm
         run: |
           make install-deps
-          PKG_VERSION="${TAG#v}" packaging/linux/build-rpm.sh
+          DAP_PREBUILT="$PWD/dap-prebuilt/libvm_dap.so" PKG_VERSION="${TAG#v}" packaging/linux/build-rpm.sh
       - uses: actions/upload-artifact@v4
         with:
           name: rpm
           path: packaging/linux/*.rpm
 
   arch:
+    needs: dap
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
@@ -65,11 +101,15 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dap
+          path: dap-prebuilt
       - name: Build .pkg.tar.zst
         # makepkg refuses to run as root.
         run: |
           chown -R builder "$GITHUB_WORKSPACE"
-          su builder -c "cd '$GITHUB_WORKSPACE' && make install-deps && PKG_VERSION='${TAG#v}' packaging/linux/build-arch.sh"
+          su builder -c "cd '$GITHUB_WORKSPACE' && make install-deps && DAP_PREBUILT='$GITHUB_WORKSPACE/dap-prebuilt/libvm_dap.so' PKG_VERSION='${TAG#v}' packaging/linux/build-arch.sh"
       - uses: actions/upload-artifact@v4
         with:
           name: arch

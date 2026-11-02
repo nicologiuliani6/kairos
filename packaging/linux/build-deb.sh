@@ -71,7 +71,14 @@ echo "Running build pipeline..."
 # The .so runs on CPUs other than the build one: no -march=native.
 case "$(uname -m)" in x86_64) PKG_MARCH="${PKG_MARCH--march=x86-64}" ;; *) PKG_MARCH="${PKG_MARCH-}" ;; esac
 rm -f "${PROJECT_ROOT}/build/libvm.so"
-(cd "${PROJECT_ROOT}" && make release-app MARCH="${PKG_MARCH}" && make build-dap)
+(cd "${PROJECT_ROOT}" && make release-app MARCH="${PKG_MARCH}")
+# DAP_PREBUILT: a dap.so built elsewhere (the release CI builds it on an old
+# glibc, so that it loads in editors that bring their own, e.g. VS Code snap).
+if [[ -n "${DAP_PREBUILT:-}" ]]; then
+  mkdir -p "${PROJECT_ROOT}/build" && cp "${DAP_PREBUILT}" "${DAP_SRC}"
+else
+  (cd "${PROJECT_ROOT}" && make build-dap)
+fi
 
 APP_ONEFILE="${PROJECT_ROOT}/build/dist/kairos"
 APP_ONEDIR="${PROJECT_ROOT}/build/dist/kairos/kairos"
