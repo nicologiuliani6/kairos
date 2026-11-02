@@ -33,8 +33,7 @@ jobs:
       - name: Build dap.so
         run: |
           make install-deps
-          make build build-dap   # test-dap compiles its fixtures with the kairos app, which needs libvm.so
-          make test-dap
+          make build-dap
           NEED="$(objdump -T build/libvm_dap.so | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           echo "dap.so needs ${NEED}"
           [ "$(printf '%s\nGLIBC_2.31\n' "${NEED}" | sort -V | tail -1)" = GLIBC_2.31 ]
@@ -60,6 +59,7 @@ jobs:
         run: |
           make install-deps
           make test
+          make test-dap   # here: its fixtures are compiled by the kairos app, which needs Python >= 3.10
           DAP_PREBUILT="$PWD/dap-prebuilt/libvm_dap.so" PKG_VERSION="${TAG#v}" packaging/linux/build-deb.sh
       - uses: actions/upload-artifact@v4
         with:
