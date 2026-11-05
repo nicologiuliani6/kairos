@@ -63,8 +63,10 @@ python3 lossless/genera_bwt.py <n> <blocks> <seq|par> > /tmp/case.kairos
 ./venv/bin/python -m src.kairos /tmp/case.kairos
 ```
 
-The two variants have an identical body: comparing their times measures only
-the effect of concurrency.
+The sequential variant has no `par` and no channel: the worker carries its
+result out through its own variables (the index in a parameter, the column in a
+stack) instead of `ssend`. The rest of the body is identical, so comparing the
+times measures the effect of concurrency.
 
 ## Results
 

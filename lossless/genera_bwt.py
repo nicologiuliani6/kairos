@@ -2,9 +2,11 @@
 """Genera programmi Kairos per lo studio sulla BWT reversibile.
 
 Produce, per un dato numero di blocchi e una data lunghezza, due varianti dello
-stesso calcolo: una sequenziale e una con i blocchi come rami di un `par`. Il
-corpo delle procedure e' identico, quindi il confronto dei tempi misura solo
-l'effetto della concorrenza.
+stesso calcolo: una sequenziale e una con i blocchi come rami di un `par`.
+Nella sequenziale non c'e' ne' `par` ne' canale: il lavoratore porta fuori
+l'indice con una sua variabile (un parametro) e la colonna nello stack che gli
+viene passato; il resto del corpo e' identico, quindi il confronto dei tempi
+misura l'effetto della concorrenza.
 
     python3 lossless/genera_bwt.py <n> <blocchi> <seq|par>  > file.kairos
 """
@@ -36,39 +38,51 @@ def genera(n, nb, modo, libreria):
     L.append('    delocal int i = n')
     L.append('')
 
-    # lavoratore: trasforma il blocco e consegna (indice, colonna) per canale.
-    # Il canale trasporta stack, non array: la colonna viene copiata in uno stack.
-    L.append('procedure lavoratore(int blocco[], int offs[], int out[], stack scarto,')
-    L.append('                     stack colonna, channel c, int n)')
-    L.append('    local int idx = 0')
-    L.append('        call ordina(offs, blocco, scarto, n)')
-    L.append('        call estrai(offs, blocco, out, n, idx)')
-    L.append('        local int i = 0')
-    L.append('        from i == 0 do')
-    L.append('            local int t = 0')
-    L.append('                t += out[i]')
-    L.append('                push(t, colonna)')
-    L.append('            delocal int t = 0')
-    L.append('            i += 1')
-    L.append('        loop until i == n')
-    L.append('        delocal int i = n')
-    L.append('        ssend(<idx, colonna>, c)')
-    L.append('    delocal int idx = 0')
+    # lavoratore: trasforma il blocco e consegna (indice, colonna).
+    # Parallelo: per canale. Il canale trasporta stack, non array: la colonna
+    # viene copiata in uno stack.
+    # Sequenziale: nessun canale, l'indice esce dalla variabile idx (parametro)
+    # e la colonna dallo stack passato.
+    seq = (modo == 'seq')
+    if seq:
+        L.append('procedure lavoratore(int blocco[], int offs[], int out[], stack scarto,')
+        L.append('                     stack colonna, int idx, int n)')
+        ind = '    '
+    else:
+        L.append('procedure lavoratore(int blocco[], int offs[], int out[], stack scarto,')
+        L.append('                     stack colonna, channel c, int n)')
+        L.append('    local int idx = 0')
+        ind = '        '
+    L.append(f'{ind}call ordina(offs, blocco, scarto, n)')
+    L.append(f'{ind}call estrai(offs, blocco, out, n, idx)')
+    L.append(f'{ind}local int i = 0')
+    L.append(f'{ind}from i == 0 do')
+    L.append(f'{ind}    local int t = 0')
+    L.append(f'{ind}        t += out[i]')
+    L.append(f'{ind}        push(t, colonna)')
+    L.append(f'{ind}    delocal int t = 0')
+    L.append(f'{ind}    i += 1')
+    L.append(f'{ind}loop until i == n')
+    L.append(f'{ind}delocal int i = n')
+    if not seq:
+        L.append(f'{ind}ssend(<idx, colonna>, c)')
+        L.append('    delocal int idx = 0')
     L.append('')
 
-    # raccoglitore: riceve da tutti i canali
-    ch = ', '.join(f'channel c{i}' for i in R)
-    co = ', '.join(f'stack col{i}' for i in R)
-    L.append(f'procedure raccoglitore({ch}, {co}, stack indici)')
-    for i in R:
-        L.append(f'    local int i{i} = 0')
-    for i in R:
-        L.append(f'        srecv(<i{i}, col{i}>, c{i})')
-    for i in R:
-        L.append(f'        push(i{i}, indici)')
-    for i in reversed(R):
-        L.append(f'    delocal int i{i} = 0')
-    L.append('')
+    # raccoglitore: riceve da tutti i canali (solo nella variante parallela)
+    if not seq:
+        ch = ', '.join(f'channel c{i}' for i in R)
+        co = ', '.join(f'stack col{i}' for i in R)
+        L.append(f'procedure raccoglitore({ch}, {co}, stack indici)')
+        for i in R:
+            L.append(f'    local int i{i} = 0')
+        for i in R:
+            L.append(f'        srecv(<i{i}, col{i}>, c{i})')
+        for i in R:
+            L.append(f'        push(i{i}, indici)')
+        for i in reversed(R):
+            L.append(f'    delocal int i{i} = 0')
+        L.append('')
 
     # comprimi
     par = ', '.join(
@@ -77,9 +91,9 @@ def genera(n, nb, modo, libreria):
         [f'stack st{i}' for i in R] + [f'stack col{i}' for i in R] +
         ['stack indici', 'int n'])
     L.append(f'procedure comprimi({par})')
-    for i in R:
-        L.append(f'    local channel c{i} = empty')
-    if modo == 'par':
+    if not seq:
+        for i in R:
+            L.append(f'    local channel c{i} = empty')
         L.append('    par')
         rami = [f'        call lavoratore(b{i}, offs{i}, out{i}, sc{i}, st{i}, c{i}, n)'
                 for i in R]
@@ -88,21 +102,16 @@ def genera(n, nb, modo, libreria):
         rami.append(f'        call raccoglitore({cargs}, {colargs}, indici)')
         L.append('\n    and\n'.join(rami))
         L.append('    rap')
+        for i in reversed(R):
+            L.append(f'    delocal channel c{i} = empty')
     else:
-        # sequenziale: ogni blocco viene trasformato e consegnato, uno per volta.
-        # Il rendez-vous vuole comunque due rami, quindi il par c'e' ma contiene
-        # un solo lavoratore per volta: nessun parallelismo fra blocchi.
+        # sequenziale: un blocco dopo l'altro, senza par e senza canali.
+        # L'indice esce dalla variabile del lavoratore e va nello stack.
         for i in R:
-            L.append('    par')
-            L.append(f'        call lavoratore(b{i}, offs{i}, out{i}, sc{i}, st{i}, c{i}, n)')
-            L.append('    and')
-            L.append(f'        local int i{i} = 0')
-            L.append(f'            srecv(<i{i}, col{i}>, c{i})')
-            L.append(f'            push(i{i}, indici)')
-            L.append(f'        delocal int i{i} = 0')
-            L.append('    rap')
-    for i in reversed(R):
-        L.append(f'    delocal channel c{i} = empty')
+            L.append(f'    local int i{i} = 0')
+            L.append(f'        call lavoratore(b{i}, offs{i}, out{i}, sc{i}, col{i}, i{i}, n)')
+            L.append(f'        push(i{i}, indici)')
+            L.append(f'    delocal int i{i} = 0')
     L.append('')
 
     # main
